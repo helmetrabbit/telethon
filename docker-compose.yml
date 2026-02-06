@@ -1,0 +1,38 @@
+# docker-compose.yml — local Postgres + migration runner
+# Usage:
+#   docker compose up -d postgres        # start DB
+#   docker compose run --rm dbmate up    # run migrations
+#   docker compose down -v               # destroy everything (incl. data)
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: tgprofile-postgres
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-tgprofile}"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  dbmate:
+    image: ghcr.io/amacneil/dbmate:2
+    container_name: tgprofile-dbmate
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: "${DATABASE_URL_DOCKER}"
+    volumes:
+      - ./db:/db
+    working_dir: /
+    # Default entrypoint is "dbmate"; commands like "up", "down", "status"
+    # are passed via `docker compose run --rm dbmate <command>`
+
+volumes:
+  pgdata:
