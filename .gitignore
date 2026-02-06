@@ -18,5 +18,14 @@ data/output/
 # Postgres volume
 pgdata/
 
+# Telethon collector
+tools/telethon_collector/.env
+tools/telethon_collector/*.session
+tools/telethon_collector/*.session-journal
+tools/telethon_collector/.venv/
+
+# Share-safe exports
+share/
+
 # Logs
 *.log
