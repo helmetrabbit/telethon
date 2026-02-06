@@ -31,7 +31,7 @@ export interface InferenceConfig {
 
 // ── Default config path ─────────────────────────────────
 
-const DEFAULT_CONFIG_PATH = 'config/inference.v0.5.0.json';
+const DEFAULT_CONFIG_PATH = 'config/inference.v0.5.1.json';
 
 // ── Loader ──────────────────────────────────────────────
 

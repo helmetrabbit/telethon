@@ -138,10 +138,9 @@ export const MSG_ROLE_KEYWORDS: KeywordSignal<Role>[] = [
   // Recruiter
   { pattern: /\b(hiring|recruit|talent|open\s*role|job\s*posting)\b/i, label: 'recruiter', weight: 1.0, tag: 'recruiter_action' },
 
-  // Media / KOL — individual-only signals
-  { pattern: /\b(KOL|influencer|ambassador)\b/i, label: 'media_kol', weight: 1.0, tag: 'kol_action' },
-  // NOTE: removed broad "content|thread|tweet|post|article|PR|press" pattern —
-  //       everyone posts content; this was the #1 false-positive source for media_kol
+  // NOTE: media_kol removed from msg role signals — discussing/selling KOL services doesn't
+  //       make someone a KOL. Erhan (EAK agency) mentions "KOL" 7x but is a vendor, not a KOL.
+  //       media_kol should only fire from display_name/bio self-identification.
 
   // NOTE: market_maker removed from msg role signals — discussing liquidity/spreads doesn't
   //       make someone a market maker. Causes false positives (Rhythm, Marcelo).
@@ -151,6 +150,9 @@ export const MSG_ROLE_KEYWORDS: KeywordSignal<Role>[] = [
   { pattern: /\b(we\s+speciali[sz]e|our\s+services?|our\s+solutions?|our\s+agency)\b/i, label: 'vendor_agency', weight: 1.2, tag: 'vendor_service_msg' },
   { pattern: /\b(marketing\s+(?:solutions?|services?|packages?|agency)|PR\s+(?:services?|agency))\b/i, label: 'vendor_agency', weight: 1.2, tag: 'vendor_marketing_msg' },
   { pattern: /\b(white[- ]?label|managed\s+service|full[- ]?service)\b/i, label: 'vendor_agency', weight: 1.0, tag: 'vendor_whitelabel_msg' },
+  // KOL/influencer agency signals — selling KOL services = vendor, not media_kol
+  { pattern: /\b(KOL\s+(?:agency|network|campaign|services?)|influencer\s+(?:agency|network|campaign))\b/i, label: 'vendor_agency', weight: 1.5, tag: 'vendor_kol_agency_msg' },
+  { pattern: /\b(tier\s*[12]\s+KOLs?|contact\s+me\s+for\s+costs?|drop\s+me\s+a\s+DM)\b/i, label: 'vendor_agency', weight: 1.0, tag: 'vendor_kol_selling_msg' },
 ];
 
 // ── Bio → Intent signals ───────────────────────────────
