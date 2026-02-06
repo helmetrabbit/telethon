@@ -93,6 +93,55 @@ CREATE TYPE public.role_label AS ENUM (
 );
 
 
+--
+-- Name: trg_claim_must_have_evidence(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.trg_claim_must_have_evidence() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM claim_evidence WHERE claim_id = NEW.id
+  ) THEN
+    RAISE EXCEPTION
+      'claim id=% has no claim_evidence rows — every claim must be backed by evidence',
+      NEW.id;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+
+--
+-- Name: trg_claim_role_intent_needs_real_evidence(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.trg_claim_role_intent_needs_real_evidence() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+  non_membership_count INT;
+BEGIN
+  -- Only enforce for has_role and has_intent predicates
+  IF NEW.predicate IN ('has_role', 'has_intent') THEN
+    SELECT count(*) INTO non_membership_count
+      FROM claim_evidence
+     WHERE claim_id = NEW.id
+       AND evidence_type != 'membership';
+
+    IF non_membership_count = 0 THEN
+      RAISE EXCEPTION
+        'claim id=% (predicate=%) cannot be committed with only membership evidence — '
+        'at least one bio/message/feature evidence row is required',
+        NEW.id, NEW.predicate;
+    END IF;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+
 SET default_tablespace = '';
 
 SET default_table_access_method = heap;
@@ -584,6 +633,20 @@ CREATE INDEX idx_users_handle ON public.users USING btree (handle);
 
 
 --
+-- Name: claims claim_must_have_evidence; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE CONSTRAINT TRIGGER claim_must_have_evidence AFTER INSERT ON public.claims DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.trg_claim_must_have_evidence();
+
+
+--
+-- Name: claims claim_role_intent_needs_real_evidence; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE CONSTRAINT TRIGGER claim_role_intent_needs_real_evidence AFTER INSERT ON public.claims DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.trg_claim_role_intent_needs_real_evidence();
+
+
+--
 -- Name: claim_evidence claim_evidence_claim_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -683,4 +746,5 @@ ALTER TABLE ONLY public.user_features_daily
 --
 
 INSERT INTO public.schema_migrations (version) VALUES
-    ('20260206120000');
+    ('20260206120000'),
+    ('20260206120100');
