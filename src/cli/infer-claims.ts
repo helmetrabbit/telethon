@@ -216,6 +216,24 @@ async function main(): Promise<void> {
       console.log(`   ✅ affiliation: ${aff.name} (source=${aff.source})`);
     }
 
+    // Write org-type claims (fix #2 — separate from function role)
+    for (const ot of result.orgTypes) {
+      await db.transaction(async (client) => {
+        await writeClaimWithEvidence(
+          client,
+          user.id,
+          'has_org_type',
+          ot.orgType,
+          0.85,
+          'supported',
+          [{ evidence_type: ot.source, evidence_ref: `${ot.source}:${ot.tag}:${ot.orgType}`, weight: 3.0 }],
+          ver,
+        );
+      });
+      totalClaims++;
+      console.log(`   ✅ org_type: ${ot.orgType} (source=${ot.source})`);
+    }
+
     // Report and persist gating decisions
     for (const note of result.gatingNotes) {
       totalGated++;

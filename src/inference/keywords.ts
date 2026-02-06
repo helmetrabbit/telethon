@@ -8,7 +8,7 @@
  * than hallucinate one. Weights are additive on top of priors.
  */
 
-import type { Role, Intent } from '../config/taxonomies.js';
+import type { Role, Intent, OrgType } from '../config/taxonomies.js';
 
 // ── Types ───────────────────────────────────────────────
 
@@ -20,6 +20,64 @@ export interface KeywordSignal<T extends string> {
   tag: string;
 }
 
+// ── Affiliation reject list ────────────────────────────
+// Words that should NOT be treated as org names when extracted
+// from display-name pipe segments or message affiliation patterns.
+
+export const AFFILIATION_REJECT_SET = new Set([
+  // Locations / cities / countries
+  'dubai', 'singapore', 'london', 'berlin', 'new york', 'nyc', 'hong kong',
+  'tokyo', 'seoul', 'paris', 'amsterdam', 'lisbon', 'miami', 'istanbul',
+  'bangkok', 'zurich', 'san francisco', 'sf', 'los angeles', 'la',
+  'abu dhabi', 'riyadh', 'lagos', 'nairobi', 'sydney', 'mumbai', 'shanghai',
+  'usa', 'uk', 'uae', 'eu', 'asia', 'europe', 'apac', 'mena', 'latam',
+  // Industries / verticals (not org names)
+  'security', 'defi', 'web3', 'crypto', 'blockchain', 'nft', 'gamefi',
+  'ai', 'fintech', 'metaverse', 'dao', 'layer 1', 'layer 2', 'l1', 'l2',
+  'socialfi', 'rwa', 'infrastructure',
+  // Bare titles (without an attached org)
+  'ceo', 'cto', 'coo', 'cfo', 'cmo', 'cpo', 'cro', 'cso',
+  'bd', 'vp', 'director', 'head', 'lead', 'manager', 'partner',
+  'founder', 'co-founder', 'cofounder',
+  'dev', 'developer', 'engineer', 'builder', 'hacker',
+  'growth', 'sales', 'marketing', 'operations', 'ops',
+  'investor', 'vc', 'analyst', 'researcher', 'research',
+  'recruiter', 'talent', 'hiring',
+  'ambassador', 'kol', 'influencer', 'moderator', 'mod', 'admin',
+  'mm', 'community',
+]);
+
+/**
+ * Additional regex patterns that reject affiliation candidates
+ * (event names, conference names, generic descriptors).
+ */
+export const AFFILIATION_REJECT_PATTERNS: RegExp[] = [
+  /\b(blockchain\s+week|summit|conference|hackathon|meetup|forum|expo)\b/i,
+  /\b(devconnect|ethcc|token2049|consensus|mainnet|breakpoint)\b/i,
+  /^\d+$/,  // pure numbers
+];
+
+// ── Org type detection from display-name segments ──────
+// When a display-name company segment matches one of these,
+// we emit a has_org_type claim instead of (or in addition to) a function role.
+
+export interface OrgTypeSignal {
+  pattern: RegExp;
+  orgType: OrgType;
+  tag: string;
+}
+
+export const ORG_TYPE_SIGNALS: OrgTypeSignal[] = [
+  { pattern: /\bMM\b/, orgType: 'market_maker', tag: 'org_mm' },
+  { pattern: /\b(market\s*mak|liquidity\s*provid)\b/i, orgType: 'market_maker', tag: 'org_mm_name' },
+  { pattern: /\b(exchange|CEX|DEX)\b/i, orgType: 'exchange', tag: 'org_exchange' },
+  { pattern: /\b(fund|capital|ventures?|vc\b)\b/i, orgType: 'fund', tag: 'org_fund' },
+  { pattern: /\b(agency|studio|consultancy)\b/i, orgType: 'agency', tag: 'org_agency' },
+  { pattern: /\b(media|news|press|journal)\b/i, orgType: 'media', tag: 'org_media' },
+  { pattern: /\b(event|conference|summit|hackathon)\b/i, orgType: 'event', tag: 'org_event' },
+  { pattern: /\b(protocol|labs?|network)\b/i, orgType: 'protocol', tag: 'org_protocol' },
+];
+
 // ── Bio → Role signals ─────────────────────────────────
 
 export const BIO_ROLE_KEYWORDS: KeywordSignal<Role>[] = [
@@ -28,10 +86,11 @@ export const BIO_ROLE_KEYWORDS: KeywordSignal<Role>[] = [
   { pattern: /\b(chief\s+(executive|technology|operating|financial))\b/i, label: 'founder_exec', weight: 3.0, tag: 'chief_title' },
   { pattern: /\bhead\s+of\b/i, label: 'founder_exec', weight: 1.5, tag: 'head_of' },
 
-  // Builder / Developer
-  { pattern: /\b(developer|engineer|dev|full[- ]?stack|backend|frontend|solidity)\b/i, label: 'builder', weight: 2.5, tag: 'dev_title' },
+  // Builder / Developer — require hard technical signals
+  { pattern: /\b(developer|engineer|full[- ]?stack|backend|frontend|solidity)\b/i, label: 'builder', weight: 2.5, tag: 'dev_title' },
   { pattern: /\b(building|shipped|hacking|coding)\b/i, label: 'builder', weight: 1.5, tag: 'builder_verb' },
   { pattern: /\b(rust|typescript|python|golang|smart\s*contract)\b/i, label: 'builder', weight: 1.5, tag: 'tech_skill' },
+  // NOTE: bare "dev" removed from bio — too ambiguous (devconnect, devrel, etc.)
 
   // BD / Business Development
   { pattern: /\b(bd|biz\s*dev|business\s*development|partnerships?)\b/i, label: 'bd', weight: 2.5, tag: 'bd_title' },
@@ -49,33 +108,49 @@ export const BIO_ROLE_KEYWORDS: KeywordSignal<Role>[] = [
   { pattern: /\b(agency|consultancy|consulting|vendor|service\s*provider)\b/i, label: 'vendor_agency', weight: 2.5, tag: 'agency_title' },
   { pattern: /\b(white[- ]?label|managed\s*service|outsourc)\b/i, label: 'vendor_agency', weight: 1.5, tag: 'vendor_signal' },
 
-  // Media / KOL
+  // Media / KOL — individual only (agencies route to vendor_agency)
   { pattern: /\b(KOL|influencer|ambassador|content\s*creator)\b/i, label: 'media_kol', weight: 2.5, tag: 'kol_title' },
-  { pattern: /\b(media|journalist|editor|press|PR\s*manager)\b/i, label: 'media_kol', weight: 2.0, tag: 'media_title' },
-  { pattern: /\b(promotion|campaign|social\s*media)\b/i, label: 'media_kol', weight: 1.5, tag: 'media_activity' },
+  { pattern: /\b(journalist|editor|press|PR\s*manager)\b/i, label: 'media_kol', weight: 2.0, tag: 'media_title' },
+  // NOTE: bare "media" removed — too ambiguous; "promotion|campaign|social media" moved to vendor detection below
 
   // Market Maker
-  { pattern: /\b(market\s*mak|MM\b|liquidity\s*provid|trading\s*desk)\b/i, label: 'market_maker', weight: 2.5, tag: 'mm_title' },
+  { pattern: /\b(market\s*mak|liquidity\s*provid|trading\s*desk)\b/i, label: 'market_maker', weight: 2.5, tag: 'mm_title' },
   { pattern: /\b(orderbook|spread|depth|OTC)\b/i, label: 'market_maker', weight: 1.5, tag: 'mm_signal' },
+  // NOTE: bare "MM" removed from bio role — it's an org-type indicator, not a personal role
 ];
 
 // ── Message → Role signals (aggregate patterns) ────────
 
 export const MSG_ROLE_KEYWORDS: KeywordSignal<Role>[] = [
-  { pattern: /\b(shipped|deployed|launched|built|refactored|merged)\b/i, label: 'builder', weight: 1.0, tag: 'builder_action' },
-  { pattern: /\b(tvl|protocol|smart\s*contract|mainnet|testnet|defi)\b/i, label: 'builder', weight: 0.8, tag: 'builder_topic' },
+  // Builder — hard technical signals only
+  { pattern: /\b(shipped|deployed|merged|refactored|committed|pushed)\b/i, label: 'builder', weight: 1.0, tag: 'builder_action' },
+  { pattern: /\b(smart\s*contract|solidity|rust|typescript|API|SDK|RPC|repo|github)\b/i, label: 'builder', weight: 1.0, tag: 'builder_tech' },
+  // NOTE: removed "built", "launched" (too generic), "defi"/"tvl"/"protocol" (topic not role),
+  //       "mainnet"/"testnet" (everyone discusses these)
+
+  // BD
   { pattern: /\b(partnership|collab|intro\s+to|warm\s+intro|deal)\b/i, label: 'bd', weight: 1.0, tag: 'bd_action' },
+
+  // Investor
   { pattern: /\b(series\s*[a-d]|raise|fundrais|invest|portfolio)\b/i, label: 'investor_analyst', weight: 1.0, tag: 'investor_topic' },
   { pattern: /\b(evaluating|due\s*diligence|thesis)\b/i, label: 'investor_analyst', weight: 1.0, tag: 'investor_action' },
+
+  // Recruiter
   { pattern: /\b(hiring|recruit|talent|open\s*role|job\s*posting)\b/i, label: 'recruiter', weight: 1.0, tag: 'recruiter_action' },
 
-  // Media / KOL
-  { pattern: /\b(KOL|influencer|ambassador|campaign|promotion)\b/i, label: 'media_kol', weight: 1.0, tag: 'kol_action' },
-  { pattern: /\b(content|thread|tweet|post|article|PR\b|press)\b/i, label: 'media_kol', weight: 0.6, tag: 'media_topic' },
+  // Media / KOL — individual-only signals
+  { pattern: /\b(KOL|influencer|ambassador)\b/i, label: 'media_kol', weight: 1.0, tag: 'kol_action' },
+  // NOTE: removed broad "content|thread|tweet|post|article|PR|press" pattern —
+  //       everyone posts content; this was the #1 false-positive source for media_kol
 
   // Market Maker
   { pattern: /\b(market\s*mak|liquidity|spread|orderbook|depth)\b/i, label: 'market_maker', weight: 1.0, tag: 'mm_action' },
   { pattern: /\b(CEX|DEX\s*listing|OTC|trading\s*pair)\b/i, label: 'market_maker', weight: 0.8, tag: 'mm_topic' },
+
+  // Vendor / Agency — detect selling-services patterns in messages (fix #4)
+  { pattern: /\b(we\s+speciali[sz]e|our\s+services?|our\s+solutions?|our\s+agency)\b/i, label: 'vendor_agency', weight: 1.2, tag: 'vendor_service_msg' },
+  { pattern: /\b(marketing\s+(?:solutions?|services?|packages?|agency)|PR\s+(?:services?|agency))\b/i, label: 'vendor_agency', weight: 1.2, tag: 'vendor_marketing_msg' },
+  { pattern: /\b(white[- ]?label|managed\s+service|full[- ]?service)\b/i, label: 'vendor_agency', weight: 1.0, tag: 'vendor_whitelabel_msg' },
 ];
 
 // ── Bio → Intent signals ───────────────────────────────
@@ -91,18 +166,35 @@ export const BIO_INTENT_KEYWORDS: KeywordSignal<Intent>[] = [
 // ── Message → Intent signals ───────────────────────────
 
 export const MSG_INTENT_KEYWORDS: KeywordSignal<Intent>[] = [
-  { pattern: /\b(connect|intro|meet up|let'?s\s*chat|dm\s*me)\b/i, label: 'networking', weight: 0.8, tag: 'networking_msg' },
+  { pattern: /\b(connect|intro|meet\s*up|let'?s\s*chat)\b/i, label: 'networking', weight: 0.8, tag: 'networking_msg' },
   { pattern: /\b(evaluat|assess|compare|review|look\s*into)\b/i, label: 'evaluating', weight: 0.8, tag: 'evaluating_msg' },
-  { pattern: /\b(sell|pitch|demo|offer|pricing|buy)\b/i, label: 'selling', weight: 0.8, tag: 'selling_msg' },
+
+  // Selling — strengthened (fix #5)
+  { pattern: /\b(sell|pitch|demo|pricing|quote)\b/i, label: 'selling', weight: 0.8, tag: 'selling_msg' },
+  { pattern: /\b(discount|offer|promo\b|special\s+price|packages?\s+(?:start|from))\b/i, label: 'selling', weight: 1.0, tag: 'selling_discount_msg' },
+  { pattern: /\b(our\s+(?:services?|solutions?|platform|tool)|we\s+(?:offer|provide|deliver))\b/i, label: 'selling', weight: 1.0, tag: 'selling_services_msg' },
+  { pattern: /\b(DM\s+(?:me|us)\s+for|reach\s+out\s+for|contact\s+(?:me|us)\s+for)\b/i, label: 'selling', weight: 0.8, tag: 'selling_cta_msg' },
+
+  // Hiring
   { pattern: /\b(hiring|recruit|job|open\s*role|we.re\s*looking)\b/i, label: 'hiring', weight: 0.8, tag: 'hiring_msg' },
+
+  // Support
   { pattern: /\b(help|stuck|issue|bug|problem|how\s*do\s*i)\b/i, label: 'support_seeking', weight: 0.8, tag: 'support_seeking_msg' },
   { pattern: /\b(try\s*this|here.s\s*how|you\s*can|solution|fix)\b/i, label: 'support_giving', weight: 0.8, tag: 'support_giving_msg' },
-  { pattern: /\b(announce|update|ship|launch|release|congrat)\b/i, label: 'broadcasting', weight: 0.8, tag: 'broadcasting_msg' },
+
+  // Broadcasting — strengthened (fix #5)
+  { pattern: /\b(announce|update|release|congrat)\b/i, label: 'broadcasting', weight: 0.8, tag: 'broadcasting_msg' },
+  { pattern: /\b(webinar|live\s+session|ama\b|spaces\b|twitter\s+spaces)\b/i, label: 'broadcasting', weight: 1.0, tag: 'broadcasting_event_msg' },
+  { pattern: /\b(we\s+(?:launched|shipped|released|just\s+dropped)|check\s+(?:out|it\s+out))\b/i, label: 'broadcasting', weight: 1.0, tag: 'broadcasting_launch_msg' },
+  { pattern: /(?:luma\.com|lu\.ma|eventbrite|meetup\.com)\b/i, label: 'broadcasting', weight: 1.2, tag: 'broadcasting_link_msg' },
+  { pattern: /\b(reminder|don'?t\s+miss|register\s+(?:now|here|today)|sign\s+up\s+(?:here|now))\b/i, label: 'broadcasting', weight: 1.0, tag: 'broadcasting_reminder_msg' },
+
+  // Evaluating
   { pattern: /\b(schedule|calendar|call|meeting|calendly)\b/i, label: 'evaluating', weight: 0.6, tag: 'evaluating_schedule' },
   { pattern: /\b(investment|fund|back|series)\b/i, label: 'evaluating', weight: 0.6, tag: 'evaluating_investment' },
 ];
 
-// ── Affiliation signals (bio only, self-declared) ──────
+// ── Affiliation signals ────────────────────────────────
 
 export interface AffiliationSignal {
   pattern: RegExp;
@@ -119,6 +211,16 @@ export const BIO_AFFILIATION_PATTERNS: AffiliationSignal[] = [
   { pattern: /\b([A-Z][A-Za-z0-9]+(?:\s+[A-Z][A-Za-z0-9]+)*)\s+(?:CEO|CTO|COO|CFO|founder|co-?founder)\b/i, tag: 'affiliation_title' },
 ];
 
+/**
+ * Detect self-declared affiliations in messages (fix #1).
+ * Patterns like "we at X", "I'm from X", "I work at X".
+ */
+export const MSG_AFFILIATION_PATTERNS: AffiliationSignal[] = [
+  { pattern: /\b(?:we\s+at|I(?:'m|\s+am)\s+(?:from|at|with)|I\s+work\s+(?:at|for)|representing)\s+([A-Z][A-Za-z0-9.]+(?:\s+[A-Z][A-Za-z0-9.]+){0,3})\b/, tag: 'msg_affiliation_at' },
+  { pattern: /\b(?:our\s+(?:company|team|project|protocol))\s+([A-Z][A-Za-z0-9.]+(?:\s+[A-Z][A-Za-z0-9.]+){0,3})\b/, tag: 'msg_affiliation_our' },
+  { pattern: /\bon\s+behalf\s+of\s+([A-Z][A-Za-z0-9.]+(?:\s+[A-Z][A-Za-z0-9.]+){0,3})\b/, tag: 'msg_affiliation_behalf' },
+];
+
 // ── Display Name → Role signals ────────────────────────
 // Telegram users commonly set display names like "Alice | Acme Labs BD Lead"
 // These carry strong role and affiliation evidence.
@@ -133,9 +235,9 @@ export const DISPLAY_NAME_ROLE_KEYWORDS: KeywordSignal<Role>[] = [
   { pattern: /\b(biz\s*dev|business\s*develop|partnerships?\s*(?:manager|lead|director)?)\b/i, label: 'bd', weight: 3.0, tag: 'dn_bd_title' },
   { pattern: /\b(growth|sales)\b/i, label: 'bd', weight: 2.0, tag: 'dn_bd_role' },
 
-  // Builder / Developer
-  { pattern: /\b(developer|engineer|dev\b|full[- ]?stack|backend|frontend|solidity)\b/i, label: 'builder', weight: 3.0, tag: 'dn_dev_title' },
-  { pattern: /\b(builder|building|hacker)\b/i, label: 'builder', weight: 2.0, tag: 'dn_builder' },
+  // Builder / Developer — require explicit dev titles only (fix #3)
+  { pattern: /\b(developer|engineer|full[- ]?stack|backend|frontend|solidity)\b/i, label: 'builder', weight: 3.0, tag: 'dn_dev_title' },
+  // NOTE: removed loose "builder|building|hacker" — too ambiguous in crypto display names
 
   // Investor / Analyst
   { pattern: /\b(investor|vc\b|venture|capital|fund|analyst|portfolio)\b/i, label: 'investor_analyst', weight: 3.0, tag: 'dn_investor_title' },
@@ -145,21 +247,29 @@ export const DISPLAY_NAME_ROLE_KEYWORDS: KeywordSignal<Role>[] = [
 
   // Vendor / Agency
   { pattern: /\b(agency|consulting|consultant)\b/i, label: 'vendor_agency', weight: 2.5, tag: 'dn_agency' },
+  // Marketing in display name → vendor_agency (not media_kol) — fix #4
+  { pattern: /\b(marketing)\b/i, label: 'vendor_agency', weight: 2.0, tag: 'dn_marketing_vendor' },
 
-  // Media / KOL
+  // Media / KOL — individual-only keywords (fix #4)
   { pattern: /\bKOL\b/i, label: 'media_kol', weight: 3.0, tag: 'dn_kol' },
   { pattern: /\b(influencer|ambassador|content\s*creat)\b/i, label: 'media_kol', weight: 3.0, tag: 'dn_media_title' },
-  { pattern: /\b(marketing|PR\b|press)\b/i, label: 'media_kol', weight: 2.0, tag: 'dn_marketing' },
+  // NOTE: removed "marketing|PR|press" → media_kol. Marketing routes to vendor_agency.
+  //       Individual journalists still caught by content_creat / KOL / influencer.
+  { pattern: /\b(journalist|editor)\b/i, label: 'media_kol', weight: 2.5, tag: 'dn_journalist' },
 
-  // Market Maker
-  { pattern: /\bMM\b/, label: 'market_maker', weight: 3.0, tag: 'dn_mm' },  // case-sensitive — "MM" only
-  { pattern: /\b(market\s*mak|liquidity)\b/i, label: 'market_maker', weight: 3.0, tag: 'dn_mm_title' },
+  // Market Maker — ORG TYPE only, not a person's function role (fix #2)
+  // NOTE: "MM" in display name is now handled as org_type detection in engine.ts,
+  //       not as a personal role keyword. Removed dn_mm weight 3.0 that was
+  //       misclassifying BD people at MM firms (e.g. Kat R | Cicada MM → market_maker).
+  { pattern: /\b(market\s*mak|liquidity\s*provid)\b/i, label: 'market_maker', weight: 2.0, tag: 'dn_mm_title' },
 
   // Community
   { pattern: /\b(community|moderator|mod\b|admin)\b/i, label: 'community', weight: 2.5, tag: 'dn_community' },
 
-  // Security / Audit → mapped to builder (closest existing role)
-  { pattern: /\b(security|audit|auditor)\b/i, label: 'builder', weight: 2.0, tag: 'dn_security' },
+  // Security / Audit → NOT mapped to builder (fix #3)
+  // "Hashlock Security" means the user is AT a security firm, not that they're a builder.
+  // Security in display name is treated as an org descriptor, not a role signal.
+  // (removed: was { label: 'builder', weight: 2.0, tag: 'dn_security' })
 
   // Research → mapped to investor_analyst
   { pattern: /\b(research|researcher)\b/i, label: 'investor_analyst', weight: 2.0, tag: 'dn_researcher' },
@@ -167,10 +277,12 @@ export const DISPLAY_NAME_ROLE_KEYWORDS: KeywordSignal<Role>[] = [
 
 // ── Display Name → Affiliation signals ─────────────────
 // Parse "Name | Company" and "Name | Company Role" pipe patterns.
+// The engine applies AFFILIATION_REJECT_SET filtering after extraction.
 
 export const DISPLAY_NAME_AFFILIATION_PATTERNS: AffiliationSignal[] = [
   // "Alice | Acme Labs" or "Alice | Acme Labs BD Lead"
-  // Captures the company segment between the pipe and either end-of-string or a known role word
+  // Captures the company segment between the pipe and either end-of-string or a known role word.
+  // Title prefixes (CEO, CTO, etc.) at the START of the segment are stripped by the engine.
   { pattern: /\|\s*([A-Z][A-Za-z0-9.]+(?:\s+[A-Z][A-Za-z0-9.]+){0,4}?)(?:\s+(?:CEO|CTO|COO|CFO|CMO|co-?founder|founder|BD|head|director|VP|lead|manager|engineer|dev|developer|builder|investor|vc|recruiter|growth|sales|marketing|KOL|ambassador|MM|community|mod|admin|research|analyst|operations|ops)\b|$)/i, tag: 'dn_affiliation_pipe' },
   // "Role @ Company" or "Role at Company"
   { pattern: /(?:@|at)\s+([A-Z][A-Za-z0-9.]+(?:\s+[A-Z][A-Za-z0-9.]+){0,3})/i, tag: 'dn_affiliation_at' },

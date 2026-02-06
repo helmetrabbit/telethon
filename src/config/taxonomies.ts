@@ -20,6 +20,19 @@ export const ROLES = [
 ] as const;
 export type Role = (typeof ROLES)[number];
 
+/** Organization types — what kind of entity the user is affiliated with. */
+export const ORG_TYPES = [
+  'market_maker',
+  'exchange',
+  'fund',
+  'agency',
+  'media',
+  'event',
+  'protocol',
+  'unknown',
+] as const;
+export type OrgType = (typeof ORG_TYPES)[number];
+
 export const INTENTS = [
   'networking',
   'evaluating',
@@ -43,5 +56,6 @@ export const PREDICATES = [
   'has_intent',
   'has_topic_affinity',
   'affiliated_with',
+  'has_org_type',
 ] as const;
 export type Predicate = (typeof PREDICATES)[number];

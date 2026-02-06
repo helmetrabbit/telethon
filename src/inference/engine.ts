@@ -15,7 +15,7 @@
  */
 
 import pg from 'pg';
-import type { Role, Intent, EvidenceType, Predicate } from '../config/taxonomies.js';
+import type { Role, Intent, EvidenceType, Predicate, OrgType } from '../config/taxonomies.js';
 import { ROLES, INTENTS } from '../config/taxonomies.js';
 import type { GroupKind } from '../config/taxonomies.js';
 import type { InferenceConfig } from '../config/inference-config.js';
@@ -25,8 +25,12 @@ import {
   MSG_ROLE_KEYWORDS,
   MSG_INTENT_KEYWORDS,
   BIO_AFFILIATION_PATTERNS,
+  MSG_AFFILIATION_PATTERNS,
   DISPLAY_NAME_ROLE_KEYWORDS,
   DISPLAY_NAME_AFFILIATION_PATTERNS,
+  AFFILIATION_REJECT_SET,
+  AFFILIATION_REJECT_PATTERNS,
+  ORG_TYPE_SIGNALS,
 } from './keywords.js';
 
 // ── Types ───────────────────────────────────────────────
@@ -67,11 +71,18 @@ export interface AffiliationResult {
   tag: string;
 }
 
+export interface OrgTypeResult {
+  orgType: OrgType;
+  source: EvidenceType;
+  tag: string;
+}
+
 export interface UserInferenceResult {
   userId: number;
   roleClaim: ScoredLabel<Role> | null;
   intentClaim: ScoredLabel<Intent> | null;
   affiliations: AffiliationResult[];
+  orgTypes: OrgTypeResult[];
   /** Notes about gating decisions */
   gatingNotes: string[];
 }
@@ -105,6 +116,7 @@ export function scoreUser(input: UserInferenceInput, config: InferenceConfig): U
     roleClaim: null,
     intentClaim: null,
     affiliations: [],
+    orgTypes: [],
     gatingNotes: [],
   };
 
@@ -201,14 +213,54 @@ export function scoreUser(input: UserInferenceInput, config: InferenceConfig): U
       }
     }
 
-    // Display name affiliation detection
+    // Agency / vendor detection override (fix #4):
+    // If the display name contains selling language (discount, %, pricing, services, packages),
+    // this is a commercial entity, not an individual KOL. Boost vendor_agency.
+    if (/\b(discount|%\s*off|\d+%|pricing|packages?|services?|solutions?|agency)\b/i.test(dn)) {
+      const w = 3.5;
+      roleScores.set('vendor_agency', (roleScores.get('vendor_agency') ?? 0) + w);
+      roleEvidence.get('vendor_agency')!.push({
+        evidence_type: 'display_name',
+        evidence_ref: 'display_name:dn_selling_language',
+        weight: w,
+      });
+    }
+
+    // Display name affiliation detection — with reject-list filtering (fix #1)
     for (const aff of DISPLAY_NAME_AFFILIATION_PATTERNS) {
       const match = dn.match(aff.pattern);
       if (match && match[1]) {
-        const company = match[1].trim();
+        let company = match[1].trim();
+
+        // Strip leading title prefixes: "CEO nReach" → "nReach"
+        company = company.replace(
+          /^(?:CEO|CTO|COO|CFO|CMO|VP|Director|Head|Lead|Manager)\s+/i,
+          '',
+        ).trim();
+
+        // Skip if empty after stripping
+        if (company.length < 2) continue;
+
+        // Skip if in reject set (locations, industries, bare titles)
+        if (AFFILIATION_REJECT_SET.has(company.toLowerCase())) continue;
+
+        // Skip if matches a reject pattern (events, conferences)
+        if (AFFILIATION_REJECT_PATTERNS.some((rp) => rp.test(company))) continue;
+
         // Avoid duplicates if bio already captured the same affiliation
         if (!result.affiliations.some((a) => a.name === company)) {
           result.affiliations.push({ name: company, source: 'display_name', tag: aff.tag });
+        }
+      }
+    }
+
+    // Org-type detection from display name (fix #2)
+    // If the display name or its company segment matches an org-type pattern,
+    // emit a has_org_type claim. This separates "person is BD" from "firm is a market maker".
+    for (const ots of ORG_TYPE_SIGNALS) {
+      if (ots.pattern.test(dn)) {
+        if (!result.orgTypes.some((o) => o.orgType === ots.orgType)) {
+          result.orgTypes.push({ orgType: ots.orgType, source: 'display_name', tag: ots.tag });
         }
       }
     }
@@ -232,6 +284,23 @@ export function scoreUser(input: UserInferenceInput, config: InferenceConfig): U
       if (kw.pattern.test(text)) {
         const key = `${kw.label}:${kw.tag}`;
         msgIntentHits.set(key, (msgIntentHits.get(key) ?? 0) + 1);
+      }
+    }
+
+    // Message-based affiliation extraction (fix #1)
+    // Only scan first 50 messages to avoid noise from casual mentions.
+    if (messageSample.indexOf(text) < 50) {
+      for (const aff of MSG_AFFILIATION_PATTERNS) {
+        const match = text.match(aff.pattern);
+        if (match && match[1]) {
+          const company = match[1].trim();
+          if (company.length < 2) continue;
+          if (AFFILIATION_REJECT_SET.has(company.toLowerCase())) continue;
+          if (AFFILIATION_REJECT_PATTERNS.some((rp) => rp.test(company))) continue;
+          if (!result.affiliations.some((a) => a.name === company)) {
+            result.affiliations.push({ name: company, source: 'message', tag: aff.tag });
+          }
+        }
       }
     }
   }
@@ -279,16 +348,8 @@ export function scoreUser(input: UserInferenceInput, config: InferenceConfig): U
     }
   }
 
-  // High BD group share → bd role signal
-  if (input.bdGroupMsgShare > 0.5 && input.totalMsgCount >= 3) {
-    const w = 1.0;
-    roleScores.set('bd', (roleScores.get('bd') ?? 0) + w);
-    roleEvidence.get('bd')!.push({
-      evidence_type: 'feature',
-      evidence_ref: `feature:bd_share=${input.bdGroupMsgShare.toFixed(2)}`,
-      weight: w,
-    });
-  }
+  // NOTE: bd_share feature signal removed (fix #6) — contradicts evidence-only approach.
+  // Group membership share should not influence role classification.
 
   // High mention count → community / networking signal
   if (input.totalMentionCount >= 3) {
