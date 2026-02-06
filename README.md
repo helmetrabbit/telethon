@@ -13,19 +13,22 @@ This system ingests [Telegram Desktop JSON exports](https://telegram.org/blog/ex
 1. [Architecture](#architecture)
 2. [Prerequisites](#prerequisites)
 3. [Quick Start](#quick-start)
-4. [Pipeline Steps](#pipeline-steps)
-5. [Schema Overview](#schema-overview)
-6. [What "Ontology-Lite" and "Claims" Mean](#what-ontology-lite-and-claims-mean)
-7. [Inference Engine](#inference-engine)
-8. [Evidence Gating & Anti-Hallucination](#evidence-gating--anti-hallucination)
-9. [Output Format](#output-format)
-10. [Interpreting Profiles & Unknowns](#interpreting-profiles--unknowns)
-11. [DBeaver / SQL Verification](#dbeaver--sql-verification)
-12. [Constraint Verification](#constraint-verification)
-13. [Negative Test Runbook](#negative-test-runbook)
-14. [Configuration](#configuration)
-15. [Project Structure](#project-structure)
-16. [Ethics & Privacy](#ethics--privacy)
+4. [Telethon Collector](#telethon-collector)
+5. [Ingesting Telethon Output](#ingesting-telethon-output)
+6. [Diagnostics Export](#diagnostics-export)
+7. [Pipeline Steps](#pipeline-steps)
+8. [Schema Overview](#schema-overview)
+9. [What "Ontology-Lite" and "Claims" Mean](#what-ontology-lite-and-claims-mean)
+10. [Inference Engine](#inference-engine)
+11. [Evidence Gating & Anti-Hallucination](#evidence-gating--anti-hallucination)
+12. [Output Format](#output-format)
+13. [Interpreting Profiles & Unknowns](#interpreting-profiles--unknowns)
+14. [DBeaver / SQL Verification](#dbeaver--sql-verification)
+15. [Constraint Verification](#constraint-verification)
+16. [Negative Test Runbook](#negative-test-runbook)
+17. [Configuration](#configuration)
+18. [Project Structure](#project-structure)
+19. [Ethics & Privacy](#ethics--privacy)
 
 ---
 
@@ -66,6 +69,7 @@ Telegram JSON export
 | **Docker** | ≥ 20 | Runs PostgreSQL 16 + dbmate |
 | **Docker Compose** | v2 (bundled with Docker Desktop) | Orchestrates services |
 | **Make** | (usually pre-installed on macOS/Linux) | Convenience commands |
+| **Python** | ≥ 3.9 | Required only for the Telethon collector (`tools/telethon_collector/`) |
 
 Optional but recommended:
 - **DBeaver** (or any SQL client) — for manual data inspection
@@ -119,6 +123,119 @@ cat data/output/profiles.json | head -100
 ```
 
 Or connect DBeaver to the local database (see [DBeaver section](#dbeaver--sql-verification)).
+
+---
+
+## Telethon Collector
+
+The `tools/telethon_collector/` directory contains a Python-based Telethon client that exports messages and participant lists directly from the Telegram API. This is an alternative to Telegram Desktop's manual JSON export and captures data that Desktop exports miss (e.g., full participant lists with usernames).
+
+### 1. Set up credentials
+
+1. Go to <https://my.telegram.org> → **API development tools** → create an app.
+2. Copy the template and fill in your values:
+
+```bash
+cp tools/telethon_collector/.env.example tools/telethon_collector/.env
+# Edit .env with your TG_API_ID, TG_API_HASH, and TG_PHONE
+```
+
+### 2. Create the Python virtualenv
+
+```bash
+make tg:venv
+```
+
+This creates a venv at `tools/telethon_collector/.venv/` and installs `telethon` + `python-dotenv`.
+
+### 3. Find your target group
+
+```bash
+make tg:list-dialogs
+```
+
+This prints all your Telegram dialogs (groups, channels, DMs) with their title, ID, and username. Find the group you want to collect.
+
+### 4. Collect messages + participants
+
+```bash
+# Collect from a group by title (default: 5000 messages)
+make tg:collect GROUP="BD in Web3"
+
+# Custom output path + message limit
+make tg:collect GROUP="BD in Web3" OUT=data/exports/bd_web3.json LIMIT=10000
+
+# Only messages after a date
+make tg:collect GROUP="BD in Web3" SINCE=2024-01-01
+```
+
+The collector outputs a JSON file compatible with the ingestion pipeline, including a `participants[]` array (when the API permits) and a `participants_status` field indicating success or fallback.
+
+> See `tools/telethon_collector/README.md` for full details on arguments and troubleshooting.
+
+---
+
+## Ingesting Telethon Output
+
+Telethon exports are ingested with the same `ingest` command used for Desktop exports:
+
+```bash
+npm run ingest -- --file data/exports/bd_web3.json --kind bd
+```
+
+The ingestion pipeline automatically detects the Telethon format and:
+
+- Imports all messages (with `ON CONFLICT DO NOTHING` for re-runs)
+- Processes the `participants[]` array — creates user records and memberships for every non-bot, non-deleted participant
+- Logs participant ingestion stats to the console
+
+After ingestion, run the rest of the pipeline:
+
+```bash
+make compute-features
+make infer-claims
+make export-profiles
+```
+
+Or run everything in one shot:
+
+```bash
+make pipeline
+```
+
+---
+
+## Diagnostics Export
+
+The diagnostics exporter produces a **share-safe** JSON summary of the database — no message text, no usernames, no PII.
+
+```bash
+DIAGNOSTICS_SALT=any-random-string make export-diagnostics
+```
+
+Or via npm:
+
+```bash
+DIAGNOSTICS_SALT=any-random-string npm run export-diagnostics
+```
+
+The output file (default `share/diagnostics.json`) contains:
+
+| Section | Contents |
+|---------|----------|
+| `meta` | Timestamp, model version, salt indicator |
+| `counts` | Groups, users, messages, date range |
+| `membership` | Distribution by group kind, top 20 users by message count (pseudonymized via SHA-256) |
+| `inference_summary` | Claims by predicate, evidence type distribution, abstention breakdown, coverage percentages |
+
+All user identifiers are replaced with `sha256(salt + user_id)` truncated to 12 hex characters. The salt is never stored in the output.
+
+Optional arguments:
+
+```bash
+# Filter to a specific group
+DIAGNOSTICS_SALT=s npm run export-diagnostics -- --group-external-id 12345 --out-file share/bd_diag.json
+```
 
 ---
 
@@ -787,13 +904,16 @@ telethon/
 │       ├── 20260206120000_create_schema.sql
 │       ├── 20260206120100_claim_evidence_triggers.sql
 │       ├── 20260206130000_harden_claim_constraints.sql
-│       └── 20260206140000_abstention_log_and_claims_unique.sql
+│       ├── 20260206140000_abstention_log_and_claims_unique.sql
+│       └── 20260206150000_unique_messages_per_group.sql
+├── share/                # Diagnostics output (gitignored)
 ├── src/
 │   ├── cli/
 │   │   ├── ingest.ts
 │   │   ├── compute-features.ts
 │   │   ├── infer-claims.ts       # Loads config, writes claims + abstentions
-│   │   └── export-profiles.ts
+│   │   ├── export-profiles.ts
+│   │   └── export-diagnostics.ts # Share-safe diagnostics (no PII)
 │   ├── config/
 │   │   ├── taxonomies.ts         # ENUMs & type definitions
 │   │   ├── priors.ts             # Legacy priors (no longer imported by engine)
@@ -805,8 +925,15 @@ telethon/
 │   │   ├── engine.ts             # Deterministic scoring + claim/abstention writes
 │   │   └── keywords.ts           # Bio/message keyword dictionaries
 │   ├── parsers/
-│   │   └── telegram.ts           # Zod schemas for Telegram export JSON
+│   │   └── telegram.ts           # Zod schemas for Telegram + Telethon exports
 │   └── utils.ts                  # SHA-256, arg parsing, helpers
+├── tools/
+│   └── telethon_collector/
+│       ├── collect_group_export.py  # Telethon API collector
+│       ├── list_dialogs.py          # List all Telegram dialogs
+│       ├── requirements.txt         # Python deps (telethon, python-dotenv)
+│       ├── .env.example             # Credential template
+│       └── README.md                # Collector-specific docs
 ├── .env                          # Local database credentials (gitignored)
 ├── .gitignore
 ├── docker-compose.yml
