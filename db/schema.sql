@@ -247,6 +247,54 @@ SET default_tablespace = '';
 SET default_table_access_method = heap;
 
 --
+-- Name: abstention_log; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.abstention_log (
+    id bigint NOT NULL,
+    subject_user_id bigint NOT NULL,
+    predicate public.predicate_label NOT NULL,
+    reason_code text NOT NULL,
+    details text,
+    model_version text NOT NULL,
+    generated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: TABLE abstention_log; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.abstention_log IS 'Records why a claim was NOT emitted for a user — evidence gating, low confidence, or insufficient data. Enables audit of "unknown" assignments.';
+
+
+--
+-- Name: COLUMN abstention_log.reason_code; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.abstention_log.reason_code IS 'Machine-readable code: insufficient_evidence, low_confidence, no_data';
+
+
+--
+-- Name: abstention_log_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.abstention_log_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: abstention_log_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.abstention_log_id_seq OWNED BY public.abstention_log.id;
+
+
+--
 -- Name: claim_evidence; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -517,6 +565,13 @@ ALTER SEQUENCE public.users_id_seq OWNED BY public.users.id;
 
 
 --
+-- Name: abstention_log id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.abstention_log ALTER COLUMN id SET DEFAULT nextval('public.abstention_log_id_seq'::regclass);
+
+
+--
 -- Name: claims id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -556,6 +611,14 @@ ALTER TABLE ONLY public.raw_imports ALTER COLUMN id SET DEFAULT nextval('public.
 --
 
 ALTER TABLE ONLY public.users ALTER COLUMN id SET DEFAULT nextval('public.users_id_seq'::regclass);
+
+
+--
+-- Name: abstention_log abstention_log_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.abstention_log
+    ADD CONSTRAINT abstention_log_pkey PRIMARY KEY (id);
 
 
 --
@@ -663,10 +726,45 @@ ALTER TABLE ONLY public.users
 
 
 --
+-- Name: idx_abstention_predicate; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_abstention_predicate ON public.abstention_log USING btree (predicate, reason_code);
+
+
+--
+-- Name: idx_abstention_user; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_abstention_user ON public.abstention_log USING btree (subject_user_id);
+
+
+--
+-- Name: idx_abstention_version; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_abstention_version ON public.abstention_log USING btree (model_version);
+
+
+--
 -- Name: idx_claims_predicate; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_claims_predicate ON public.claims USING btree (predicate, object_value);
+
+
+--
+-- Name: idx_claims_unique_per_version; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX idx_claims_unique_per_version ON public.claims USING btree (subject_user_id, predicate, object_value, model_version);
+
+
+--
+-- Name: INDEX idx_claims_unique_per_version; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.idx_claims_unique_per_version IS 'Enables ON CONFLICT upsert: re-running inference with the same model_version replaces confidence/status/evidence rather than duplicating.';
 
 
 --
@@ -758,6 +856,14 @@ CREATE CONSTRAINT TRIGGER claim_validate_object_value AFTER INSERT OR UPDATE ON 
 --
 
 CREATE CONSTRAINT TRIGGER evidence_change_revalidate_claim AFTER DELETE OR UPDATE ON public.claim_evidence DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.trg_evidence_change_revalidate_claim();
+
+
+--
+-- Name: abstention_log abstention_log_subject_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.abstention_log
+    ADD CONSTRAINT abstention_log_subject_user_id_fkey FOREIGN KEY (subject_user_id) REFERENCES public.users(id) ON DELETE CASCADE;
 
 
 --
@@ -862,4 +968,5 @@ ALTER TABLE ONLY public.user_features_daily
 INSERT INTO public.schema_migrations (version) VALUES
     ('20260206120000'),
     ('20260206120100'),
-    ('20260206130000');
+    ('20260206130000'),
+    ('20260206140000');

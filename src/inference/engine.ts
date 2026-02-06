@@ -17,9 +17,8 @@
 import pg from 'pg';
 import type { Role, Intent, EvidenceType, Predicate } from '../config/taxonomies.js';
 import { ROLES, INTENTS } from '../config/taxonomies.js';
-import { ROLE_PRIORS, INTENT_PRIORS, PRIORS_VERSION } from '../config/priors.js';
 import type { GroupKind } from '../config/taxonomies.js';
-import { DEFAULT_CONFIG } from '../config/app-config.js';
+import type { InferenceConfig } from '../config/inference-config.js';
 import {
   BIO_ROLE_KEYWORDS,
   BIO_INTENT_KEYWORDS,
@@ -92,7 +91,7 @@ function softmax(scores: Map<string, number>): Map<string, number> {
 
 // ── Score a user ────────────────────────────────────────
 
-export function scoreUser(input: UserInferenceInput): UserInferenceResult {
+export function scoreUser(input: UserInferenceInput, config: InferenceConfig): UserInferenceResult {
   const result: UserInferenceResult = {
     userId: input.userId,
     roleClaim: null,
@@ -119,7 +118,7 @@ export function scoreUser(input: UserInferenceInput): UserInferenceResult {
 
   // Apply priors from each group_kind membership
   for (const gk of input.memberGroupKinds) {
-    const rolePrior = ROLE_PRIORS[gk] ?? {};
+    const rolePrior = config.rolePriors[gk] ?? {};
     for (const [role, weight] of Object.entries(rolePrior)) {
       const r = role as Role;
       roleScores.set(r, (roleScores.get(r) ?? 0) + weight);
@@ -130,7 +129,7 @@ export function scoreUser(input: UserInferenceInput): UserInferenceResult {
       });
     }
 
-    const intentPrior = INTENT_PRIORS[gk] ?? {};
+    const intentPrior = config.intentPriors[gk] ?? {};
     for (const [intent, weight] of Object.entries(intentPrior)) {
       const i = intent as Intent;
       intentScores.set(i, (intentScores.get(i) ?? 0) + weight);
@@ -314,13 +313,13 @@ export function scoreUser(input: UserInferenceInput): UserInferenceResult {
     const nonMembershipEvidence = topRole.evidence.filter(
       (e) => e.evidence_type !== 'membership',
     );
-    if (nonMembershipEvidence.length < DEFAULT_CONFIG.minNonMembershipEvidence) {
+    if (nonMembershipEvidence.length < config.gating.minNonMembershipEvidence) {
       result.gatingNotes.push(
-        `role:${topRole.label} GATED — only ${nonMembershipEvidence.length} non-membership evidence (need ≥${DEFAULT_CONFIG.minNonMembershipEvidence})`,
+        `role:${topRole.label} GATED — only ${nonMembershipEvidence.length} non-membership evidence (need ≥${config.gating.minNonMembershipEvidence})`,
       );
-    } else if (topRole.probability < DEFAULT_CONFIG.minClaimConfidence) {
+    } else if (topRole.probability < config.gating.minClaimConfidence) {
       result.gatingNotes.push(
-        `role:${topRole.label} GATED — confidence ${topRole.probability.toFixed(3)} < threshold ${DEFAULT_CONFIG.minClaimConfidence}`,
+        `role:${topRole.label} GATED — confidence ${topRole.probability.toFixed(3)} < threshold ${config.gating.minClaimConfidence}`,
       );
     } else {
       result.roleClaim = topRole;
@@ -332,13 +331,13 @@ export function scoreUser(input: UserInferenceInput): UserInferenceResult {
     const nonMembershipEvidence = topIntent.evidence.filter(
       (e) => e.evidence_type !== 'membership',
     );
-    if (nonMembershipEvidence.length < DEFAULT_CONFIG.minNonMembershipEvidence) {
+    if (nonMembershipEvidence.length < config.gating.minNonMembershipEvidence) {
       result.gatingNotes.push(
-        `intent:${topIntent.label} GATED — only ${nonMembershipEvidence.length} non-membership evidence (need ≥${DEFAULT_CONFIG.minNonMembershipEvidence})`,
+        `intent:${topIntent.label} GATED — only ${nonMembershipEvidence.length} non-membership evidence (need ≥${config.gating.minNonMembershipEvidence})`,
       );
-    } else if (topIntent.probability < DEFAULT_CONFIG.minClaimConfidence) {
+    } else if (topIntent.probability < config.gating.minClaimConfidence) {
       result.gatingNotes.push(
-        `intent:${topIntent.label} GATED — confidence ${topIntent.probability.toFixed(3)} < threshold ${DEFAULT_CONFIG.minClaimConfidence}`,
+        `intent:${topIntent.label} GATED — confidence ${topIntent.probability.toFixed(3)} < threshold ${config.gating.minClaimConfidence}`,
       );
     } else {
       result.intentClaim = topIntent;
@@ -358,6 +357,7 @@ export async function writeClaimWithEvidence(
   confidence: number,
   status: 'tentative' | 'supported',
   evidence: EvidenceRow[],
+  modelVersion: string,
   notes?: string,
 ): Promise<number> {
   // Deduplicate evidence by (evidence_type, evidence_ref)
@@ -370,13 +370,22 @@ export async function writeClaimWithEvidence(
     }
   }
 
+  // Upsert claim: ON CONFLICT updates confidence/status/timestamp
   const claimRes = await client.query(
-    `INSERT INTO claims (subject_user_id, predicate, object_value, confidence, status, model_version, notes)
-     VALUES ($1, $2::predicate_label, $3, $4, $5::claim_status, $6, $7)
+    `INSERT INTO claims (subject_user_id, predicate, object_value, confidence, status, model_version, notes, generated_at)
+     VALUES ($1, $2::predicate_label, $3, $4, $5::claim_status, $6, $7, now())
+     ON CONFLICT (subject_user_id, predicate, object_value, model_version)
+     DO UPDATE SET confidence = EXCLUDED.confidence,
+                  status = EXCLUDED.status,
+                  notes = EXCLUDED.notes,
+                  generated_at = now()
      RETURNING id`,
-    [userId, predicate, objectValue, confidence, status, PRIORS_VERSION, notes ?? null],
+    [userId, predicate, objectValue, confidence, status, modelVersion, notes ?? null],
   );
   const claimId: number = claimRes.rows[0].id;
+
+  // Clear old evidence for this claim (idempotent replace)
+  await client.query('DELETE FROM claim_evidence WHERE claim_id = $1', [claimId]);
 
   for (const e of deduped.values()) {
     await client.query(
@@ -388,4 +397,21 @@ export async function writeClaimWithEvidence(
   }
 
   return claimId;
+}
+
+// ── Write abstention log entry ──────────────────────────
+
+export async function writeAbstention(
+  client: pg.PoolClient,
+  userId: number,
+  predicate: Predicate,
+  reasonCode: string,
+  details: string,
+  modelVersion: string,
+): Promise<void> {
+  await client.query(
+    `INSERT INTO abstention_log (subject_user_id, predicate, reason_code, details, model_version)
+     VALUES ($1, $2::predicate_label, $3, $4, $5)`,
+    [userId, predicate, reasonCode, details, modelVersion],
+  );
 }

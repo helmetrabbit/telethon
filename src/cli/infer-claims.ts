@@ -18,8 +18,10 @@ import { db } from '../db/index.js';
 import {
   scoreUser,
   writeClaimWithEvidence,
+  writeAbstention,
   type UserInferenceInput,
 } from '../inference/engine.js';
+import { loadInferenceConfig } from '../config/inference-config.js';
 import type { GroupKind } from '../config/taxonomies.js';
 
 // ── Types for DB queries ────────────────────────────────
@@ -55,12 +57,16 @@ interface FeatureAggRow {
 async function main(): Promise<void> {
   console.log('\n🔍 Running inference engine...\n');
 
-  // ── 1. Clear previous claims (re-runnable) ──────────
-  // Delete claims first — ON DELETE CASCADE removes claim_evidence automatically.
-  // This avoids triggering the evidence_change_revalidate_claim constraint trigger
-  // which would reject the orphaned parent claims.
-  await db.query('DELETE FROM claims');
-  console.log('   Cleared previous claims.');
+  // ── 0. Load versioned inference config ──────────────
+  const config = loadInferenceConfig();
+  const ver = config.version;
+
+  // ── 1. Clear previous claims for THIS version (idempotent re-run) ──
+  // Delete claims for this model_version only. Claims from other versions are preserved.
+  // ON DELETE CASCADE removes claim_evidence automatically.
+  await db.query('DELETE FROM claims WHERE model_version = $1', [ver]);
+  await db.query('DELETE FROM abstention_log WHERE model_version = $1', [ver]);
+  console.log(`   Cleared previous claims/abstentions for ${ver}.`);
 
   // ── 2. Load all users ───────────────────────────────
   const users = await db.query<UserRow>(
@@ -133,7 +139,7 @@ async function main(): Promise<void> {
       groupsActiveCount: parseInt(feat?.groups_active_count ?? '0', 10),
     };
 
-    const result = scoreUser(input);
+    const result = scoreUser(input, config);
 
     console.log(`── ${user.display_name ?? user.id} ──`);
 
@@ -150,6 +156,7 @@ async function main(): Promise<void> {
           parseFloat(rc.probability.toFixed(4)),
           status,
           rc.evidence,
+          ver,
         );
       });
       totalClaims++;
@@ -171,6 +178,7 @@ async function main(): Promise<void> {
           parseFloat(ic.probability.toFixed(4)),
           status,
           ic.evidence,
+          ver,
         );
       });
       totalClaims++;
@@ -190,16 +198,29 @@ async function main(): Promise<void> {
           0.9, // high confidence — self-declared
           'supported',
           [{ evidence_type: 'bio', evidence_ref: `bio:affiliation:${aff}`, weight: 3.0 }],
+          ver,
         );
       });
       totalClaims++;
       console.log(`   ✅ affiliation: ${aff}`);
     }
 
-    // Report gating decisions
+    // Report and persist gating decisions
     for (const note of result.gatingNotes) {
       totalGated++;
       console.log(`   🚫 ${note}`);
+
+      // Parse gating note to extract predicate and reason
+      const predicate = note.startsWith('role:') ? 'has_role' as const
+        : note.startsWith('intent:') ? 'has_intent' as const
+        : 'has_role' as const;
+      const reasonCode = note.includes('GATED — only') ? 'insufficient_evidence'
+        : note.includes('GATED — confidence') ? 'low_confidence'
+        : 'insufficient_evidence';
+
+      await db.transaction(async (client) => {
+        await writeAbstention(client, user.id, predicate, reasonCode, note, ver);
+      });
     }
 
     console.log('');
@@ -207,10 +228,11 @@ async function main(): Promise<void> {
 
   // ── 7. Summary ──────────────────────────────────────
   console.log('━'.repeat(50));
-  console.log(`✅ Inference complete:`);
-  console.log(`   Claims emitted: ${totalClaims}`);
-  console.log(`   Claims gated:   ${totalGated}`);
-  console.log(`   Users processed: ${users.rows.length}`);
+  console.log(`✅ Inference complete (${ver}):`);
+  console.log(`   Claims emitted:    ${totalClaims}`);
+  console.log(`   Claims gated:      ${totalGated} (logged to abstention_log)`);
+  console.log(`   Users processed:   ${users.rows.length}`);
+  console.log(`   Model version:     ${ver}`);
 
   await db.close();
 }
