@@ -56,7 +56,9 @@ async function main(): Promise<void> {
   console.log('\n🔍 Running inference engine...\n');
 
   // ── 1. Clear previous claims (re-runnable) ──────────
-  await db.query('DELETE FROM claim_evidence');
+  // Delete claims first — ON DELETE CASCADE removes claim_evidence automatically.
+  // This avoids triggering the evidence_change_revalidate_claim constraint trigger
+  // which would reject the orphaned parent claims.
   await db.query('DELETE FROM claims');
   console.log('   Cleared previous claims.');
 

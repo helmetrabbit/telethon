@@ -114,17 +114,17 @@ $$;
 
 
 --
--- Name: trg_claim_role_intent_needs_real_evidence(); Type: FUNCTION; Schema: public; Owner: -
+-- Name: trg_claim_needs_real_evidence(); Type: FUNCTION; Schema: public; Owner: -
 --
 
-CREATE FUNCTION public.trg_claim_role_intent_needs_real_evidence() RETURNS trigger
+CREATE FUNCTION public.trg_claim_needs_real_evidence() RETURNS trigger
     LANGUAGE plpgsql
     AS $$
 DECLARE
   non_membership_count INT;
 BEGIN
-  -- Only enforce for has_role and has_intent predicates
-  IF NEW.predicate IN ('has_role', 'has_intent') THEN
+  -- Enforce for has_role, has_intent, AND has_topic_affinity
+  IF NEW.predicate IN ('has_role', 'has_intent', 'has_topic_affinity') THEN
     SELECT count(*) INTO non_membership_count
       FROM claim_evidence
      WHERE claim_id = NEW.id
@@ -138,6 +138,106 @@ BEGIN
     END IF;
   END IF;
   RETURN NEW;
+END;
+$$;
+
+
+--
+-- Name: trg_claim_validate_object_value(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.trg_claim_validate_object_value() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  -- For has_role: object_value must be a valid role_label
+  IF NEW.predicate = 'has_role' THEN
+    BEGIN
+      PERFORM NEW.object_value::role_label;
+    EXCEPTION WHEN invalid_text_representation THEN
+      RAISE EXCEPTION
+        'claim id=%: object_value ''%'' is not a valid role_label for predicate has_role',
+        NEW.id, NEW.object_value;
+    END;
+
+  -- For has_intent: object_value must be a valid intent_label
+  ELSIF NEW.predicate = 'has_intent' THEN
+    BEGIN
+      PERFORM NEW.object_value::intent_label;
+    EXCEPTION WHEN invalid_text_representation THEN
+      RAISE EXCEPTION
+        'claim id=%: object_value ''%'' is not a valid intent_label for predicate has_intent',
+        NEW.id, NEW.object_value;
+    END;
+
+  -- For affiliated_with / has_topic_affinity: must be non-empty
+  ELSE
+    IF NEW.object_value IS NULL OR trim(NEW.object_value) = '' THEN
+      RAISE EXCEPTION
+        'claim id=%: object_value cannot be empty for predicate %',
+        NEW.id, NEW.predicate;
+    END IF;
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+
+--
+-- Name: trg_evidence_change_revalidate_claim(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.trg_evidence_change_revalidate_claim() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+  the_claim_id BIGINT;
+  the_predicate predicate_label;
+  non_membership_count INT;
+  evidence_count INT;
+BEGIN
+  -- Determine which claim_id was affected
+  IF TG_OP = 'DELETE' THEN
+    the_claim_id := OLD.claim_id;
+  ELSE
+    the_claim_id := NEW.claim_id;
+  END IF;
+
+  -- Look up the claim
+  SELECT predicate INTO the_predicate
+    FROM claims WHERE id = the_claim_id;
+
+  IF NOT FOUND THEN
+    RETURN COALESCE(NEW, OLD);
+  END IF;
+
+  -- Re-check Rule 1: must have ≥1 evidence row
+  SELECT count(*) INTO evidence_count
+    FROM claim_evidence WHERE claim_id = the_claim_id;
+
+  IF evidence_count = 0 THEN
+    RAISE EXCEPTION
+      'claim id=% has no claim_evidence rows — every claim must be backed by evidence',
+      the_claim_id;
+  END IF;
+
+  -- Re-check Rule 2: role/intent/topic must have non-membership evidence
+  IF the_predicate IN ('has_role', 'has_intent', 'has_topic_affinity') THEN
+    SELECT count(*) INTO non_membership_count
+      FROM claim_evidence
+     WHERE claim_id = the_claim_id
+       AND evidence_type != 'membership';
+
+    IF non_membership_count = 0 THEN
+      RAISE EXCEPTION
+        'claim id=% (predicate=%) cannot exist with only membership evidence — '
+        'at least one bio/message/feature evidence row is required',
+        the_claim_id, the_predicate;
+    END IF;
+  END IF;
+
+  RETURN COALESCE(NEW, OLD);
 END;
 $$;
 
@@ -636,14 +736,28 @@ CREATE INDEX idx_users_handle ON public.users USING btree (handle);
 -- Name: claims claim_must_have_evidence; Type: TRIGGER; Schema: public; Owner: -
 --
 
-CREATE CONSTRAINT TRIGGER claim_must_have_evidence AFTER INSERT ON public.claims DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.trg_claim_must_have_evidence();
+CREATE CONSTRAINT TRIGGER claim_must_have_evidence AFTER INSERT OR UPDATE ON public.claims DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.trg_claim_must_have_evidence();
 
 
 --
--- Name: claims claim_role_intent_needs_real_evidence; Type: TRIGGER; Schema: public; Owner: -
+-- Name: claims claim_needs_real_evidence; Type: TRIGGER; Schema: public; Owner: -
 --
 
-CREATE CONSTRAINT TRIGGER claim_role_intent_needs_real_evidence AFTER INSERT ON public.claims DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.trg_claim_role_intent_needs_real_evidence();
+CREATE CONSTRAINT TRIGGER claim_needs_real_evidence AFTER INSERT OR UPDATE ON public.claims DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.trg_claim_needs_real_evidence();
+
+
+--
+-- Name: claims claim_validate_object_value; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE CONSTRAINT TRIGGER claim_validate_object_value AFTER INSERT OR UPDATE ON public.claims DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.trg_claim_validate_object_value();
+
+
+--
+-- Name: claim_evidence evidence_change_revalidate_claim; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE CONSTRAINT TRIGGER evidence_change_revalidate_claim AFTER DELETE OR UPDATE ON public.claim_evidence DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.trg_evidence_change_revalidate_claim();
 
 
 --
@@ -747,4 +861,5 @@ ALTER TABLE ONLY public.user_features_daily
 
 INSERT INTO public.schema_migrations (version) VALUES
     ('20260206120000'),
-    ('20260206120100');
+    ('20260206120100'),
+    ('20260206130000');
