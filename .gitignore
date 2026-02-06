@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment
+.env
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data / exports (keep local, never commit chat logs)
+data/exports/
+data/output/
+
+# Postgres volume
+pgdata/
+
+# Logs
+*.log

@@ -1,0 +1,32 @@
+{
+  "name": "tg-profile-engine",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local Telegram chat analysis: ontology-lite knowledge graph with evidence-gated inference.",
+  "scripts": {
+    "build": "tsc",
+    "ingest": "node dist/cli/ingest.js",
+    "compute-features": "node dist/cli/compute-features.js",
+    "infer-claims": "node dist/cli/infer-claims.js",
+    "export-profiles": "node dist/cli/export-profiles.js",
+    "db:up": "docker compose up -d postgres",
+    "db:down": "docker compose down",
+    "db:migrate": "docker compose run --rm dbmate up",
+    "db:rollback": "docker compose run --rm dbmate down",
+    "db:reset": "docker compose down -v && docker compose up -d postgres && sleep 2 && docker compose run --rm dbmate up",
+    "pipeline": "npm run build && npm run ingest && npm run compute-features && npm run infer-claims && npm run export-profiles"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "dotenv": "^17.2.4",
+    "pg": "^8.18.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^25.2.1",
+    "@types/pg": "^8.16.0",
+    "typescript": "^5.9.3"
+  }
+}
