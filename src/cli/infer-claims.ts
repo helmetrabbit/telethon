@@ -205,15 +205,15 @@ async function main(): Promise<void> {
           client,
           user.id,
           'affiliated_with',
-          aff,
+          aff.name,
           0.9, // high confidence — self-declared
           'supported',
-          [{ evidence_type: 'bio', evidence_ref: `bio:affiliation:${aff}`, weight: 3.0 }],
+          [{ evidence_type: aff.source, evidence_ref: `${aff.source}:${aff.tag}:${aff.name}`, weight: 3.0 }],
           ver,
         );
       });
       totalClaims++;
-      console.log(`   ✅ affiliation: ${aff}`);
+      console.log(`   ✅ affiliation: ${aff.name} (source=${aff.source})`);
     }
 
     // Report and persist gating decisions

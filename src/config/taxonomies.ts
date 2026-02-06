@@ -14,6 +14,8 @@ export const ROLES = [
   'recruiter',
   'vendor_agency',
   'community',
+  'media_kol',
+  'market_maker',
   'unknown',
 ] as const;
 export type Role = (typeof ROLES)[number];
@@ -30,7 +32,7 @@ export const INTENTS = [
 ] as const;
 export type Intent = (typeof INTENTS)[number];
 
-export const EVIDENCE_TYPES = ['bio', 'message', 'feature', 'membership'] as const;
+export const EVIDENCE_TYPES = ['bio', 'message', 'feature', 'membership', 'display_name'] as const;
 export type EvidenceType = (typeof EVIDENCE_TYPES)[number];
 
 export const CLAIM_STATUSES = ['tentative', 'supported'] as const;

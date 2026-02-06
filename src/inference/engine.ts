@@ -25,6 +25,8 @@ import {
   MSG_ROLE_KEYWORDS,
   MSG_INTENT_KEYWORDS,
   BIO_AFFILIATION_PATTERNS,
+  DISPLAY_NAME_ROLE_KEYWORDS,
+  DISPLAY_NAME_AFFILIATION_PATTERNS,
 } from './keywords.js';
 
 // ── Types ───────────────────────────────────────────────
@@ -59,11 +61,17 @@ export interface UserInferenceInput {
   groupsActiveCount: number;
 }
 
+export interface AffiliationResult {
+  name: string;
+  source: EvidenceType;
+  tag: string;
+}
+
 export interface UserInferenceResult {
   userId: number;
   roleClaim: ScoredLabel<Role> | null;
   intentClaim: ScoredLabel<Intent> | null;
-  affiliations: string[];
+  affiliations: AffiliationResult[];
   /** Notes about gating decisions */
   gatingNotes: string[];
 }
@@ -170,7 +178,38 @@ export function scoreUser(input: UserInferenceInput, config: InferenceConfig): U
     for (const aff of BIO_AFFILIATION_PATTERNS) {
       const match = input.bio.match(aff.pattern);
       if (match && match[1]) {
-        result.affiliations.push(match[1].trim());
+        result.affiliations.push({ name: match[1].trim(), source: 'bio', tag: aff.tag });
+      }
+    }
+  }
+
+  // ── 2b. Display name signals ────────────────────────
+  // Parse "Name | Company Role" patterns for role + affiliation evidence.
+  // Display names are high-signal — users self-declare identity here.
+
+  if (input.displayName && input.displayName.trim().length > 0) {
+    const dn = input.displayName;
+
+    for (const kw of DISPLAY_NAME_ROLE_KEYWORDS) {
+      if (kw.pattern.test(dn)) {
+        roleScores.set(kw.label, (roleScores.get(kw.label) ?? 0) + kw.weight);
+        roleEvidence.get(kw.label)!.push({
+          evidence_type: 'display_name',
+          evidence_ref: `display_name:${kw.tag}`,
+          weight: kw.weight,
+        });
+      }
+    }
+
+    // Display name affiliation detection
+    for (const aff of DISPLAY_NAME_AFFILIATION_PATTERNS) {
+      const match = dn.match(aff.pattern);
+      if (match && match[1]) {
+        const company = match[1].trim();
+        // Avoid duplicates if bio already captured the same affiliation
+        if (!result.affiliations.some((a) => a.name === company)) {
+          result.affiliations.push({ name: company, source: 'display_name', tag: aff.tag });
+        }
       }
     }
   }
