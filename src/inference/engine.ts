@@ -29,6 +29,7 @@ import {
   MSG_AFFILIATION_REJECT_PATTERNS,
   ORG_CAPTURE_STOPWORDS,
   ORG_TRAILING_STRIP_PATTERN,
+  ORG_ON_CHAIN_CLAMP_PATTERN,
   DISPLAY_NAME_ROLE_KEYWORDS,
   DISPLAY_NAME_AFFILIATION_PATTERNS,
   AFFILIATION_REJECT_SET,
@@ -331,9 +332,11 @@ export function scoreUser(input: UserInferenceInput, config: InferenceConfig): U
             const beforeMatch = text.slice(0, matchIndex);
             if (beforeMatch.includes('@')) continue; // Third-person: "Adding @user here from X"
 
-            // Post-process: strip trailing clause words
+            // Post-process: strip trailing clause words and chain qualifiers
             let company = match[1].trim();
             company = company.replace(ORG_TRAILING_STRIP_PATTERN, '').trim();
+            // Clamp "X on Y" to "X" (fix v0.5.5: Pandu "Crust on Mantle right" → "Crust")
+            company = company.replace(ORG_ON_CHAIN_CLAMP_PATTERN, '').trim();
 
             // Validate org name
             if (company.length < 3) continue;

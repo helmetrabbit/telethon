@@ -26,7 +26,7 @@ const PER_ROLE = parseInt(getArg('per-role', '3'), 10);
 const MAX_MSGS = parseInt(getArg('max-msgs', '200'), 10);
 const UNCATEGORIZED_COUNT = parseInt(getArg('uncategorized', '5'), 10);
 const OUT_DIR = getArg('out-dir', 'data/output');
-const MODEL_VERSION = getArg('model-version', 'v0.5.4');
+const MODEL_VERSION = getArg('model-version', 'v0.5.5');
 
 // ── Main ────────────────────────────────────────────────
 

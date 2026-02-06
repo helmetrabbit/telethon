@@ -137,8 +137,10 @@ export const MSG_ROLE_KEYWORDS: KeywordSignal<Role>[] = [
   // BD (fix v0.5.4: added partnerships plural, business development, listing/integration BD patterns)
   { pattern: /\b(partnerships?|collab|intro\s+to|warm\s+intro|deal)\b/i, label: 'bd', weight: 1.0, tag: 'bd_action' },
   { pattern: /\b(business\s+develop|biz\s*dev)\b/i, label: 'bd', weight: 1.5, tag: 'bd_role_msg' },
-  // Token listing / integration patterns — BD signals for protocol/project reps (Aaron/HoudiniSwap)
-  { pattern: /\b(token\s+listing|chain\s+listing|listing\s+(?:on|with)|listed\s+on)\b/i, label: 'bd', weight: 1.5, tag: 'bd_listing_msg' },
+  // Token/chain listing patterns — BD signals for protocol/project reps (Aaron/HoudiniSwap)
+  // Fix v0.5.5: Made more specific to CEX/DEX/chain context to avoid matching directory listings
+  { pattern: /\b(token\s+listing|chain\s+listing|CEX\s+listing|DEX\s+listing)\b/i, label: 'bd', weight: 1.5, tag: 'bd_listing_msg' },
+  { pattern: /\b(listing\s+(?:on|with)\s+(?:Binance|Coinbase|Kraken|OKX|Bybit|KuCoin|Gate|Uniswap|SushiSwap|PancakeSwap|[A-Z][a-z]+(?:swap|dex|exchange)))\b/i, label: 'bd', weight: 1.5, tag: 'bd_cex_listing_msg' },
   { pattern: /\b(ecosystem\s+partners?|integration\s+partners?|looking\s+to\s+(?:partner|integrate))\b/i, label: 'bd', weight: 1.5, tag: 'bd_ecosystem_msg' },
   { pattern: /\b(DMs?\s+(?:are\s+)?(?:\[)?open(?:\])?|(?:hmu|hit\s+me\s+up)\s+(?:in\s+)?DMs?)\b/i, label: 'bd', weight: 1.0, tag: 'bd_outreach_msg' },
 
@@ -169,6 +171,11 @@ export const MSG_ROLE_KEYWORDS: KeywordSignal<Role>[] = [
   // "web3 security company", "auditing services", "reach out for security requirements"
   { pattern: /\b(security\s+(?:company|firm|provider|services?)|audit(?:ing)?\s+(?:services?|firm|company)|smart\s*contract\s+audit)\b/i, label: 'vendor_agency', weight: 2.0, tag: 'vendor_security_msg' },
   { pattern: /\b(reach\s+out\s+(?:for|if)|(?:your|any)\s+(?:security|audit)\s+(?:requirements?|needs?))\b/i, label: 'vendor_agency', weight: 1.5, tag: 'vendor_security_cta_msg' },
+
+  // Directory/marketplace vendor signals (fix v0.5.5: Marco/Semoto case)
+  // "listed on/with [directory]", "in our ecosystem", "law firms in [directory]'s ecosystem"
+  { pattern: /\b(listed\s+(?:on|with)\s+(?:us|our|the)\b|(?:in|on)\s+(?:our|the)\s+(?:directory|ecosystem|platform|marketplace))\b/i, label: 'vendor_agency', weight: 2.0, tag: 'vendor_directory_msg' },
+  { pattern: /\b((?:law\s+)?firms?\s+in\s+(?:our|the)\s+ecosystem|providers?\s+(?:on|in)\s+(?:our|the)\s+(?:platform|directory))\b/i, label: 'vendor_agency', weight: 2.0, tag: 'vendor_marketplace_msg' },
 ];
 
 // ── Bio → Intent signals ───────────────────────────────
@@ -279,12 +286,22 @@ export const ORG_CAPTURE_STOPWORDS = new Set([
   'here', 'there', 'where', 'which', 'what', 'who',
   'at', 'from', 'with', 'for', 'to', 'in', 'on', 'of',
   'core', 'team', 'our', 'my', 'their', 'your',
+  // Clause fragment stopwords (fix v0.5.5: Andy "each protocol" case)
+  'each', 'every', 'all', 'most', 'many', 'few', 'several',
 ]);
 
 /**
  * Trailing words to strip from org captures (clause bleed-through).
+ * Extended in v0.5.5 to include time/adverb words and chain qualifiers.
  */
-export const ORG_TRAILING_STRIP_PATTERN = /\s+(?:team|the\s+team|core\s+team|we|if|and|but|or|so|as|for|to|is|are|was|were|has|have|had|will|would|can|could|may|might|should)\b.*$/i;
+export const ORG_TRAILING_STRIP_PATTERN = /\s+(?:team|the\s+team|core\s+team|we|if|and|but|or|so|as|for|to|is|are|was|were|has|have|had|will|would|can|could|may|might|should|right|now|today|here|there|currently|recently|soon|yet|still|just|already|then|very|really|actually)\b.*$/i;
+
+/**
+ * Pattern to clamp "X on Y" to just "X" (chain/network qualifiers).
+ * Handles: "Crust on Mantle", "Uniswap on Arbitrum", "Protocol on Base"
+ * The network name after "on" is stripped, keeping only the protocol name.
+ */
+export const ORG_ON_CHAIN_CLAMP_PATTERN = /\s+on\s+(?:Ethereum|Mainnet|Arbitrum|Optimism|Base|Polygon|Avalanche|BSC|BNB|Solana|Mantle|Scroll|zkSync|Linea|Blast|Mode|Fantom|Gnosis|Celo|Moonbeam|[A-Z][a-z]+)(?:\s|$)/i;
 
 // ── Display Name → Role signals ────────────────────────
 // Telegram users commonly set display names like "Alice | Acme Labs BD Lead"
