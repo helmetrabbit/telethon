@@ -385,7 +385,8 @@ CREATE TABLE public.memberships (
     user_id bigint NOT NULL,
     first_seen_at timestamp with time zone,
     last_seen_at timestamp with time zone,
-    msg_count integer DEFAULT 0 NOT NULL
+    msg_count integer DEFAULT 0 NOT NULL,
+    is_current_member boolean
 );
 
 
@@ -970,4 +971,5 @@ INSERT INTO public.schema_migrations (version) VALUES
     ('20260206120100'),
     ('20260206130000'),
     ('20260206140000'),
-    ('20260206150000');
+    ('20260206150000'),
+    ('20260206160000');

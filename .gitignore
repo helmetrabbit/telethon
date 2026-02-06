@@ -23,6 +23,7 @@ tools/telethon_collector/.env
 tools/telethon_collector/*.session
 tools/telethon_collector/*.session-journal
 tools/telethon_collector/.venv/
+*.checkpoint.json
 
 # Share-safe exports
 share/

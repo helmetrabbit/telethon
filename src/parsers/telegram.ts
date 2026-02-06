@@ -100,7 +100,7 @@ export const TelegramExportSchema = z.object({
   messages_count: z.number().optional(),
   limits: z.object({
     since: z.string().nullable().optional(),
-    limit: z.number().optional(),
+    limit: z.number().nullable().optional(),
   }).optional(),
 });
 

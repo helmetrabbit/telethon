@@ -6,8 +6,12 @@ write a JSON export compatible with the tg-profile-engine ingest pipeline.
 Usage:
     python tools/telethon_collector/collect_group_export.py \
         --group "BD in Web3" \
-        --out data/exports/telethon_bd_web3.json \
-        --limit 5000
+        --out data/exports/telethon_bd_web3.json
+
+    # Incremental update (re-run same command — fetches only new messages):
+    python tools/telethon_collector/collect_group_export.py \
+        --group "BD in Web3" \
+        --out data/exports/telethon_bd_web3.json
 
 See tools/telethon_collector/README.md for full documentation.
 """
@@ -61,8 +65,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--limit",
         type=int,
-        default=5000,
-        help="Max messages to fetch (default: 5000).",
+        default=None,
+        help="Max messages to fetch (default: all messages).",
     )
     p.add_argument(
         "--since",
@@ -142,26 +146,65 @@ def _group_type(entity) -> str:
 # ── Sender cache ────────────────────────────────────────
 
 class SenderCache:
-    """Cache sender entities to avoid repeated API calls."""
+    """Cache sender entities to avoid repeated API calls.
+
+    Pre-seed with the participant list so most messages resolve instantly
+    without any API round-trip.
+    """
 
     def __init__(self, client: TelegramClient):
         self._client = client
         self._cache: dict[int, User | None] = {}
+        self._misses = 0
 
-    async def get(self, sender_id: int | None) -> User | None:
-        if sender_id is None:
+    def seed_from_participants(self, participants: list[dict]) -> None:
+        """Pre-populate cache from collected participants (dict format)."""
+        for p in participants:
+            uid = p.get("user_id")
+            if uid is not None:
+                # Store a lightweight object with the fields we need
+                self._cache[uid] = p  # type: ignore
+        print(f"   📦 Sender cache pre-seeded with {len(self._cache)} participants")
+
+    def _extract_name(self, entry) -> str | None:
+        """Extract display name from either a User object or a participant dict."""
+        if entry is None:
             return None
+        if isinstance(entry, dict):
+            return entry.get("display_name")
+        # It's a User object
+        parts = [entry.first_name or "", entry.last_name or ""]
+        name = " ".join(p for p in parts if p).strip()
+        return name or None
+
+    def _extract_username(self, entry) -> str | None:
+        if entry is None:
+            return None
+        if isinstance(entry, dict):
+            return entry.get("username")
+        return getattr(entry, "username", None)
+
+    async def get(self, sender_id: int | None) -> tuple[str | None, str | None]:
+        """Return (display_name, from_id_str) without API calls when possible."""
+        if sender_id is None:
+            return None, None
+        from_id = f"user{sender_id}"
+
         if sender_id in self._cache:
-            return self._cache[sender_id]
+            entry = self._cache[sender_id]
+            return self._extract_name(entry), from_id
+
+        # Cache miss — must resolve via API (uncommon if participants were seeded)
+        self._misses += 1
         try:
             entity = await self._client.get_entity(sender_id)
             if isinstance(entity, User):
                 self._cache[sender_id] = entity
-                return entity
+                return self._extract_name(entity), from_id
         except Exception:
             pass
         self._cache[sender_id] = None
-        return None
+        return None, from_id
 
 
 # ── Message export ──────────────────────────────────────
@@ -174,32 +217,98 @@ def _display_name(user: User | None) -> str | None:
     return name or None
 
 
+# ── Incremental + checkpoint support ───────────────────
+
+def _checkpoint_path(out_path: Path) -> Path:
+    """Return the path for the in-progress checkpoint file."""
+    return out_path.with_suffix(".checkpoint.json")
+
+
+def _save_checkpoint(path: Path, messages: list[dict], meta: dict) -> None:
+    """Save an in-progress checkpoint to disk."""
+    data = {**meta, "messages": messages}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+
+def _load_checkpoint(out_path: Path) -> tuple[list[dict] | None, int | None, dict | None]:
+    """Load checkpoint if it exists. Returns (messages, max_id, meta) or (None, None, None)."""
+    cp = _checkpoint_path(out_path)
+    if not cp.exists():
+        return None, None, None
+    try:
+        data = json.loads(cp.read_text(encoding="utf-8"))
+        msgs = data.get("messages", [])
+        max_id = max((m["id"] for m in msgs if "id" in m), default=None)
+        meta = {k: v for k, v in data.items() if k != "messages"}
+        return msgs, max_id, meta
+    except Exception:
+        return None, None, None
+
+
+def _load_existing(out_path: Path) -> tuple[dict | None, int | None]:
+    """If an output file exists, load it and return (export_obj, max_message_id)."""
+    if not out_path.exists():
+        return None, None
+    try:
+        data = json.loads(out_path.read_text(encoding="utf-8"))
+        existing_ids = [m["id"] for m in data.get("messages", []) if "id" in m]
+        max_id = max(existing_ids) if existing_ids else None
+        return data, max_id
+    except Exception:
+        return None, None
+
+
+def _format_eta(seconds: float) -> str:
+    """Format seconds into a human-readable ETA string."""
+    if seconds < 60:
+        return f"{seconds:.0f}s"
+    elif seconds < 3600:
+        return f"{seconds / 60:.1f}m"
+    else:
+        return f"{seconds / 3600:.1f}h"
+
+
+_CHECKPOINT_INTERVAL = 1000  # Save to disk every N messages
+
+
 async def collect_messages(
     client: TelegramClient,
     entity,
-    limit: int,
+    sender_cache: SenderCache,
+    limit: int | None,
     since: datetime | None,
+    min_id: int = 0,
+    out_path: Path | None = None,
+    checkpoint_meta: dict | None = None,
 ) -> list[dict]:
-    """Collect messages in Telegram Desktop export format."""
-    sender_cache = SenderCache(client)
+    """Collect messages in Telegram Desktop export format.
+
+    If min_id > 0, only fetches messages with id > min_id (incremental mode).
+    Saves a checkpoint every 1000 messages so interruptions lose minimal work.
+    """
     messages = []
     count = 0
+    skipped_service = 0
+    t0 = time.monotonic()
+    last_checkpoint_count = 0
 
-    print(f"\n📨 Collecting messages (limit={limit})...")
+    limit_str = str(limit) if limit else "all"
+    mode = "incremental (new only)" if min_id > 0 else "full"
+    print(f"\n📨 Collecting messages (limit={limit_str}, mode={mode})...")
+    if out_path:
+        print(f"   💾 Checkpoints every {_CHECKPOINT_INTERVAL:,} messages → {_checkpoint_path(out_path)}")
 
-    async for msg in client.iter_messages(entity, limit=limit, offset_date=since, reverse=False):
+    async for msg in client.iter_messages(entity, limit=limit, offset_date=since, reverse=False, min_id=min_id):
         # Skip service messages (joins, leaves, pin, etc.)
-        if isinstance(msg, MessageService):
-            continue
-        if msg.action is not None:
+        if isinstance(msg, MessageService) or msg.action is not None:
+            skipped_service += 1
             continue
 
         sender_id = msg.sender_id
-        sender = await sender_cache.get(sender_id)
+        from_name, from_id = await sender_cache.get(sender_id)
 
         text = msg.message or ""
-        from_name = _display_name(sender)
-        from_id = f"user{sender_id}" if sender_id else None
 
         msg_obj = {
             "id": msg.id,
@@ -213,10 +322,39 @@ async def collect_messages(
         messages.append(msg_obj)
         count += 1
 
-        if count % 500 == 0:
-            print(f"   ... {count} messages collected")
+        # ── Progress every 100 messages ──────────
+        if count % 100 == 0:
+            elapsed = time.monotonic() - t0
+            rate = count / elapsed if elapsed > 0 else 0
+            if limit:
+                remaining = limit - count
+                eta = _format_eta(remaining / rate) if rate > 0 else "?"
+            else:
+                eta = "—"
+            print(f"   ... {count:,} messages  ({rate:.0f} msg/s, {elapsed:.0f}s elapsed, "
+                  f"ETA {eta}, {sender_cache._misses} misses, {skipped_service} svc skipped)")
 
-    print(f"   ✅ {count} messages collected")
+        # ── Checkpoint every 1000 messages ───────
+        if out_path and count - last_checkpoint_count >= _CHECKPOINT_INTERVAL:
+            _save_checkpoint(_checkpoint_path(out_path), messages, checkpoint_meta or {})
+            last_checkpoint_count = count
+            print(f"   💾 Checkpoint saved: {count:,} messages")
+
+    elapsed = time.monotonic() - t0
+    rate = count / elapsed if elapsed > 0 else 0
+    print(f"   ✅ {count:,} messages collected in {elapsed:.1f}s ({rate:.0f} msg/s)")
+    if skipped_service:
+        print(f"   ℹ️  {skipped_service} service messages skipped")
+    if sender_cache._misses:
+        print(f"   ℹ️  {sender_cache._misses} sender cache misses (API lookups)")
+
+    # Clean up checkpoint file on successful completion
+    if out_path:
+        cp = _checkpoint_path(out_path)
+        if cp.exists():
+            cp.unlink()
+            print(f"   🧹 Checkpoint file removed (collection complete)")
+
     return messages
 
 
@@ -313,6 +451,21 @@ async def main() -> None:
     if args.since:
         since_dt = datetime.strptime(args.since, "%Y-%m-%d").replace(tzinfo=timezone.utc)
 
+    out_path = Path(args.out)
+
+    # ── Check for checkpoint from interrupted run ────
+    cp_messages, cp_max_id, cp_meta = _load_checkpoint(out_path)
+    if cp_messages and cp_max_id:
+        print(f"\n🔄 Resuming from checkpoint: {len(cp_messages):,} messages (max id={cp_max_id})")
+        print(f"   Will continue fetching from where we left off")
+
+    # ── Check for existing export (incremental mode) ─
+    existing_export, existing_max_id = _load_existing(out_path)
+    if existing_export and existing_max_id:
+        existing_count = len(existing_export.get("messages", []))
+        print(f"\n♻️  Existing export found: {existing_count:,} messages (max id={existing_max_id})")
+        print(f"   Will fetch only messages newer than id {existing_max_id}")
+
     # ── Connect ──────────────────────────────────────
     client = TelegramClient(SESSION_PATH, int(API_ID), API_HASH)
     await client.start()
@@ -331,8 +484,57 @@ async def main() -> None:
     else:
         participants, p_status, p_error, p_count = [], "unavailable", "Skipped (--include-participants false)", None
 
+    # ── Pre-seed sender cache from participants ──────
+    sender_cache = SenderCache(client)
+    if participants:
+        sender_cache.seed_from_participants(participants)
+
+    # ── Determine starting point ─────────────────────
+    # Priority: checkpoint > existing export > fresh start
+    if cp_messages and cp_max_id:
+        min_id = cp_max_id
+    elif existing_max_id:
+        min_id = existing_max_id
+    else:
+        min_id = 0
+
+    # Metadata for checkpoint files
+    checkpoint_meta = {
+        "name": group_title,
+        "type": group_type,
+        "id": entity.id,
+        "checkpoint": True,
+    }
+
     # ── Collect messages ─────────────────────────────
-    messages = await collect_messages(client, entity, args.limit, since_dt)
+    new_messages = await collect_messages(
+        client, entity, sender_cache, args.limit, since_dt,
+        min_id=min_id, out_path=out_path, checkpoint_meta=checkpoint_meta,
+    )
+
+    # ── Merge all sources ────────────────────────────
+    all_prior: list[dict] = []
+    if existing_export:
+        all_prior.extend(existing_export.get("messages", []))
+    if cp_messages:
+        all_prior.extend(cp_messages)
+
+    if all_prior:
+        # Deduplicate by message id, keeping the latest version
+        seen_ids: dict[int, dict] = {}
+        for m in all_prior:
+            seen_ids[m["id"]] = m
+        for m in new_messages:
+            seen_ids[m["id"]] = m
+        messages = list(seen_ids.values())
+        prior_count = len(all_prior)
+        new_count = len(new_messages)
+        print(f"\n🔀 Merged: {prior_count:,} prior + {new_count:,} new = {len(messages):,} total (deduplicated)")
+    elif not new_messages:
+        messages = []
+        print(f"\n⚠️  No messages collected.")
+    else:
+        messages = new_messages
 
     # ── Build export object ──────────────────────────
     export_obj = {
@@ -353,7 +555,6 @@ async def main() -> None:
     }
 
     # ── Write output ─────────────────────────────────
-    out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(export_obj, indent=2, ensure_ascii=False), encoding="utf-8")
 
@@ -361,11 +562,15 @@ async def main() -> None:
     print(f"✅ Export complete:")
     print(f"   Group:              {group_title}")
     print(f"   Type:               {group_type}")
-    print(f"   Messages:           {len(messages)}")
+    print(f"   Messages:           {len(messages):,}")
     print(f"   Participants:       {p_status} ({p_count if p_count is not None else 'N/A'})")
     if p_error:
         print(f"   Participant error:  {p_error}")
     print(f"   Output:             {out_path}")
+    if existing_max_id:
+        print(f"   Mode:               incremental (re-run to fetch newer messages)")
+    else:
+        print(f"   Mode:               full collection")
     print()
 
     await client.disconnect()

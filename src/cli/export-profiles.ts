@@ -14,6 +14,7 @@ import { writeFileSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { db } from '../db/index.js';
 import { parseArgs } from '../utils.js';
+import { loadInferenceConfig } from '../config/inference-config.js';
 
 // ── Output shape ────────────────────────────────────────
 
@@ -30,6 +31,7 @@ interface ProfileObserved {
     msg_count: number;
     first_seen: string | null;
     last_seen: string | null;
+    is_current_member: boolean | null;
   }[];
   message_stats: {
     total_messages: number;
@@ -103,6 +105,7 @@ interface MembershipRow {
   msg_count: number;
   first_seen_at: string | null;
   last_seen_at: string | null;
+  is_current_member: boolean | null;
 }
 
 interface MsgStatsRow {
@@ -151,8 +154,12 @@ async function main(): Promise<void> {
 
   mkdirSync(outDir, { recursive: true });
 
+  const inferConfig = loadInferenceConfig();
+  const engineVersion = inferConfig.version;
+
   console.log('\n📤 Exporting user profiles...');
   console.log(`   Output dir: ${outDir}`);
+  console.log(`   Engine version: ${engineVersion}`);
   if (filterUserId) console.log(`   Filtering to user_id: ${filterUserId}`);
 
   // ── Load users ──────────────────────────────────────
@@ -169,9 +176,12 @@ async function main(): Promise<void> {
   }
 
   const profiles: UserProfile[] = [];
+  const totalUsers = users.rows.length;
+  let exported = 0;
+  const t0 = Date.now();
 
   for (const user of users.rows) {
-    const profile = await buildProfile(user);
+    const profile = await buildProfile(user, engineVersion);
     profiles.push(profile);
 
     // Write individual file
@@ -179,7 +189,15 @@ async function main(): Promise<void> {
     const fileName = `${user.id}_${safeName}.json`;
     const filePath = resolve(outDir, fileName);
     writeFileSync(filePath, JSON.stringify(profile, null, 2));
-    console.log(`   ✅ ${user.display_name ?? user.external_id} → ${fileName}`);
+
+    exported++;
+    if (exported % 500 === 0 || exported === totalUsers) {
+      const elapsed = (Date.now() - t0) / 1000;
+      const rate = elapsed > 0 ? Math.round(exported / elapsed) : 0;
+      const eta = rate > 0 ? Math.round((totalUsers - exported) / rate) : 0;
+      const pct = Math.round((exported / totalUsers) * 100);
+      console.log(`   ... ${exported.toLocaleString()}/${totalUsers.toLocaleString()} profiles (${pct}%, ${rate}/s, ETA ${eta}s)`);
+    }
   }
 
   // Write combined file
@@ -193,11 +211,12 @@ async function main(): Promise<void> {
 
 // ── Build a single user profile ─────────────────────────
 
-async function buildProfile(user: UserRow): Promise<UserProfile> {
+async function buildProfile(user: UserRow, engineVersion: string): Promise<UserProfile> {
   // ── Observed: Memberships ─────────────────────────
   const memberships = await db.query<MembershipRow>(
     `SELECT g.title AS group_title, g.kind AS group_kind,
-            m.msg_count, m.first_seen_at::text, m.last_seen_at::text
+            m.msg_count, m.first_seen_at::text, m.last_seen_at::text,
+            m.is_current_member
      FROM memberships m
      JOIN groups g ON g.id = m.group_id
      WHERE m.user_id = $1
@@ -305,7 +324,7 @@ async function buildProfile(user: UserRow): Promise<UserProfile> {
   return {
     _meta: {
       exported_at: new Date().toISOString(),
-      engine_version: 'v0.1.0',
+      engine_version: engineVersion,
     },
     observed: {
       user_id: user.id,
@@ -320,6 +339,7 @@ async function buildProfile(user: UserRow): Promise<UserProfile> {
         msg_count: m.msg_count,
         first_seen: m.first_seen_at,
         last_seen: m.last_seen_at,
+        is_current_member: m.is_current_member,
       })),
       message_stats: {
         total_messages: parseInt(ms?.total_messages ?? '0', 10),

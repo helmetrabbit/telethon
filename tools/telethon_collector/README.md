@@ -76,9 +76,8 @@ Or directly:
 ```bash
 source tools/telethon_collector/.venv/bin/activate
 python tools/telethon_collector/collect_group_export.py \
-  --group "BD in Web3" \
-  --out data/exports/telethon_bd_web3.json \
-  --limit 5000
+  --group "BD in Web3 🚀" \
+  --out data/exports/telethon_bd_web3.json
 ```
 
 ### Arguments
@@ -87,9 +86,15 @@ python tools/telethon_collector/collect_group_export.py \
 |---|---|---|
 | `--group` | (required) | Group title, @username, or numeric ID |
 | `--out` | `data/exports/telethon_bd_web3.json` | Output file path |
-| `--limit` | `5000` | Max messages to fetch |
+| `--limit` | (none — all messages) | Max messages to fetch; omit to collect everything |
 | `--since` | (none) | Only messages after this date (YYYY-MM-DD) |
 | `--include-participants` | `true` | Attempt to collect full participant list |
+
+### Incremental & Checkpoint Support
+
+- **Incremental re-runs**: if the `--out` file already exists, the collector reads it, finds the highest message ID, and fetches only newer messages. Results are merged and deduplicated.
+- **Checkpoint saves**: every 1,000 messages, progress is saved to a `.checkpoint.json` sidecar file. If the process is interrupted, the next run resumes from the checkpoint automatically. The checkpoint file is deleted on successful completion.
+- **Sender cache pre-seeding**: the participant list is loaded into an in-memory cache to avoid per-message API calls for sender resolution, dramatically reducing collection time.
 
 ## Output
 
@@ -105,7 +110,7 @@ A single JSON file at the `--out` path with this structure:
   "participants_error": null,
   "participants_count": 150,
   "messages_count": 3000,
-  "limits": { "since": null, "limit": 5000 },
+  "limits": { "since": null, "limit": null },
   "participants": [ ... ],
   "messages": [ ... ]
 }
@@ -132,5 +137,6 @@ This is expected for many large groups. The ingest pipeline will still work — 
 | `.env.example` | Template for credentials |
 | `.env` | Your credentials (gitignored) |
 | `*.session` | Telethon session file (gitignored) |
+| `*.checkpoint.json` | In-progress collection checkpoint (gitignored, auto-deleted on completion) |
 | `list_dialogs.py` | List all your Telegram chats |
 | `collect_group_export.py` | Main collector script |

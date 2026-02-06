@@ -103,8 +103,7 @@ async function main(): Promise<void> {
       mention_count       = EXCLUDED.mention_count,
       avg_msg_len         = EXCLUDED.avg_msg_len,
       groups_active_count = EXCLUDED.groups_active_count,
-      bd_group_msg_share  = EXCLUDED.bd_group_msg_share,
-      created_at          = now()
+      bd_group_msg_share  = EXCLUDED.bd_group_msg_share
   `;
 
   const result = await db.query(sql);

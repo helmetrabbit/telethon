@@ -122,8 +122,19 @@ async function main(): Promise<void> {
 
   let totalClaims = 0;
   let totalGated = 0;
+  let usersProcessed = 0;
+  const totalUsers = users.rows.length;
+  const t0 = Date.now();
 
   for (const user of users.rows) {
+    usersProcessed++;
+    if (usersProcessed % 500 === 0 || usersProcessed === totalUsers) {
+      const elapsed = (Date.now() - t0) / 1000;
+      const rate = elapsed > 0 ? Math.round(usersProcessed / elapsed) : 0;
+      const eta = rate > 0 ? Math.round((totalUsers - usersProcessed) / rate) : 0;
+      const pct = Math.round((usersProcessed / totalUsers) * 100);
+      console.log(`   ... ${usersProcessed.toLocaleString()}/${totalUsers.toLocaleString()} users (${pct}%, ${rate} user/s, ETA ${eta}s)`);
+    }
     const feat = featMap.get(user.id);
     const input: UserInferenceInput = {
       userId: user.id,

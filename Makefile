@@ -53,7 +53,7 @@ TG_VENV := tools/telethon_collector/.venv
 TG_PY   := $(TG_VENV)/bin/python
 GROUP   ?= BD in Web3
 OUT     ?= data/exports/telethon_bd_web3.json
-LIMIT   ?= 5000
+LIMIT   ?=
 SINCE   ?=
 
 tg\:venv:
@@ -68,7 +68,7 @@ tg\:collect: | $(TG_VENV)
 	$(TG_PY) tools/telethon_collector/collect_group_export.py \
 		--group "$(GROUP)" \
 		--out "$(OUT)" \
-		--limit $(LIMIT) \
+		$(if $(LIMIT),--limit $(LIMIT),) \
 		$(if $(SINCE),--since $(SINCE),)
 
 $(TG_VENV):

@@ -202,7 +202,25 @@ async function ingestInTransaction(
   }
 
   // ── Process messages ──────────────────────────────
+  const totalMessages = exportData.messages.length;
+  const t0 = Date.now();
+  let processed = 0;
+
   for (const rawMsg of exportData.messages) {
+    processed++;
+
+    // Progress every 1000 messages
+    if (processed % 1000 === 0 || processed === totalMessages) {
+      const elapsed = (Date.now() - t0) / 1000;
+      const rate = elapsed > 0 ? Math.round(processed / elapsed) : 0;
+      const remaining = totalMessages - processed;
+      const eta = rate > 0 ? Math.round(remaining / rate) : 0;
+      const pct = Math.round((processed / totalMessages) * 100);
+      console.log(
+        `   ... ${processed.toLocaleString()}/${totalMessages.toLocaleString()} messages (${pct}%, ${rate} msg/s, ETA ${eta}s)`
+      );
+    }
+
     // Insert raw row for traceability (all messages, including service)
     await client.query(
       `INSERT INTO raw_import_rows (raw_import_id, row_type, external_id, raw_json)
@@ -299,6 +317,7 @@ async function ingestInTransaction(
   }
 
   // ── Flush memberships ─────────────────────────────
+  console.log(`\n   Flushing ${membershipMap.size.toLocaleString()} memberships...`);
   for (const [userId, m] of membershipMap) {
     await client.query(
       `INSERT INTO memberships (group_id, user_id, first_seen_at, last_seen_at, msg_count)
@@ -322,8 +341,24 @@ async function ingestInTransaction(
   );
 
   // ── Process participants (Telethon exports only) ──
-  if (exportData.participants && exportData.participants.length > 0) {
-    for (const rawPart of exportData.participants) {
+  const hasParticipantData =
+    exportData.participants &&
+    exportData.participants.length > 0;
+
+  if (hasParticipantData) {
+    // Track participant user IDs so we can mark non-participants as departed
+    const participantUserIds = new Set<number>();
+    const totalParticipants = exportData.participants!.length;
+    let partProcessed = 0;
+
+    console.log(`\n   Processing ${totalParticipants.toLocaleString()} participants...`);
+
+    for (const rawPart of exportData.participants!) {
+      partProcessed++;
+      if (partProcessed % 1000 === 0) {
+        console.log(`   ... ${partProcessed.toLocaleString()}/${totalParticipants.toLocaleString()} participants`);
+      }
+
       const part = parseParticipant(rawPart);
       if (!part) continue;
 
@@ -338,17 +373,42 @@ async function ingestInTransaction(
 
       const userId = await ensureUser(extId, displayName, handle);
       stats.participantsIngested++;
+      participantUserIds.add(userId);
 
       // Create membership if not already tracked from messages
       if (!membershipMap.has(userId)) {
         await client.query(
-          `INSERT INTO memberships (group_id, user_id, first_seen_at, last_seen_at, msg_count)
-           VALUES ($1, $2, NULL, NULL, 0)
-           ON CONFLICT (group_id, user_id) DO NOTHING`,
+          `INSERT INTO memberships (group_id, user_id, first_seen_at, last_seen_at, msg_count, is_current_member)
+           VALUES ($1, $2, NULL, NULL, 0, TRUE)
+           ON CONFLICT (group_id, user_id)
+           DO UPDATE SET is_current_member = TRUE`,
           [groupId, userId],
         );
         stats.membershipsFromParticipants++;
+      } else {
+        // Already have a membership from messages — mark as current
+        await client.query(
+          `UPDATE memberships SET is_current_member = TRUE
+           WHERE group_id = $1 AND user_id = $2`,
+          [groupId, userId],
+        );
       }
+    }
+
+    // Mark any membership for this group that is NOT in the participant list
+    // as is_current_member = FALSE (departed users known only from messages)
+    const participantIdArray = Array.from(participantUserIds);
+    if (participantIdArray.length > 0) {
+      const departed = await client.query(
+        `UPDATE memberships
+         SET is_current_member = FALSE
+         WHERE group_id = $1
+           AND is_current_member IS DISTINCT FROM FALSE
+           AND user_id != ALL($2::bigint[])
+         RETURNING user_id`,
+        [groupId, participantIdArray],
+      );
+      console.log(`   ✅ ${participantUserIds.size.toLocaleString()} current members, ${departed.rowCount} departed`);
     }
   }
 

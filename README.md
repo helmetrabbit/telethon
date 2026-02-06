@@ -159,10 +159,10 @@ This prints all your Telegram dialogs (groups, channels, DMs) with their title, 
 ### 4. Collect messages + participants
 
 ```bash
-# Collect from a group by title (default: 5000 messages)
-make tg:collect GROUP="BD in Web3"
+# Collect all messages from a group (no limit by default)
+make tg:collect GROUP="BD in Web3 🚀"
 
-# Custom output path + message limit
+# Custom output path + explicit limit
 make tg:collect GROUP="BD in Web3" OUT=data/exports/bd_web3.json LIMIT=10000
 
 # Only messages after a date
@@ -170,6 +170,13 @@ make tg:collect GROUP="BD in Web3" SINCE=2024-01-01
 ```
 
 The collector outputs a JSON file compatible with the ingestion pipeline, including a `participants[]` array (when the API permits) and a `participants_status` field indicating success or fallback.
+
+**Key features:**
+- **No limit by default** — collects all messages unless `LIMIT` is explicitly set
+- **Incremental re-runs** — re-running against the same output file only fetches messages newer than the last collected
+- **Checkpoint saves** — progress is saved every 1,000 messages to a `.checkpoint.json` file; if interrupted, the next run resumes from the checkpoint
+- **Pre-seeded sender cache** — participant list is loaded into an in-memory cache to avoid per-message API calls for sender resolution
+- **Verbose progress** — logs rate (msg/s), elapsed time, ETA, cache misses, and service message counts every 100 messages
 
 > See `tools/telethon_collector/README.md` for full details on arguments and troubleshooting.
 
@@ -225,7 +232,7 @@ The output file (default `share/diagnostics.json`) contains:
 |---------|----------|
 | `meta` | Timestamp, model version, salt indicator |
 | `counts` | Groups, users, messages, date range |
-| `membership` | Distribution by group kind, top 20 users by message count (pseudonymized via SHA-256) |
+| `membership` | Distribution by group kind, **churn breakdown** (current/departed/unknown), top 20 users by message count (pseudonymized via SHA-256) |
 | `inference_summary` | Claims by predicate, evidence type distribution, abstention breakdown, coverage percentages |
 
 All user identifiers are replaced with `sha256(salt + user_id)` truncated to 12 hex characters. The salt is never stored in the output.
@@ -244,15 +251,17 @@ DIAGNOSTICS_SALT=s npm run export-diagnostics -- --group-external-id 12345 --out
 ### Step 1 — `ingest`
 
 ```bash
-node dist/cli/ingest.js [--file path/to/export.json] [--kind bd|work|general_chat]
+node dist/cli/ingest.js [--file path/to/export.json] [--group-kind bd|work|general_chat]
 ```
 
-- Reads a Telegram Desktop JSON export
+- Reads a Telegram Desktop or Telethon JSON export
 - Computes SHA-256 of the file for **idempotency** (re-running with the same file is a no-op)
 - Writes raw traceability rows (`raw_imports` + `raw_import_rows`)
 - Normalises into `users`, `groups`, `memberships`, `messages`, `message_mentions`
 - Skips service messages (joins, leaves, etc.)
 - Handles both plain-string and rich-text-array Telegram text formats
+- **Participant processing** (Telethon exports): ingests the `participants[]` array, creates user/membership records, and sets `is_current_member = TRUE` for current participants and `FALSE` for users known only from messages (departed)
+- **Progress logging**: reports rate (msg/s), percentage, and ETA every 1,000 messages
 
 ### Step 2 — `compute-features`
 
@@ -260,7 +269,7 @@ node dist/cli/ingest.js [--file path/to/export.json] [--kind bd|work|general_cha
 node dist/cli/compute-features.js
 ```
 
-Computes per-user per-day aggregate features via a single CTE-based SQL upsert:
+Computes per-user per-day aggregate features via a single CTE-based SQL upsert. Fully idempotent — re-runs update values in-place without overwriting `created_at` timestamps:
 
 | Feature | Description |
 |---------|-------------|
@@ -277,17 +286,20 @@ Computes per-user per-day aggregate features via a single CTE-based SQL upsert:
 node dist/cli/infer-claims.js
 ```
 
-Runs the deterministic inference engine for every user. Produces `claims` + `claim_evidence` rows. See [Inference Engine](#inference-engine) for details.
+Runs the deterministic inference engine for every user. Produces `claims` + `claim_evidence` rows. Logs progress every 500 users with rate and ETA. See [Inference Engine](#inference-engine) for details.
 
 ### Step 4 — `export-profiles`
 
 ```bash
-node dist/cli/export-profiles.js
+node dist/cli/export-profiles.js [--user-id N] [--out-dir data/output]
 ```
 
 Generates self-contained JSON profiles in `data/output/`:
 - One file per user (`<id>_<handle>.json`)
 - A combined `profiles.json` with all users
+- `engine_version` in `_meta` is read dynamically from the active inference config
+- Memberships include `is_current_member` (true/false/null)
+- Progress logging every 500 users with rate and ETA
 
 ---
 
@@ -308,7 +320,7 @@ The database uses three layers, each building on the previous:
 |-------|---------|
 | `users` | Deduplicated users (external_id, display_name, handle, bio) |
 | `groups` | Chat groups (external_id, title, kind) |
-| `memberships` | User ↔ Group many-to-many (first/last seen) |
+| `memberships` | User ↔ Group many-to-many (first/last seen, msg_count, `is_current_member`) |
 | `messages` | Normalised messages (text, length, flags, timestamps) |
 | `message_mentions` | @-mentions extracted from messages |
 
@@ -422,8 +434,7 @@ Each profile JSON has this structure:
 {
   "_meta": {
     "generated_at": "2026-02-06T...",
-    "engine_version": "0.1.0",
-    "priors_version": "v0.1.0"
+    "engine_version": "v0.2.0"
   },
   "observed": {
     "user_id": 2,
@@ -431,7 +442,7 @@ Each profile JSON has this structure:
     "handle": "@alicechen",
     "bio": "CEO at TechStartup",
     "memberships": [
-      { "group_title": "BD Chat Export", "group_kind": "bd", "first_seen": "...", "last_seen": "..." }
+      { "group_title": "BD Chat Export", "group_kind": "bd", "msg_count": 12, "first_seen": "...", "last_seen": "...", "is_current_member": true }
     ],
     "message_stats": {
       "total_messages": 3,
@@ -569,12 +580,27 @@ SELECT
   u.display_name,
   g.title AS group_title,
   g.kind,
+  m.msg_count,
   m.first_seen_at,
-  m.last_seen_at
+  m.last_seen_at,
+  m.is_current_member
 FROM memberships m
 JOIN users u ON u.id = m.user_id
 JOIN groups g ON g.id = m.group_id
 ORDER BY u.display_name;
+```
+
+**4b. Membership churn summary:**
+```sql
+SELECT
+  CASE WHEN is_current_member = TRUE THEN 'current'
+       WHEN is_current_member = FALSE THEN 'departed'
+       ELSE 'unknown'
+  END AS status,
+  COUNT(*) AS count
+FROM memberships
+GROUP BY status
+ORDER BY count DESC;
 ```
 
 **5. Raw import traceability:**
@@ -905,7 +931,8 @@ telethon/
 │       ├── 20260206120100_claim_evidence_triggers.sql
 │       ├── 20260206130000_harden_claim_constraints.sql
 │       ├── 20260206140000_abstention_log_and_claims_unique.sql
-│       └── 20260206150000_unique_messages_per_group.sql
+│       ├── 20260206150000_unique_messages_per_group.sql
+│       └── 20260206160000_membership_current_flag.sql
 ├── share/                # Diagnostics output (gitignored)
 ├── src/
 │   ├── cli/

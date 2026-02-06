@@ -121,6 +121,33 @@ async function main(): Promise<void> {
     membershipByKind[row.kind] = Number(row.member_count);
   }
 
+  // ── 2b. Membership churn (is_current_member) ──────
+  const churnRes = await db.query<{ status: string; count: string }>(
+    groupFilter
+      ? `SELECT
+           CASE WHEN m.is_current_member = TRUE THEN 'current'
+                WHEN m.is_current_member = FALSE THEN 'departed'
+                ELSE 'unknown'
+           END AS status,
+           COUNT(*)::text AS count
+         FROM memberships m JOIN groups g ON g.id = m.group_id
+         WHERE g.external_id = $1
+         GROUP BY status ORDER BY count DESC`
+      : `SELECT
+           CASE WHEN m.is_current_member = TRUE THEN 'current'
+                WHEN m.is_current_member = FALSE THEN 'departed'
+                ELSE 'unknown'
+           END AS status,
+           COUNT(*)::text AS count
+         FROM memberships m
+         GROUP BY status ORDER BY count DESC`,
+    groupFilter ? [groupFilter] : [],
+  );
+  const membershipChurn: Record<string, number> = {};
+  for (const row of churnRes.rows) {
+    membershipChurn[row.status] = Number(row.count);
+  }
+
   // ── 3. Top 20 users by msg_count (pseudonymized) ──
   const topUsersRes = await db.query<{ user_id: string; total_msgs: string }>(
     groupFilter
@@ -260,6 +287,7 @@ async function main(): Promise<void> {
     },
     membership: {
       by_group_kind: membershipByKind,
+      churn: membershipChurn,
       top_20_by_msg_count: topUsers,
     },
     inference_summary: {
