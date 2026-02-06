@@ -374,6 +374,23 @@ export function scoreUser(input: UserInferenceInput, config: InferenceConfig): U
     });
   }
 
+  // Fix v0.5.4 #1: Message affiliation + vendor evidence → boost vendor_agency
+  // When someone self-identifies from a company in messages AND shows vendor/service selling
+  // language, they're actively representing that company as a vendor, not just wearing an "old hat"
+  // from their display name. This handles Drishti (SolidityScan security vendor) being mis-labeled
+  // as BD because her display name says "Gate.io South Asia BD".
+  const hasMessageAffiliation = result.affiliations.some((a) => a.source === 'message');
+  const hasVendorMsgEvidence = [...msgRoleHits.keys()].some((k) => k.startsWith('vendor_agency:'));
+  if (hasMessageAffiliation && hasVendorMsgEvidence) {
+    const boostW = 4.0; // Strong boost to override display_name role signals
+    roleScores.set('vendor_agency', (roleScores.get('vendor_agency') ?? 0) + boostW);
+    roleEvidence.get('vendor_agency')!.push({
+      evidence_type: 'message',
+      evidence_ref: 'msg:vendor_affiliation_boost:message_self_declare+vendor_evidence',
+      weight: boostW,
+    });
+  }
+
   for (const [key, count] of msgIntentHits) {
     const [label, tag] = key.split(':') as [Intent, string];
     const kw = MSG_INTENT_KEYWORDS.find((k) => k.label === label && k.tag === tag);
@@ -407,15 +424,14 @@ export function scoreUser(input: UserInferenceInput, config: InferenceConfig): U
   // NOTE: bd_share feature signal removed (fix #6) — contradicts evidence-only approach.
   // Group membership share should not influence role classification.
 
-  // High mention count → community / networking signal
+  // High mention count → networking signal ONLY (fix v0.5.4 #4)
+  // NOTE: Removed community ROLE boost from mention_count. Being mentioned doesn't make
+  // someone a community manager — Sukesh/Dexter were mis-scored as community from mentions.
+  // Community ROLE should require message evidence (welcome messages, mod actions, rule enforcement).
+  // Mention count still boosts networking INTENT (reasonable signal for connector behavior).
   if (input.totalMentionCount >= 3) {
     const w = 1.0;
-    roleScores.set('community', (roleScores.get('community') ?? 0) + w);
-    roleEvidence.get('community')!.push({
-      evidence_type: 'feature',
-      evidence_ref: `feature:mention_count=${input.totalMentionCount}`,
-      weight: w,
-    });
+    // Networking intent only — NOT community role
     intentScores.set('networking', (intentScores.get('networking') ?? 0) + w);
     intentEvidence.get('networking')!.push({
       evidence_type: 'feature',

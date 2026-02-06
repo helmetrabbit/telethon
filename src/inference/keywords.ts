@@ -109,6 +109,8 @@ export const BIO_ROLE_KEYWORDS: KeywordSignal<Role>[] = [
   // Vendor / Agency
   { pattern: /\b(agency|consultancy|consulting|vendor|service\s*provider)\b/i, label: 'vendor_agency', weight: 2.5, tag: 'agency_title' },
   { pattern: /\b(white[- ]?label|managed\s*service|outsourc)\b/i, label: 'vendor_agency', weight: 1.5, tag: 'vendor_signal' },
+  // Security/audit firms (fix v0.5.4 #1) — route to vendor_agency, not builder
+  { pattern: /\b(security\s+(?:company|firm|audit)|audit(?:ing)?\s+(?:firm|company|services?))\b/i, label: 'vendor_agency', weight: 2.5, tag: 'security_vendor_bio' },
 
   // Media / KOL — individual only (agencies route to vendor_agency)
   { pattern: /\b(KOL|influencer|ambassador|content\s*creator)\b/i, label: 'media_kol', weight: 2.5, tag: 'kol_title' },
@@ -122,14 +124,23 @@ export const BIO_ROLE_KEYWORDS: KeywordSignal<Role>[] = [
 // ── Message → Role signals (aggregate patterns) ────────
 
 export const MSG_ROLE_KEYWORDS: KeywordSignal<Role>[] = [
-  // Builder — hard technical signals only
+  // Builder — hard technical signals only (fix v0.5.4 #2: tightened)
+  // Action verbs require actual shipping code, not discussing launches
   { pattern: /\b(shipped|deployed|merged|refactored|committed|pushed)\b/i, label: 'builder', weight: 1.0, tag: 'builder_action' },
-  { pattern: /\b(smart\s*contract|solidity|rust|typescript|API|SDK|RPC|repo|github)\b/i, label: 'builder', weight: 1.0, tag: 'builder_tech' },
+  // Tech keywords: require HARD engineering context, not sales-pitch "API integration"
+  // Removed: API, SDK (too generic — salespeople discuss these)
+  // Kept: low-level tech signals that indicate actual engineering work
+  { pattern: /\b(smart\s*contract|solidity|rust|typescript|RPC|repo|github|PR\b|pull\s+request|commit|branch|bug\s*fix|stack\s*trace|error\s*log)\b/i, label: 'builder', weight: 1.0, tag: 'builder_tech' },
   // NOTE: removed "built", "launched" (too generic), "defi"/"tvl"/"protocol" (topic not role),
-  //       "mainnet"/"testnet" (everyone discusses these)
+  //       "mainnet"/"testnet" (everyone discusses these), "API"/"SDK" (sales pitch language)
 
-  // BD
-  { pattern: /\b(partnership|collab|intro\s+to|warm\s+intro|deal)\b/i, label: 'bd', weight: 1.0, tag: 'bd_action' },
+  // BD (fix v0.5.4: added partnerships plural, business development, listing/integration BD patterns)
+  { pattern: /\b(partnerships?|collab|intro\s+to|warm\s+intro|deal)\b/i, label: 'bd', weight: 1.0, tag: 'bd_action' },
+  { pattern: /\b(business\s+develop|biz\s*dev)\b/i, label: 'bd', weight: 1.5, tag: 'bd_role_msg' },
+  // Token listing / integration patterns — BD signals for protocol/project reps (Aaron/HoudiniSwap)
+  { pattern: /\b(token\s+listing|chain\s+listing|listing\s+(?:on|with)|listed\s+on)\b/i, label: 'bd', weight: 1.5, tag: 'bd_listing_msg' },
+  { pattern: /\b(ecosystem\s+partners?|integration\s+partners?|looking\s+to\s+(?:partner|integrate))\b/i, label: 'bd', weight: 1.5, tag: 'bd_ecosystem_msg' },
+  { pattern: /\b(DMs?\s+(?:are\s+)?(?:\[)?open(?:\])?|(?:hmu|hit\s+me\s+up)\s+(?:in\s+)?DMs?)\b/i, label: 'bd', weight: 1.0, tag: 'bd_outreach_msg' },
 
   // Investor
   { pattern: /\b(series\s*[a-d]|raise|fundrais|invest|portfolio)\b/i, label: 'investor_analyst', weight: 1.0, tag: 'investor_topic' },
@@ -153,6 +164,11 @@ export const MSG_ROLE_KEYWORDS: KeywordSignal<Role>[] = [
   // KOL/influencer agency signals — selling KOL services = vendor, not media_kol
   { pattern: /\b(KOL\s+(?:agency|network|campaign|services?)|influencer\s+(?:agency|network|campaign))\b/i, label: 'vendor_agency', weight: 1.5, tag: 'vendor_kol_agency_msg' },
   { pattern: /\b(tier\s*[12]\s+KOLs?|contact\s+me\s+for\s+costs?|drop\s+me\s+a\s+DM)\b/i, label: 'vendor_agency', weight: 1.0, tag: 'vendor_kol_selling_msg' },
+
+  // Security/audit vendor signals (fix v0.5.4 #1) — Drishti pattern
+  // "web3 security company", "auditing services", "reach out for security requirements"
+  { pattern: /\b(security\s+(?:company|firm|provider|services?)|audit(?:ing)?\s+(?:services?|firm|company)|smart\s*contract\s+audit)\b/i, label: 'vendor_agency', weight: 2.0, tag: 'vendor_security_msg' },
+  { pattern: /\b(reach\s+out\s+(?:for|if)|(?:your|any)\s+(?:security|audit)\s+(?:requirements?|needs?))\b/i, label: 'vendor_agency', weight: 1.5, tag: 'vendor_security_cta_msg' },
 ];
 
 // ── Bio → Intent signals ───────────────────────────────

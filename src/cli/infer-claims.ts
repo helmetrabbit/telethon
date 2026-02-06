@@ -203,16 +203,35 @@ async function main(): Promise<void> {
     }
 
     // Write affiliation claims (self-declared only)
-    // Quality gating: display_name affiliations are more reliable than message-extracted
-    // Message affiliations that passed all filters get supported, but lower confidence
+    // Fix v0.5.4 #3: Primary affiliation logic
+    // - Message self-declare is PRIMARY (user explicitly said "I'm from X" in chat)
+    // - Display-name is SECONDARY when a message affiliation exists
+    // This handles Drishti: SolidityScan (message) should outrank Gate.io South Asia (display_name)
+    const hasMessageAffiliation = result.affiliations.some((a) => a.source === 'message');
     for (const aff of result.affiliations) {
-      // display_name affiliations are higher trust (user explicitly set their name)
-      // message affiliations passed strict self-declare gating but are still riskier
       const isDisplayName = aff.source === 'display_name';
-      const affConfidence = isDisplayName ? 0.85 : 0.75; // Reduced message confidence
-      // Only display_name gets 'supported' by default; message needs corroboration
-      // For now, message affiliations are 'tentative' unless we add multi-message corroboration
-      const affStatus = isDisplayName ? 'supported' : 'tentative';
+      const isMessage = aff.source === 'message';
+
+      // Primary affiliation logic:
+      // - Message self-declare: 0.85 supported (highest trust — user explicitly stated affiliation)
+      // - Display-name when NO message affiliation exists: 0.85 supported
+      // - Display-name when message affiliation EXISTS: 0.65 tentative (demoted — may be "old hat")
+      let affConfidence: number;
+      let affStatus: 'supported' | 'tentative';
+      if (isMessage) {
+        // Message self-declare is primary
+        affConfidence = 0.85;
+        affStatus = 'supported';
+      } else if (isDisplayName && hasMessageAffiliation) {
+        // Display-name is secondary when message affiliation exists
+        affConfidence = 0.65;
+        affStatus = 'tentative';
+      } else {
+        // Display-name with no message affiliation — primary by default
+        affConfidence = 0.85;
+        affStatus = 'supported';
+      }
+
       await db.transaction(async (client) => {
         await writeClaimWithEvidence(
           client,
@@ -221,12 +240,13 @@ async function main(): Promise<void> {
           aff.name,
           affConfidence,
           affStatus,
-          [{ evidence_type: aff.source, evidence_ref: `${aff.source}:${aff.tag}:${aff.name}`, weight: isDisplayName ? 3.0 : 2.0 }],
+          [{ evidence_type: aff.source, evidence_ref: `${aff.source}:${aff.tag}:${aff.name}`, weight: isMessage ? 3.0 : (hasMessageAffiliation ? 1.5 : 3.0) }],
           ver,
         );
       });
       totalClaims++;
-      console.log(`   ✅ affiliation: ${aff.name} (source=${aff.source}, confidence=${affConfidence}, status=${affStatus})`);
+      const isPrimary = isMessage || (!hasMessageAffiliation && isDisplayName);
+      console.log(`   ✅ affiliation: ${aff.name} (source=${aff.source}, ${isPrimary ? 'PRIMARY' : 'secondary'}, confidence=${affConfidence}, status=${affStatus})`);
     }
 
     // Write org-type claims (fix #2 — separate from function role)
