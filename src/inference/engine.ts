@@ -26,6 +26,9 @@ import {
   MSG_INTENT_KEYWORDS,
   BIO_AFFILIATION_PATTERNS,
   MSG_AFFILIATION_PATTERNS,
+  MSG_AFFILIATION_REJECT_PATTERNS,
+  ORG_CAPTURE_STOPWORDS,
+  ORG_TRAILING_STRIP_PATTERN,
   DISPLAY_NAME_ROLE_KEYWORDS,
   DISPLAY_NAME_AFFILIATION_PATTERNS,
   AFFILIATION_REJECT_SET,
@@ -314,27 +317,43 @@ export function scoreUser(input: UserInferenceInput, config: InferenceConfig): U
       }
     }
 
-    // Message-based affiliation extraction (fix #1)
+    // Message-based affiliation extraction
     // Only scan first 50 messages to avoid noise from casual mentions.
     if (messageSample.indexOf(text) < 50) {
-      for (const aff of MSG_AFFILIATION_PATTERNS) {
-        const match = text.match(aff.pattern);
-        if (match && match[1]) {
-          const company = match[1].trim();
-          if (company.length < 3) continue;
-          if (AFFILIATION_REJECT_SET.has(company.toLowerCase())) continue;
-          if (AFFILIATION_REJECT_PATTERNS.some((rp) => rp.test(company))) continue;
-          const normKey = normalizeOrgName(company);
-          // Message self-declare overrides display_name: if a normalized match
-          // already exists from display_name, replace it with the message source
-          const existingIdx = result.affiliations.findIndex(
-            (a) => normalizeOrgName(a.name) === normKey,
-          );
-          if (existingIdx >= 0) {
-            // Keep message source as higher priority
-            result.affiliations[existingIdx] = { name: company, source: 'message', tag: aff.tag };
-          } else {
-            result.affiliations.push({ name: company, source: 'message', tag: aff.tag });
+      // Skip messages that match reject patterns (third-person inquiries, questions, @handle intros)
+      const isInquiry = MSG_AFFILIATION_REJECT_PATTERNS.some((rp) => rp.test(text));
+      if (!isInquiry) {
+        for (const aff of MSG_AFFILIATION_PATTERNS) {
+          const match = text.match(aff.pattern);
+          if (match && match[1]) {
+            // Check for @handle before the match — indicates third-person intro
+            const matchIndex = text.indexOf(match[0]);
+            const beforeMatch = text.slice(0, matchIndex);
+            if (beforeMatch.includes('@')) continue; // Third-person: "Adding @user here from X"
+
+            // Post-process: strip trailing clause words
+            let company = match[1].trim();
+            company = company.replace(ORG_TRAILING_STRIP_PATTERN, '').trim();
+
+            // Validate org name
+            if (company.length < 3) continue;
+            const firstWord = company.split(/\s+/)[0].toLowerCase();
+            if (ORG_CAPTURE_STOPWORDS.has(firstWord)) continue; // Starts with stopword
+            if (AFFILIATION_REJECT_SET.has(company.toLowerCase())) continue;
+            if (AFFILIATION_REJECT_PATTERNS.some((rp) => rp.test(company))) continue;
+
+            const normKey = normalizeOrgName(company);
+            // Message self-declare overrides display_name: if a normalized match
+            // already exists from display_name, replace it with the message source
+            const existingIdx = result.affiliations.findIndex(
+              (a) => normalizeOrgName(a.name) === normKey,
+            );
+            if (existingIdx >= 0) {
+              // Keep message source as higher priority
+              result.affiliations[existingIdx] = { name: company, source: 'message', tag: aff.tag };
+            } else {
+              result.affiliations.push({ name: company, source: 'message', tag: aff.tag });
+            }
           }
         }
       }
@@ -371,10 +390,11 @@ export function scoreUser(input: UserInferenceInput, config: InferenceConfig): U
   // ── 4. Feature-based signals ────────────────────────
 
   // High reply ratio → support_giving or community
-  if (input.totalMsgCount > 0) {
+  // Requires totalMsgCount>=8 to avoid false positives on low-volume users
+  if (input.totalMsgCount >= 8) {
     const replyRatio = input.totalReplyCount / input.totalMsgCount;
     if (replyRatio > 0.4) {
-      const w = 1.5;
+      const w = 0.7;  // Reduced from 1.5 — feature-only evidence should not dominate
       intentScores.set('support_giving', (intentScores.get('support_giving') ?? 0) + w);
       intentEvidence.get('support_giving')!.push({
         evidence_type: 'feature',

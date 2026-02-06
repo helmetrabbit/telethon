@@ -216,16 +216,59 @@ export const BIO_AFFILIATION_PATTERNS: AffiliationSignal[] = [
 ];
 
 /**
- * Detect self-declared affiliations in messages (fix #1).
- * Patterns like "we at X", "I'm from X", "I work at X".
+ * Detect self-declared affiliations in messages.
+ * STRICT first-person self-declarations only — NOT third-person intros or queries.
+ * Capture stops at punctuation: . , ; : ! ? ( )
  */
 export const MSG_AFFILIATION_PATTERNS: AffiliationSignal[] = [
-  { pattern: /\b(?:we\s+at|I(?:'m|\s+am)\s+(?:from|at|with)|I\s+work\s+(?:at|for)|representing)\s+([A-Z][A-Za-z0-9.]+(?:\s+[A-Z][A-Za-z0-9.]+){0,3})\b/, tag: 'msg_affiliation_at' },
-  { pattern: /\b(?:our\s+(?:company|team|project|protocol))\s+([A-Z][A-Za-z0-9.]+(?:\s+[A-Za-z0-9.]+){0,3})\b/, tag: 'msg_affiliation_our' },
-  { pattern: /\bon\s+behalf\s+of\s+([A-Z][A-Za-z0-9.]+(?:\s+[A-Za-z0-9.]+){0,3})\b/, tag: 'msg_affiliation_behalf' },
-  // "[name] from [Org]" / "here from the [Org] team" — common self-intro in groups
-  { pattern: /\b(?:here\s+)?from\s+(?:the\s+)?([A-Z][A-Za-z0-9./]+(?:\s+[A-Za-z0-9./]+){0,4})\s+team\b/i, tag: 'msg_affiliation_intro' },
+  // "we at X", "I'm from X", "I work at X" — strict first-person
+  { pattern: /\b(?:we\s+at|I(?:'m|\s+am)\s+(?:from|at|with)|I\s+work\s+(?:at|for)|representing)\s+([A-Z][A-Za-z0-9]+(?:\s+[A-Z][A-Za-z0-9]+){0,3})(?=[.,;:!?()\s]|$)/i, tag: 'msg_affiliation_at' },
+  // "our team/company at X" or "our X team/company" — capture the org after "at" or before "team"
+  { pattern: /\b(?:our\s+(?:company|team|project|protocol)\s+at|our\s+(?:company|team|project|protocol)\s+is)\s+([A-Z][A-Za-z0-9]+(?:\s+[A-Za-z0-9]+){0,2})(?=[.,;:!?()\s]|$)/i, tag: 'msg_affiliation_our' },
+  // "on behalf of X"
+  { pattern: /\bon\s+behalf\s+of\s+([A-Z][A-Za-z0-9]+(?:\s+[A-Za-z0-9]+){0,2})(?=[.,;:!?()\s]|$)/i, tag: 'msg_affiliation_behalf' },
+  // "[Name] here from [Org]" — skip intermediate "core team at" by matching the final org
+  // Pattern: "Name here from [the] [core team at] Org"
+  { pattern: /\b[A-Z][a-z]+\s+here\s+from\s+(?:the\s+)?(?:(?:core\s+)?team\s+at\s+)?([A-Z][A-Za-z0-9]+(?:\s+[A-Za-z0-9]+){0,2})(?=[.,;:!?()\s]|$)/i, tag: 'msg_affiliation_intro' },
 ];
+
+/**
+ * Reject patterns for message affiliation — third-person intros, queries, and non-self-declarations.
+ * If ANY of these match the message, skip affiliation extraction entirely.
+ */
+export const MSG_AFFILIATION_REJECT_PATTERNS: RegExp[] = [
+  // Third-person inquiries
+  /\b(?:anyone|anybody|someone|somebody|who(?:'s|\s+is)?)\s+(?:here\s+)?from\b/i,
+  /\bis\s+(?:there\s+)?anyone\s+from\b/i,
+  /\blooking\s+for\s+(?:someone|folks?|people|BD'?s?)\s+(?:from|in|at)\b/i,
+  // Question intent patterns
+  /\bdo\s+(?:we|you)\s+have\b/i,
+  /\bin\s+here\s+from\b/i,
+  /\bconnect\s+me\s+with\b/i,
+  /\bdo\s+you\s+know\b/i,
+  // Third-person introductions ("Adding @handle here from X")
+  /\badding\s+@/i,
+  /\bwelcome\s+@/i,
+  /\bintroducing\s+@/i,
+];
+
+/**
+ * Stopwords that should NOT appear at the start of an org name.
+ * If captured org starts with these, reject the extraction.
+ */
+export const ORG_CAPTURE_STOPWORDS = new Set([
+  'any', 'some', 'someone', 'anyone', 'large', 'small', 'big',
+  'the', 'a', 'an', 'this', 'that', 'these', 'those',
+  'new', 'old', 'good', 'best', 'top', 'major', 'other',
+  'here', 'there', 'where', 'which', 'what', 'who',
+  'at', 'from', 'with', 'for', 'to', 'in', 'on', 'of',
+  'core', 'team', 'our', 'my', 'their', 'your',
+]);
+
+/**
+ * Trailing words to strip from org captures (clause bleed-through).
+ */
+export const ORG_TRAILING_STRIP_PATTERN = /\s+(?:team|the\s+team|core\s+team|we|if|and|but|or|so|as|for|to|is|are|was|were|has|have|had|will|would|can|could|may|might|should)\b.*$/i;
 
 // ── Display Name → Role signals ────────────────────────
 // Telegram users commonly set display names like "Alice | Acme Labs BD Lead"

@@ -157,7 +157,9 @@ async function main(): Promise<void> {
     // Write role claim if gating passed
     if (result.roleClaim) {
       const rc = result.roleClaim;
-      const status = rc.probability >= 0.3 ? 'supported' : 'tentative';
+      // Supported requires: probability>=0.55, totalMsgCount>=5, and at least one bio/message evidence
+      const hasBioOrMsgEvidence = rc.evidence.some((e) => e.evidence_type === 'bio' || e.evidence_type === 'message');
+      const status = (rc.probability >= 0.55 && input.totalMsgCount >= 5 && hasBioOrMsgEvidence) ? 'supported' : 'tentative';
       await db.transaction(async (client) => {
         await writeClaimWithEvidence(
           client,
@@ -179,7 +181,9 @@ async function main(): Promise<void> {
     // Write intent claim if gating passed
     if (result.intentClaim) {
       const ic = result.intentClaim;
-      const status = ic.probability >= 0.3 ? 'supported' : 'tentative';
+      // Supported requires: probability>=0.55, totalMsgCount>=5, and at least one bio/message evidence
+      const hasBioOrMsgEvidenceIntent = ic.evidence.some((e) => e.evidence_type === 'bio' || e.evidence_type === 'message');
+      const status = (ic.probability >= 0.55 && input.totalMsgCount >= 5 && hasBioOrMsgEvidenceIntent) ? 'supported' : 'tentative';
       await db.transaction(async (client) => {
         await writeClaimWithEvidence(
           client,
@@ -199,9 +203,16 @@ async function main(): Promise<void> {
     }
 
     // Write affiliation claims (self-declared only)
-    // Message self-declare gets higher confidence than display_name extraction
+    // Quality gating: display_name affiliations are more reliable than message-extracted
+    // Message affiliations that passed all filters get supported, but lower confidence
     for (const aff of result.affiliations) {
-      const affConfidence = aff.source === 'message' ? 0.95 : 0.85;
+      // display_name affiliations are higher trust (user explicitly set their name)
+      // message affiliations passed strict self-declare gating but are still riskier
+      const isDisplayName = aff.source === 'display_name';
+      const affConfidence = isDisplayName ? 0.85 : 0.75; // Reduced message confidence
+      // Only display_name gets 'supported' by default; message needs corroboration
+      // For now, message affiliations are 'tentative' unless we add multi-message corroboration
+      const affStatus = isDisplayName ? 'supported' : 'tentative';
       await db.transaction(async (client) => {
         await writeClaimWithEvidence(
           client,
@@ -209,13 +220,13 @@ async function main(): Promise<void> {
           'affiliated_with',
           aff.name,
           affConfidence,
-          'supported',
-          [{ evidence_type: aff.source, evidence_ref: `${aff.source}:${aff.tag}:${aff.name}`, weight: 3.0 }],
+          affStatus,
+          [{ evidence_type: aff.source, evidence_ref: `${aff.source}:${aff.tag}:${aff.name}`, weight: isDisplayName ? 3.0 : 2.0 }],
           ver,
         );
       });
       totalClaims++;
-      console.log(`   ✅ affiliation: ${aff.name} (source=${aff.source}, confidence=${affConfidence})`);
+      console.log(`   ✅ affiliation: ${aff.name} (source=${aff.source}, confidence=${affConfidence}, status=${affStatus})`);
     }
 
     // Write org-type claims (fix #2 — separate from function role)
