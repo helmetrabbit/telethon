@@ -43,6 +43,9 @@ infer-claims: build
 export-profiles: build
 	node dist/cli/export-profiles.js
 
+export-diagnostics: build
+	DIAGNOSTICS_SALT=$${DIAGNOSTICS_SALT} node dist/cli/export-diagnostics.js
+
 pipeline: build ingest compute-features infer-claims export-profiles
 
 # ── Telethon collector ───────────────────────────────────
