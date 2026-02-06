@@ -11,6 +11,7 @@
     "export-profiles": "node dist/cli/export-profiles.js",
     "export-diagnostics": "node dist/cli/export-diagnostics.js",
     "export-sample": "node dist/cli/export-sample.js",
+    "regress": "node dist/cli/regress.js",
     "db:up": "docker compose up -d postgres",
     "db:down": "docker compose down",
     "db:migrate": "docker compose run --rm dbmate up",

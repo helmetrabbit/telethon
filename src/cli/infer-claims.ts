@@ -157,9 +157,15 @@ async function main(): Promise<void> {
     // Write role claim if gating passed
     if (result.roleClaim) {
       const rc = result.roleClaim;
-      // Supported requires: probability>=0.55, totalMsgCount>=5, and at least one bio/message evidence
-      const hasBioOrMsgEvidence = rc.evidence.some((e) => e.evidence_type === 'bio' || e.evidence_type === 'message');
-      const status = (rc.probability >= 0.55 && input.totalMsgCount >= 5 && hasBioOrMsgEvidence) ? 'supported' : 'tentative';
+      // Gate 3: Strict "supported" status — requires ALL of:
+      //   1. probability >= 0.55
+      //   2. totalMsgCount >= 5  (not a drive-by lurker)
+      //   3. at least one bio, message, OR display_name evidence piece
+      // Feature-only evidence (reply_ratio, mention_count) → always tentative.
+      const hasSubstantiveEvidence = rc.evidence.some(
+        (e) => e.evidence_type === 'bio' || e.evidence_type === 'message' || e.evidence_type === 'display_name',
+      );
+      const status = (rc.probability >= 0.55 && input.totalMsgCount >= 5 && hasSubstantiveEvidence) ? 'supported' : 'tentative';
       await db.transaction(async (client) => {
         await writeClaimWithEvidence(
           client,
@@ -181,9 +187,11 @@ async function main(): Promise<void> {
     // Write intent claim if gating passed
     if (result.intentClaim) {
       const ic = result.intentClaim;
-      // Supported requires: probability>=0.55, totalMsgCount>=5, and at least one bio/message evidence
-      const hasBioOrMsgEvidenceIntent = ic.evidence.some((e) => e.evidence_type === 'bio' || e.evidence_type === 'message');
-      const status = (ic.probability >= 0.55 && input.totalMsgCount >= 5 && hasBioOrMsgEvidenceIntent) ? 'supported' : 'tentative';
+      // Gate 3 (intent): same strict "supported" logic as roles
+      const hasSubstantiveEvidenceIntent = ic.evidence.some(
+        (e) => e.evidence_type === 'bio' || e.evidence_type === 'message' || e.evidence_type === 'display_name',
+      );
+      const status = (ic.probability >= 0.55 && input.totalMsgCount >= 5 && hasSubstantiveEvidenceIntent) ? 'supported' : 'tentative';
       await db.transaction(async (client) => {
         await writeClaimWithEvidence(
           client,

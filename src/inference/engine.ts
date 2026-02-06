@@ -27,15 +27,13 @@ import {
   BIO_AFFILIATION_PATTERNS,
   MSG_AFFILIATION_PATTERNS,
   MSG_AFFILIATION_REJECT_PATTERNS,
-  ORG_CAPTURE_STOPWORDS,
-  ORG_TRAILING_STRIP_PATTERN,
-  ORG_ON_CHAIN_CLAMP_PATTERN,
   DISPLAY_NAME_ROLE_KEYWORDS,
   DISPLAY_NAME_AFFILIATION_PATTERNS,
   AFFILIATION_REJECT_SET,
   AFFILIATION_REJECT_PATTERNS,
   ORG_TYPE_SIGNALS,
 } from './keywords.js';
+import { validateOrgCandidate } from './org-validator.js';
 
 // ── Org name normalization ───────────────────────────────
 // Normalize org names for dedup: lowercase, strip punctuation,
@@ -209,7 +207,10 @@ export function scoreUser(input: UserInferenceInput, config: InferenceConfig): U
     for (const aff of BIO_AFFILIATION_PATTERNS) {
       const match = input.bio.match(aff.pattern);
       if (match && match[1]) {
-        result.affiliations.push({ name: match[1].trim(), source: 'bio', tag: aff.tag });
+        const bioOrg = validateOrgCandidate(match[1]);
+        if (bioOrg) {
+          result.affiliations.push({ name: bioOrg, source: 'bio', tag: aff.tag });
+        }
       }
     }
   }
@@ -249,7 +250,7 @@ export function scoreUser(input: UserInferenceInput, config: InferenceConfig): U
     for (const aff of DISPLAY_NAME_AFFILIATION_PATTERNS) {
       const match = dn.match(aff.pattern);
       if (match && match[1]) {
-        let company = match[1].trim();
+        let rawCompany = match[1].trim();
 
         // For pipe-based extraction: skip if the pipe segment contains @ (already handled by at-pattern)
         // or contains role/title words that indicate it's not a company name but a title segment
@@ -261,19 +262,14 @@ export function scoreUser(input: UserInferenceInput, config: InferenceConfig): U
         }
 
         // Strip leading title prefixes: "CEO nReach" → "nReach"
-        company = company.replace(
+        rawCompany = rawCompany.replace(
           /^(?:CEO|CTO|COO|CFO|CMO|VP|Director|Head|Lead|Manager)\s+/i,
           '',
         ).trim();
 
-        // Skip if too short after stripping (minimum 3 chars)
-        if (company.length < 3) continue;
-
-        // Skip if in reject set (locations, industries, bare titles, stopwords)
-        if (AFFILIATION_REJECT_SET.has(company.toLowerCase())) continue;
-
-        // Skip if matches a reject pattern (events, conferences)
-        if (AFFILIATION_REJECT_PATTERNS.some((rp) => rp.test(company))) continue;
+        // Run through centralised org-candidate validator
+        const company = validateOrgCandidate(rawCompany);
+        if (!company) continue;
 
         // Normalize for dedup: lowercase, strip punctuation, collapse whitespace
         const normKey = normalizeOrgName(company);
@@ -332,18 +328,9 @@ export function scoreUser(input: UserInferenceInput, config: InferenceConfig): U
             const beforeMatch = text.slice(0, matchIndex);
             if (beforeMatch.includes('@')) continue; // Third-person: "Adding @user here from X"
 
-            // Post-process: strip trailing clause words and chain qualifiers
-            let company = match[1].trim();
-            company = company.replace(ORG_TRAILING_STRIP_PATTERN, '').trim();
-            // Clamp "X on Y" to "X" (fix v0.5.5: Pandu "Crust on Mantle right" → "Crust")
-            company = company.replace(ORG_ON_CHAIN_CLAMP_PATTERN, '').trim();
-
-            // Validate org name
-            if (company.length < 3) continue;
-            const firstWord = company.split(/\s+/)[0].toLowerCase();
-            if (ORG_CAPTURE_STOPWORDS.has(firstWord)) continue; // Starts with stopword
-            if (AFFILIATION_REJECT_SET.has(company.toLowerCase())) continue;
-            if (AFFILIATION_REJECT_PATTERNS.some((rp) => rp.test(company))) continue;
+            // Validate through centralised org-candidate validator
+            const company = validateOrgCandidate(match[1]);
+            if (!company) continue;
 
             const normKey = normalizeOrgName(company);
             // Message self-declare overrides display_name: if a normalized match
@@ -391,6 +378,27 @@ export function scoreUser(input: UserInferenceInput, config: InferenceConfig): U
       evidence_type: 'message',
       evidence_ref: 'msg:vendor_affiliation_boost:message_self_declare+vendor_evidence',
       weight: boostW,
+    });
+  }
+
+  // Fix v0.5.5 #2: Directory/marketplace/broker override → force vendor_agency, suppress bd
+  // If message evidence includes vendor_directory_msg or vendor_marketplace_msg, the user
+  // operates a directory/marketplace (e.g. Semoto), NOT doing BD.  Clamp bd score to 0
+  // and apply a strong vendor_agency boost to guarantee the role wins.
+  const hasDirectoryEvidence = [...msgRoleHits.keys()].some((k) =>
+    k === 'vendor_agency:vendor_directory_msg' || k === 'vendor_agency:vendor_marketplace_msg',
+  );
+  if (hasDirectoryEvidence) {
+    // Suppress bd entirely
+    roleScores.set('bd', 0);
+    roleEvidence.set('bd', []);  // wipe evidence — it was a false positive
+    // Strong boost to vendor_agency
+    const dirBoost = 6.0;
+    roleScores.set('vendor_agency', (roleScores.get('vendor_agency') ?? 0) + dirBoost);
+    roleEvidence.get('vendor_agency')!.push({
+      evidence_type: 'message',
+      evidence_ref: 'msg:directory_override:vendor_directory+marketplace',
+      weight: dirBoost,
     });
   }
 

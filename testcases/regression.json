@@ -1,0 +1,382 @@
+{
+  "_comment": "Regression test cases for inference engine. Each case defines expected and forbidden predicates for a known user. Run with: npm run regress",
+  "cases": [
+    {
+      "id": "drishti-solidityscan",
+      "description": "Security vendor (SolidityScan) with stale Gate.io display name — should be vendor_agency, NOT bd",
+      "displayName": "Drishti | Gate.io South Asia BD",
+      "bio": "Web3 security company | Smart contract audits | SolidityScan",
+      "messages": [
+        "We at SolidityScan specialize in smart contract auditing services",
+        "Reach out for your security requirements",
+        "Our security company provides comprehensive audits"
+      ],
+      "memberGroupKinds": ["bd"],
+      "totalMsgCount": 12,
+      "expected": [
+        { "predicate": "has_role", "value": "vendor_agency" },
+        { "predicate": "affiliated_with", "value": "SolidityScan" }
+      ],
+      "forbidden": [
+        { "predicate": "has_role", "value": "bd" }
+      ]
+    },
+    {
+      "id": "aaron-houdiniswap",
+      "description": "BD rep at HoudiniSwap — listing-related BD patterns, NOT vendor",
+      "displayName": "Aaron | HoudiniSwap",
+      "bio": null,
+      "messages": [
+        "We're looking at token listing on major CEXs",
+        "HoudiniSwap is working on DEX listing integrations",
+        "Looking to partner with chains for ecosystem integration",
+        "DMs are open if you want to collaborate",
+        "We at HoudiniSwap are expanding our ecosystem partners",
+        "Chain listing is our priority this quarter"
+      ],
+      "memberGroupKinds": ["bd"],
+      "totalMsgCount": 25,
+      "expected": [
+        { "predicate": "has_role", "value": "bd" },
+        { "predicate": "affiliated_with", "value": "HoudiniSwap" }
+      ],
+      "forbidden": [
+        { "predicate": "has_role", "value": "vendor_agency" }
+      ]
+    },
+    {
+      "id": "marco-semoto-directory",
+      "description": "Directory/marketplace operator (Semoto) — should be vendor_agency, NOT bd",
+      "displayName": "Marco M | Semoto",
+      "bio": null,
+      "messages": [
+        "Law firms in our ecosystem can be found on the platform",
+        "Providers on our directory are vetted and listed",
+        "Listed on our marketplace you'll find top agencies",
+        "Semoto connects projects with service providers"
+      ],
+      "memberGroupKinds": ["bd"],
+      "totalMsgCount": 15,
+      "expected": [
+        { "predicate": "has_role", "value": "vendor_agency" }
+      ],
+      "forbidden": [
+        { "predicate": "has_role", "value": "bd" }
+      ]
+    },
+    {
+      "id": "andy-each-protocol",
+      "description": "'each protocol' is NOT an org name — org validator should reject it",
+      "displayName": "Andy",
+      "bio": null,
+      "messages": [
+        "We work with each protocol to ensure compliance",
+        "I'm from each Protocol team doing integrations"
+      ],
+      "memberGroupKinds": ["bd"],
+      "totalMsgCount": 8,
+      "expected": [],
+      "forbidden": [
+        { "predicate": "affiliated_with", "value": "each protocol" },
+        { "predicate": "affiliated_with", "value": "each Protocol" }
+      ]
+    },
+    {
+      "id": "pandu-crust-on-mantle",
+      "description": "Chain qualifier should be clamped: 'Crust on Mantle right' → 'Crust'",
+      "displayName": "Pandu",
+      "bio": null,
+      "messages": [
+        "I'm from Crust on Mantle right now working on integrations",
+        "We at Crust are building cross-chain solutions"
+      ],
+      "memberGroupKinds": ["bd"],
+      "totalMsgCount": 10,
+      "expected": [
+        { "predicate": "affiliated_with", "value": "Crust" }
+      ],
+      "forbidden": [
+        { "predicate": "affiliated_with", "value": "Crust on Mantle" },
+        { "predicate": "affiliated_with", "value": "Crust on Mantle right" }
+      ]
+    },
+    {
+      "id": "erhan-eak-digital",
+      "description": "KOL agency selling services — should be vendor_agency, NOT media_kol",
+      "displayName": "Erhan | EAK Digital",
+      "bio": "KOL agency | Influencer marketing | Web3 PR",
+      "messages": [
+        "Our KOL agency handles tier 1 KOLs for campaigns",
+        "We specialize in influencer campaign management",
+        "Drop me a DM for KOL services pricing",
+        "Marketing solutions for web3 projects",
+        "Our agency runs full-service KOL campaigns",
+        "Contact me for costs on KOL packages"
+      ],
+      "memberGroupKinds": ["bd"],
+      "totalMsgCount": 30,
+      "expected": [
+        { "predicate": "has_role", "value": "vendor_agency" },
+        { "predicate": "affiliated_with", "value": "EAK Digital" }
+      ],
+      "forbidden": [
+        { "predicate": "has_role", "value": "media_kol" }
+      ]
+    },
+    {
+      "id": "alice-founder",
+      "description": "Classic founder with bio signals",
+      "displayName": "Alice | Acme Labs CEO",
+      "bio": "CEO & co-founder of Acme Labs. Building the future of DeFi.",
+      "messages": [
+        "We launched our mainnet last week",
+        "Looking to partner with other protocols",
+        "Acme Labs is hiring engineers"
+      ],
+      "memberGroupKinds": ["bd"],
+      "totalMsgCount": 20,
+      "expected": [
+        { "predicate": "has_role", "value": "founder_exec" },
+        { "predicate": "affiliated_with", "value": "Acme Labs" }
+      ],
+      "forbidden": []
+    },
+    {
+      "id": "bob-builder-solidity",
+      "description": "Solidity developer with hard tech signals",
+      "displayName": "Bob",
+      "bio": "Solidity developer, full-stack engineer. Shipped 5+ protocols.",
+      "messages": [
+        "Just deployed the smart contract to testnet",
+        "Merged the PR fixing the RPC bug",
+        "Refactored the token contract for gas optimization",
+        "Check the github repo for the latest commit",
+        "Stack trace shows the error in the constructor",
+        "Pushed the bug fix to the branch"
+      ],
+      "memberGroupKinds": ["work"],
+      "totalMsgCount": 40,
+      "expected": [
+        { "predicate": "has_role", "value": "builder" }
+      ],
+      "forbidden": [
+        { "predicate": "has_role", "value": "bd" }
+      ]
+    },
+    {
+      "id": "carol-investor",
+      "description": "VC analyst with investment signals",
+      "displayName": "Carol | Paradigm",
+      "bio": "Investor at Paradigm. Thesis: DeFi infrastructure.",
+      "messages": [
+        "We're evaluating series A opportunities",
+        "Our fund thesis focuses on infrastructure",
+        "Due diligence on the protocol looks solid",
+        "Portfolio company just raised their B round"
+      ],
+      "memberGroupKinds": ["bd"],
+      "totalMsgCount": 15,
+      "expected": [
+        { "predicate": "has_role", "value": "investor_analyst" },
+        { "predicate": "affiliated_with", "value": "Paradigm" }
+      ],
+      "forbidden": []
+    },
+    {
+      "id": "dave-recruiter",
+      "description": "Recruiter with hiring signals",
+      "displayName": "Dave | CryptoJobs",
+      "bio": "Recruiter specializing in web3 talent. We're hiring!",
+      "messages": [
+        "We have open roles for senior Solidity devs",
+        "Recruiting for a DeFi protocol — DM me",
+        "Job posting: Backend engineer, remote"
+      ],
+      "memberGroupKinds": ["bd"],
+      "totalMsgCount": 10,
+      "expected": [
+        { "predicate": "has_role", "value": "recruiter" }
+      ],
+      "forbidden": []
+    },
+    {
+      "id": "sukesh-networking-only",
+      "description": "Networker with mentions only — should NOT get community role",
+      "displayName": "Sukesh",
+      "bio": null,
+      "messages": [
+        "Great to connect with everyone here",
+        "Let's chat about collaboration opportunities"
+      ],
+      "memberGroupKinds": ["bd"],
+      "totalMsgCount": 3,
+      "totalMentionCount": 5,
+      "expected": [],
+      "forbidden": [
+        { "predicate": "has_role", "value": "community" }
+      ]
+    },
+    {
+      "id": "dexter-low-activity-bd",
+      "description": "Low-activity BD — should be tentative, not supported",
+      "displayName": "Dexter Song | BD",
+      "bio": null,
+      "messages": [
+        "Looking for partnership opportunities"
+      ],
+      "memberGroupKinds": ["bd"],
+      "totalMsgCount": 2,
+      "expected": [
+        { "predicate": "has_role", "value": "bd", "status": "tentative" }
+      ],
+      "forbidden": [
+        { "predicate": "has_role", "value": "bd", "status": "supported" }
+      ]
+    },
+    {
+      "id": "eve-media-kol",
+      "description": "Individual KOL — should be media_kol (not vendor_agency)",
+      "displayName": "Eve | KOL",
+      "bio": "Content creator & influencer in web3 space",
+      "messages": [
+        "Just dropped a new thread on DeFi yields",
+        "Check out my latest analysis"
+      ],
+      "memberGroupKinds": ["general_chat"],
+      "totalMsgCount": 8,
+      "expected": [
+        { "predicate": "has_role", "value": "media_kol" }
+      ],
+      "forbidden": [
+        { "predicate": "has_role", "value": "vendor_agency" }
+      ]
+    },
+    {
+      "id": "frank-whitelabel-vendor",
+      "description": "White-label service vendor — should be vendor_agency",
+      "displayName": "Frank | BlockStar Agency",
+      "bio": "Agency providing white-label marketing solutions for web3",
+      "messages": [
+        "Our white-label solution covers exchange listings",
+        "We offer managed service packages",
+        "Full-service marketing solutions starting at competitive rates",
+        "PR services and social media management",
+        "Our agency handles everything from launch to growth"
+      ],
+      "memberGroupKinds": ["bd"],
+      "totalMsgCount": 20,
+      "expected": [
+        { "predicate": "has_role", "value": "vendor_agency" }
+      ],
+      "forbidden": [
+        { "predicate": "has_role", "value": "bd" }
+      ]
+    },
+    {
+      "id": "grace-no-signals",
+      "description": "Lurker with zero message signals — should be fully gated",
+      "displayName": "Grace",
+      "bio": null,
+      "messages": [],
+      "memberGroupKinds": ["general_chat"],
+      "totalMsgCount": 0,
+      "expected": [],
+      "expectedGated": true,
+      "forbidden": [
+        { "predicate": "has_role" }
+      ]
+    },
+    {
+      "id": "hank-feature-only",
+      "description": "User with only feature evidence (mentions/replies) — should be tentative at best",
+      "displayName": "Hank",
+      "bio": null,
+      "messages": [
+        "Sure", "Thanks", "Ok", "Agreed", "Yes", "Right", "Cool", "Nice"
+      ],
+      "memberGroupKinds": ["bd"],
+      "totalMsgCount": 8,
+      "totalReplyCount": 6,
+      "totalMentionCount": 4,
+      "expected": [],
+      "forbidden": [
+        { "predicate": "has_role", "status": "supported" }
+      ]
+    },
+    {
+      "id": "ivan-display-name-bd-role",
+      "description": "Display name BD with enough messages — status should be supported",
+      "displayName": "Ivan | Protocol BD",
+      "bio": null,
+      "messages": [
+        "Let's explore a partnership",
+        "I handle business development for our protocol",
+        "DMs are open for collabs",
+        "Looking to integrate with your chain",
+        "We're seeking ecosystem partners",
+        "Warm intro would be great"
+      ],
+      "memberGroupKinds": ["bd"],
+      "totalMsgCount": 20,
+      "expected": [
+        { "predicate": "has_role", "value": "bd", "status": "supported" }
+      ],
+      "forbidden": []
+    },
+    {
+      "id": "julia-third-person-reject",
+      "description": "Third-person inquiry — should NOT extract affiliation",
+      "displayName": "Julia",
+      "bio": null,
+      "messages": [
+        "Anyone here from Binance?",
+        "Is there anyone from Coinbase in this group?",
+        "Looking for someone from OKX"
+      ],
+      "memberGroupKinds": ["bd"],
+      "totalMsgCount": 5,
+      "expected": [],
+      "forbidden": [
+        { "predicate": "affiliated_with", "value": "Binance" },
+        { "predicate": "affiliated_with", "value": "Coinbase" },
+        { "predicate": "affiliated_with", "value": "OKX" }
+      ]
+    },
+    {
+      "id": "kristoffer-hashlock",
+      "description": "Security audit firm in display name — should be vendor_agency",
+      "displayName": "Kristoffer | Hashlock",
+      "bio": "Security audit firm for smart contracts",
+      "messages": [
+        "Our security company audits smart contracts",
+        "Reach out if you need auditing services",
+        "We specialize in smart contract audit",
+        "Our audit firm provides comprehensive reviews"
+      ],
+      "memberGroupKinds": ["bd"],
+      "totalMsgCount": 15,
+      "expected": [
+        { "predicate": "has_role", "value": "vendor_agency" },
+        { "predicate": "affiliated_with", "value": "Hashlock" }
+      ],
+      "forbidden": [
+        { "predicate": "has_role", "value": "builder" }
+      ]
+    },
+    {
+      "id": "lowercase-org-reject",
+      "description": "Lowercase org name should be rejected by validator",
+      "displayName": "TestUser",
+      "bio": null,
+      "messages": [
+        "I'm from different projects across the ecosystem"
+      ],
+      "memberGroupKinds": ["bd"],
+      "totalMsgCount": 5,
+      "expected": [],
+      "forbidden": [
+        { "predicate": "affiliated_with", "value": "different projects" }
+      ]
+    }
+  ]
+}
