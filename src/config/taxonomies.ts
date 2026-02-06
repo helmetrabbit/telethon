@@ -15,7 +15,6 @@ export const ROLES = [
   'vendor_agency',
   'community',
   'media_kol',
-  'market_maker',
   'unknown',
 ] as const;
 export type Role = (typeof ROLES)[number];

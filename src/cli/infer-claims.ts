@@ -199,21 +199,23 @@ async function main(): Promise<void> {
     }
 
     // Write affiliation claims (self-declared only)
+    // Message self-declare gets higher confidence than display_name extraction
     for (const aff of result.affiliations) {
+      const affConfidence = aff.source === 'message' ? 0.95 : 0.85;
       await db.transaction(async (client) => {
         await writeClaimWithEvidence(
           client,
           user.id,
           'affiliated_with',
           aff.name,
-          0.9, // high confidence — self-declared
+          affConfidence,
           'supported',
           [{ evidence_type: aff.source, evidence_ref: `${aff.source}:${aff.tag}:${aff.name}`, weight: 3.0 }],
           ver,
         );
       });
       totalClaims++;
-      console.log(`   ✅ affiliation: ${aff.name} (source=${aff.source})`);
+      console.log(`   ✅ affiliation: ${aff.name} (source=${aff.source}, confidence=${affConfidence})`);
     }
 
     // Write org-type claims (fix #2 — separate from function role)

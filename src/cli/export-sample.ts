@@ -26,7 +26,7 @@ const PER_ROLE = parseInt(getArg('per-role', '3'), 10);
 const MAX_MSGS = parseInt(getArg('max-msgs', '200'), 10);
 const UNCATEGORIZED_COUNT = parseInt(getArg('uncategorized', '5'), 10);
 const OUT_DIR = getArg('out-dir', 'data/output');
-const MODEL_VERSION = getArg('model-version', 'v0.4.0');
+const MODEL_VERSION = getArg('model-version', 'v0.5.0');
 
 // ── Main ────────────────────────────────────────────────
 
@@ -248,7 +248,7 @@ async function main(): Promise<void> {
       prompt_hint: 'Review each user\'s display_name, messages, and our claims. Are the role/intent classifications correct? What signals did we miss? What new roles, intents, or keyword patterns would improve coverage?',
     },
     taxonomy: {
-      roles: ['bd', 'builder', 'founder_exec', 'investor_analyst', 'recruiter', 'vendor_agency', 'community', 'media_kol', 'market_maker'],
+      roles: ['bd', 'builder', 'founder_exec', 'investor_analyst', 'recruiter', 'vendor_agency', 'community', 'media_kol'],
       intents: ['networking', 'evaluating', 'selling', 'hiring', 'support_seeking', 'support_giving', 'broadcasting'],
       evidence_sources: ['display_name', 'bio', 'message', 'feature'],
     },

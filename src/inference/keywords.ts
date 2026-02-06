@@ -25,6 +25,8 @@ export interface KeywordSignal<T extends string> {
 // from display-name pipe segments or message affiliation patterns.
 
 export const AFFILIATION_REJECT_SET = new Set([
+  // Short stopwords (residual from title stripping)
+  'of', 'the', 'and', 'at', 'in', 'for', 'to', 'or', 'by', 'on', 'is', 'it', 'an',
   // Locations / cities / countries
   'dubai', 'singapore', 'london', 'berlin', 'new york', 'nyc', 'hong kong',
   'tokyo', 'seoul', 'paris', 'amsterdam', 'lisbon', 'miami', 'istanbul',
@@ -113,10 +115,8 @@ export const BIO_ROLE_KEYWORDS: KeywordSignal<Role>[] = [
   { pattern: /\b(journalist|editor|press|PR\s*manager)\b/i, label: 'media_kol', weight: 2.0, tag: 'media_title' },
   // NOTE: bare "media" removed — too ambiguous; "promotion|campaign|social media" moved to vendor detection below
 
-  // Market Maker
-  { pattern: /\b(market\s*mak|liquidity\s*provid|trading\s*desk)\b/i, label: 'market_maker', weight: 2.5, tag: 'mm_title' },
-  { pattern: /\b(orderbook|spread|depth|OTC)\b/i, label: 'market_maker', weight: 1.5, tag: 'mm_signal' },
-  // NOTE: bare "MM" removed from bio role — it's an org-type indicator, not a personal role
+  // NOTE: market_maker removed from role keywords — it's org-type only (has_org_type).
+  // People AT market-maker firms get function roles (bd, builder, etc.) + has_org_type=market_maker.
 ];
 
 // ── Message → Role signals (aggregate patterns) ────────
@@ -143,9 +143,9 @@ export const MSG_ROLE_KEYWORDS: KeywordSignal<Role>[] = [
   // NOTE: removed broad "content|thread|tweet|post|article|PR|press" pattern —
   //       everyone posts content; this was the #1 false-positive source for media_kol
 
-  // Market Maker
-  { pattern: /\b(market\s*mak|liquidity|spread|orderbook|depth)\b/i, label: 'market_maker', weight: 1.0, tag: 'mm_action' },
-  { pattern: /\b(CEX|DEX\s*listing|OTC|trading\s*pair)\b/i, label: 'market_maker', weight: 0.8, tag: 'mm_topic' },
+  // NOTE: market_maker removed from msg role signals — discussing liquidity/spreads doesn't
+  //       make someone a market maker. Causes false positives (Rhythm, Marcelo).
+  //       Market maker is org-type only (has_org_type).
 
   // Vendor / Agency — detect selling-services patterns in messages (fix #4)
   { pattern: /\b(we\s+speciali[sz]e|our\s+services?|our\s+solutions?|our\s+agency)\b/i, label: 'vendor_agency', weight: 1.2, tag: 'vendor_service_msg' },
@@ -167,7 +167,9 @@ export const BIO_INTENT_KEYWORDS: KeywordSignal<Intent>[] = [
 
 export const MSG_INTENT_KEYWORDS: KeywordSignal<Intent>[] = [
   { pattern: /\b(connect|intro|meet\s*up|let'?s\s*chat)\b/i, label: 'networking', weight: 0.8, tag: 'networking_msg' },
-  { pattern: /\b(evaluat|assess|compare|review|look\s*into)\b/i, label: 'evaluating', weight: 0.8, tag: 'evaluating_msg' },
+  // NOTE: removed broad 'review' and 'look into' — fires on broadcasting/showcase messages.
+  //       Reserved for explicit vendor/tool comparison and procurement language.
+  { pattern: /\b(evaluat|assess|compar(?:e|ing)|shortlist|considering\s+vendors?|RFP|POC|pilot\s+(?:test|program))\b/i, label: 'evaluating', weight: 0.8, tag: 'evaluating_msg' },
 
   // Selling — strengthened (fix #5)
   { pattern: /\b(sell|pitch|demo|pricing|quote)\b/i, label: 'selling', weight: 0.8, tag: 'selling_msg' },
@@ -217,8 +219,10 @@ export const BIO_AFFILIATION_PATTERNS: AffiliationSignal[] = [
  */
 export const MSG_AFFILIATION_PATTERNS: AffiliationSignal[] = [
   { pattern: /\b(?:we\s+at|I(?:'m|\s+am)\s+(?:from|at|with)|I\s+work\s+(?:at|for)|representing)\s+([A-Z][A-Za-z0-9.]+(?:\s+[A-Z][A-Za-z0-9.]+){0,3})\b/, tag: 'msg_affiliation_at' },
-  { pattern: /\b(?:our\s+(?:company|team|project|protocol))\s+([A-Z][A-Za-z0-9.]+(?:\s+[A-Z][A-Za-z0-9.]+){0,3})\b/, tag: 'msg_affiliation_our' },
-  { pattern: /\bon\s+behalf\s+of\s+([A-Z][A-Za-z0-9.]+(?:\s+[A-Z][A-Za-z0-9.]+){0,3})\b/, tag: 'msg_affiliation_behalf' },
+  { pattern: /\b(?:our\s+(?:company|team|project|protocol))\s+([A-Z][A-Za-z0-9.]+(?:\s+[A-Za-z0-9.]+){0,3})\b/, tag: 'msg_affiliation_our' },
+  { pattern: /\bon\s+behalf\s+of\s+([A-Z][A-Za-z0-9.]+(?:\s+[A-Za-z0-9.]+){0,3})\b/, tag: 'msg_affiliation_behalf' },
+  // "[name] from [Org]" / "here from the [Org] team" — common self-intro in groups
+  { pattern: /\b(?:here\s+)?from\s+(?:the\s+)?([A-Z][A-Za-z0-9./]+(?:\s+[A-Za-z0-9./]+){0,4})\s+team\b/i, tag: 'msg_affiliation_intro' },
 ];
 
 // ── Display Name → Role signals ────────────────────────
@@ -257,11 +261,9 @@ export const DISPLAY_NAME_ROLE_KEYWORDS: KeywordSignal<Role>[] = [
   //       Individual journalists still caught by content_creat / KOL / influencer.
   { pattern: /\b(journalist|editor)\b/i, label: 'media_kol', weight: 2.5, tag: 'dn_journalist' },
 
-  // Market Maker — ORG TYPE only, not a person's function role (fix #2)
-  // NOTE: "MM" in display name is now handled as org_type detection in engine.ts,
-  //       not as a personal role keyword. Removed dn_mm weight 3.0 that was
-  //       misclassifying BD people at MM firms (e.g. Kat R | Cicada MM → market_maker).
-  { pattern: /\b(market\s*mak|liquidity\s*provid)\b/i, label: 'market_maker', weight: 2.0, tag: 'dn_mm_title' },
+  // NOTE: market_maker removed from display name role keywords entirely.
+  //       "MM" and "market maker" in display names are org-type descriptors
+  //       handled by ORG_TYPE_SIGNALS → has_org_type=market_maker.
 
   // Community
   { pattern: /\b(community|moderator|mod\b|admin)\b/i, label: 'community', weight: 2.5, tag: 'dn_community' },

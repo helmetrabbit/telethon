@@ -1,0 +1,23 @@
+{
+  "version": "v0.5.0",
+  "description": "v0.5.0 — second AI review round. (1) Pipe affiliation junk fixed (stopwords + min-length-3 + title-segment skip), (2) message affiliation > display_name priority, (3) market_maker removed from ROLES entirely (org-type only), (4) evaluating intent tightened (removed broad 'review'), (5) org name normalization for dedup.",
+
+  "gating": {
+    "minNonMembershipEvidence": 1,
+    "minClaimConfidence": 0.15
+  },
+
+  "rolePriors": {
+    "bd": {},
+    "work": {},
+    "general_chat": {},
+    "unknown": {}
+  },
+
+  "intentPriors": {
+    "bd": {},
+    "work": {},
+    "general_chat": {},
+    "unknown": {}
+  }
+}

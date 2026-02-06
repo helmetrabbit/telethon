@@ -33,6 +33,21 @@ import {
   ORG_TYPE_SIGNALS,
 } from './keywords.js';
 
+// ── Org name normalization ───────────────────────────────
+// Normalize org names for dedup: lowercase, strip punctuation,
+// collapse whitespace, remove common suffixes.
+
+export function normalizeOrgName(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[''""]/g, '')                           // smart quotes
+    .replace(/[^a-z0-9\s.]/g, '')                     // strip non-alphanumeric except dots
+    .replace(/\.(exchange|io|xyz|com|org|net|gg|fi)$/i, '')  // strip TLD suffixes
+    .replace(/\b(inc|ltd|corp|labs?|protocol|network|finance|exchange)\b/g, '')  // strip entity suffixes
+    .replace(/\s+/g, ' ')                              // collapse whitespace
+    .trim();
+}
+
 // ── Types ───────────────────────────────────────────────
 
 export interface EvidenceRow {
@@ -226,11 +241,20 @@ export function scoreUser(input: UserInferenceInput, config: InferenceConfig): U
       });
     }
 
-    // Display name affiliation detection — with reject-list filtering (fix #1)
+    // Display name affiliation detection — with reject-list filtering
     for (const aff of DISPLAY_NAME_AFFILIATION_PATTERNS) {
       const match = dn.match(aff.pattern);
       if (match && match[1]) {
         let company = match[1].trim();
+
+        // For pipe-based extraction: skip if the pipe segment contains @ (already handled by at-pattern)
+        // or contains role/title words that indicate it's not a company name but a title segment
+        if (aff.tag === 'dn_affiliation_pipe') {
+          const fullSegment = match[0];
+          if (/@/.test(fullSegment)) continue;
+          // If segment is purely role/title language, skip it
+          if (/^\|\s*(?:Head|CEO|CTO|COO|CFO|CMO|VP|Director|Lead|Manager|BD)\s+(?:of|at|for)\b/i.test(fullSegment)) continue;
+        }
 
         // Strip leading title prefixes: "CEO nReach" → "nReach"
         company = company.replace(
@@ -238,17 +262,20 @@ export function scoreUser(input: UserInferenceInput, config: InferenceConfig): U
           '',
         ).trim();
 
-        // Skip if empty after stripping
-        if (company.length < 2) continue;
+        // Skip if too short after stripping (minimum 3 chars)
+        if (company.length < 3) continue;
 
-        // Skip if in reject set (locations, industries, bare titles)
+        // Skip if in reject set (locations, industries, bare titles, stopwords)
         if (AFFILIATION_REJECT_SET.has(company.toLowerCase())) continue;
 
         // Skip if matches a reject pattern (events, conferences)
         if (AFFILIATION_REJECT_PATTERNS.some((rp) => rp.test(company))) continue;
 
-        // Avoid duplicates if bio already captured the same affiliation
-        if (!result.affiliations.some((a) => a.name === company)) {
+        // Normalize for dedup: lowercase, strip punctuation, collapse whitespace
+        const normKey = normalizeOrgName(company);
+
+        // Avoid duplicates (by normalized form)
+        if (!result.affiliations.some((a) => normalizeOrgName(a.name) === normKey)) {
           result.affiliations.push({ name: company, source: 'display_name', tag: aff.tag });
         }
       }
@@ -294,10 +321,19 @@ export function scoreUser(input: UserInferenceInput, config: InferenceConfig): U
         const match = text.match(aff.pattern);
         if (match && match[1]) {
           const company = match[1].trim();
-          if (company.length < 2) continue;
+          if (company.length < 3) continue;
           if (AFFILIATION_REJECT_SET.has(company.toLowerCase())) continue;
           if (AFFILIATION_REJECT_PATTERNS.some((rp) => rp.test(company))) continue;
-          if (!result.affiliations.some((a) => a.name === company)) {
+          const normKey = normalizeOrgName(company);
+          // Message self-declare overrides display_name: if a normalized match
+          // already exists from display_name, replace it with the message source
+          const existingIdx = result.affiliations.findIndex(
+            (a) => normalizeOrgName(a.name) === normKey,
+          );
+          if (existingIdx >= 0) {
+            // Keep message source as higher priority
+            result.affiliations[existingIdx] = { name: company, source: 'message', tag: aff.tag };
+          } else {
             result.affiliations.push({ name: company, source: 'message', tag: aff.tag });
           }
         }
