@@ -45,6 +45,18 @@ async function main(): Promise<void> {
     ORDER BY role, confidence DESC
   `, [MODEL_VERSION, PER_ROLE]);
 
+  // Users with org_type claims — include a sample so the AI reviewer can evaluate them
+  const orgTypeUsers = await db.query<{ user_id: number; org_type: string }>(`
+    WITH ranked AS (
+      SELECT subject_user_id AS user_id, object_value AS org_type,
+        ROW_NUMBER() OVER (PARTITION BY object_value ORDER BY confidence DESC) AS rn
+      FROM claims
+      WHERE model_version = $1 AND predicate = 'has_org_type'
+    )
+    SELECT user_id, org_type FROM ranked WHERE rn <= 2
+    ORDER BY org_type
+  `, [MODEL_VERSION]);
+
   // Users with messages but no role claim at all — OR if none exist,
   // grab the heaviest posters as additional review samples
   const uncategorized = await db.query<{ user_id: number; msg_count: number }>(`
@@ -86,11 +98,13 @@ async function main(): Promise<void> {
 
   const userIds = [
     ...roleUsers.rows.map(r => r.user_id),
+    ...orgTypeUsers.rows.map(r => r.user_id),
     ...uncategorized.rows.map(r => r.user_id),
   ];
   const uniqueIds = [...new Set(userIds)];
 
   console.log(`   Selected ${roleUsers.rows.length} classified users (${PER_ROLE}/role)`);
+  console.log(`   Selected ${orgTypeUsers.rows.length} org-type users (2/type)`);
   console.log(`   Selected ${uncategorized.rows.length} uncategorized heavy posters`);
   console.log(`   Total sample: ${uniqueIds.length} users\n`);
 
