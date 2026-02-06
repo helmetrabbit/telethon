@@ -63,6 +63,24 @@ export const TelegramMessageSchema = z.object({
 
 export type TelegramMessage = z.infer<typeof TelegramMessageSchema>;
 
+// ── Participant schema (Telethon export) ────────────────
+
+export const TelethonParticipantSchema = z.object({
+  user_id: z.number(),
+  username: z.string().nullable().optional(),
+  first_name: z.string().nullable().optional(),
+  last_name: z.string().nullable().optional(),
+  display_name: z.string().nullable().optional(),
+  bot: z.boolean().optional().default(false),
+  deleted: z.boolean().optional().default(false),
+  scam: z.boolean().nullable().optional(),
+  fake: z.boolean().nullable().optional(),
+  verified: z.boolean().nullable().optional(),
+  premium: z.boolean().nullable().optional(),
+});
+
+export type TelethonParticipant = z.infer<typeof TelethonParticipantSchema>;
+
 // ── Export root schema ──────────────────────────────────
 
 export const TelegramExportSchema = z.object({
@@ -73,9 +91,30 @@ export const TelegramExportSchema = z.object({
     // Be lenient: skip messages that don't parse (service messages, etc.)
     z.unknown()
   ),
+  // Telethon-specific fields (optional — absent in Desktop exports)
+  participants: z.array(z.unknown()).optional().default([]),
+  participants_status: z.string().optional(),
+  participants_error: z.string().nullable().optional(),
+  participants_count: z.number().nullable().optional(),
+  collected_at: z.string().optional(),
+  messages_count: z.number().optional(),
+  limits: z.object({
+    since: z.string().nullable().optional(),
+    limit: z.number().optional(),
+  }).optional(),
 });
 
 export type TelegramExport = z.infer<typeof TelegramExportSchema>;
+
+/**
+ * Parse a single participant from the Telethon export.
+ * Returns null if unparseable.
+ */
+export function parseParticipant(raw: unknown): TelethonParticipant | null {
+  const result = TelethonParticipantSchema.safeParse(raw);
+  if (!result.success) return null;
+  return result.data;
+}
 
 // ── Normalization helpers ───────────────────────────────
 

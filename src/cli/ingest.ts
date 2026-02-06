@@ -20,6 +20,7 @@ import { db } from '../db/index.js';
 import {
   TelegramExportSchema,
   parseMessage,
+  parseParticipant,
   normalizeText,
   extractMentions,
   hasLinks,
@@ -35,6 +36,8 @@ interface IngestStats {
   usersUpserted: number;
   messagesInserted: number;
   mentionsInserted: number;
+  participantsIngested: number;
+  membershipsFromParticipants: number;
 }
 
 // ── Main ────────────────────────────────────────────────
@@ -71,8 +74,14 @@ async function main(): Promise<void> {
   // ── 3. Parse JSON ───────────────────────────────────
   const rawJson = JSON.parse(readFileSync(absPath, 'utf-8'));
   const exportData = TelegramExportSchema.parse(rawJson);
+  const isTelethon = Array.isArray(exportData.participants) && exportData.participants.length > 0;
   console.log(`   Group name: "${exportData.name}"`);
   console.log(`   Raw messages in file: ${exportData.messages.length}`);
+  if (isTelethon) {
+    console.log(`   Telethon export detected`);
+    console.log(`   Participants in file: ${exportData.participants.length}`);
+    console.log(`   Participants status:  ${exportData.participants_status ?? 'n/a'}`);
+  }
 
   // ── 4. Run everything in a transaction ──────────────
   const stats = await db.transaction(async (client) => {
@@ -86,6 +95,10 @@ async function main(): Promise<void> {
   console.log(`   Users upserted:     ${stats.usersUpserted}`);
   console.log(`   Messages inserted:  ${stats.messagesInserted}`);
   console.log(`   Mentions inserted:  ${stats.mentionsInserted}`);
+  if (stats.participantsIngested > 0) {
+    console.log(`   Participants:       ${stats.participantsIngested}`);
+    console.log(`   Memberships (part): ${stats.membershipsFromParticipants}`);
+  }
 
   await db.close();
 }
@@ -106,6 +119,8 @@ async function ingestInTransaction(
     usersUpserted: 0,
     messagesInserted: 0,
     mentionsInserted: 0,
+    participantsIngested: 0,
+    membershipsFromParticipants: 0,
   };
 
   // ── raw_imports ───────────────────────────────────
@@ -135,14 +150,18 @@ async function ingestInTransaction(
   async function ensureUser(
     externalId: string,
     displayName: string | null,
+    explicitHandle?: string | null,
   ): Promise<number> {
     const cached = userCache.get(externalId);
     if (cached !== undefined) return cached;
 
-    // Derive a handle from display_name if possible (lowercase, no spaces)
-    const handle = displayName
-      ? '@' + displayName.toLowerCase().replace(/\s+/g, '')
-      : null;
+    // Prefer explicit handle (from Telethon participant.username),
+    // otherwise derive from display_name.
+    const handle = explicitHandle
+      ? (explicitHandle.startsWith('@') ? explicitHandle : '@' + explicitHandle)
+      : displayName
+        ? '@' + displayName.toLowerCase().replace(/\s+/g, '')
+        : null;
 
     const res = await client.query(
       `INSERT INTO users (platform, external_id, handle, display_name)
@@ -234,13 +253,14 @@ async function ingestInTransaction(
     );
     const rawRefRowId: number | null = rawRefRes.rows[0]?.id ?? null;
 
-    // Insert message
+    // Insert message (ON CONFLICT for idempotent re-import)
     const msgRes = await client.query(
       `INSERT INTO messages (
          group_id, user_id, external_message_id, sent_at,
          text, text_len, reply_to_external_message_id,
          has_links, has_mentions, raw_ref_row_id
        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       ON CONFLICT (group_id, external_message_id) DO NOTHING
        RETURNING id`,
       [
         groupId,
@@ -255,6 +275,11 @@ async function ingestInTransaction(
         rawRefRowId,
       ],
     );
+    if (msgRes.rows.length === 0) {
+      // Message already existed — skip mentions but still track membership
+      trackMembership(userId, sentAt);
+      continue;
+    }
     const messageId: number = msgRes.rows[0].id;
     stats.messagesInserted++;
 
@@ -295,6 +320,37 @@ async function ingestInTransaction(
       WHERE mm.mentioned_user_id IS NULL
         AND u.handle = '@' || mm.mentioned_handle`,
   );
+
+  // ── Process participants (Telethon exports only) ──
+  if (exportData.participants && exportData.participants.length > 0) {
+    for (const rawPart of exportData.participants) {
+      const part = parseParticipant(rawPart);
+      if (!part) continue;
+
+      // Skip bots and deleted accounts
+      if (part.bot || part.deleted) continue;
+
+      // Normalize external_id to match message from_id format
+      const extId = `user${part.user_id}`;
+      const displayName = part.display_name
+        ?? ([part.first_name, part.last_name].filter(Boolean).join(' ') || null);
+      const handle = part.username ?? null;
+
+      const userId = await ensureUser(extId, displayName, handle);
+      stats.participantsIngested++;
+
+      // Create membership if not already tracked from messages
+      if (!membershipMap.has(userId)) {
+        await client.query(
+          `INSERT INTO memberships (group_id, user_id, first_seen_at, last_seen_at, msg_count)
+           VALUES ($1, $2, NULL, NULL, 0)
+           ON CONFLICT (group_id, user_id) DO NOTHING`,
+          [groupId, userId],
+        );
+        stats.membershipsFromParticipants++;
+      }
+    }
+  }
 
   return stats;
 }

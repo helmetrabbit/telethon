@@ -778,7 +778,7 @@ CREATE INDEX idx_claims_user ON public.claims USING btree (subject_user_id);
 -- Name: idx_messages_ext_id; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_messages_ext_id ON public.messages USING btree (group_id, external_message_id);
+CREATE UNIQUE INDEX idx_messages_ext_id ON public.messages USING btree (group_id, external_message_id);
 
 
 --
@@ -969,4 +969,5 @@ INSERT INTO public.schema_migrations (version) VALUES
     ('20260206120000'),
     ('20260206120100'),
     ('20260206130000'),
-    ('20260206140000');
+    ('20260206140000'),
+    ('20260206150000');
