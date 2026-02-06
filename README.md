@@ -15,13 +15,17 @@ This system ingests [Telegram Desktop JSON exports](https://telegram.org/blog/ex
 3. [Quick Start](#quick-start)
 4. [Pipeline Steps](#pipeline-steps)
 5. [Schema Overview](#schema-overview)
-6. [Inference Engine](#inference-engine)
-7. [Evidence Gating & Anti-Hallucination](#evidence-gating--anti-hallucination)
-8. [Output Format](#output-format)
-9. [DBeaver / SQL Verification](#dbeaver--sql-verification)
-10. [Configuration](#configuration)
-11. [Project Structure](#project-structure)
-12. [Ethics & Privacy](#ethics--privacy)
+6. [What "Ontology-Lite" and "Claims" Mean](#what-ontology-lite-and-claims-mean)
+7. [Inference Engine](#inference-engine)
+8. [Evidence Gating & Anti-Hallucination](#evidence-gating--anti-hallucination)
+9. [Output Format](#output-format)
+10. [Interpreting Profiles & Unknowns](#interpreting-profiles--unknowns)
+11. [DBeaver / SQL Verification](#dbeaver--sql-verification)
+12. [Constraint Verification](#constraint-verification)
+13. [Negative Test Runbook](#negative-test-runbook)
+14. [Configuration](#configuration)
+15. [Project Structure](#project-structure)
+16. [Ethics & Privacy](#ethics--privacy)
 
 ---
 
@@ -198,6 +202,7 @@ The database uses three layers, each building on the previous:
 | `user_features_daily` | Aggregated behavioural metrics per user per day |
 | `claims` | Inferred labels: `has_role`, `has_intent`, `affiliated_with` |
 | `claim_evidence` | Evidence rows backing each claim (type, ref, weight) |
+| `abstention_log` | Records when the engine **chose not** to emit a claim (predicate, reason, model version) |
 
 ### ENUMs (Controlled Vocabularies)
 
@@ -209,6 +214,26 @@ The database uses three layers, each building on the previous:
 | `evidence_type` | bio, message, feature, membership |
 | `claim_status` | tentative, supported |
 | `predicate_label` | has_role, has_intent, has_topic_affinity, affiliated_with |
+
+---
+
+## What "Ontology-Lite" and "Claims" Mean
+
+### Ontology-Lite
+
+A full ontology (like OWL/RDF) defines classes, properties, and logical axioms over a domain. This project uses an **ontology-lite** approach — a small, fixed vocabulary of entity types (users, groups), relationship predicates (`has_role`, `has_intent`, `has_topic_affinity`, `affiliated_with`), and controlled ENUM values (8 roles, 8 intents, 4 group kinds). There are no class hierarchies, no transitive inference, and no open-world assumptions. The vocabulary is enforced by PostgreSQL ENUM types and constraint triggers — the system literally cannot store a label outside the defined taxonomy.
+
+### Claims ≠ Facts
+
+A **claim** is a structured assertion about a user, paired with a **confidence score** and an **evidence array**. Claims are explicitly labelled `tentative` or `supported` and should always be read as:
+
+> "Based on evidence E₁, E₂, … Eₙ, the engine estimates with probability P that user U has role R."
+
+Claims are **not ground truth**. They are deterministic outputs of a keyword-matching + prior-weighting system. They can be wrong (a user whose bio says "investor" might be joking). The evidence array exists so you can **audit** the reasoning and decide for yourself.
+
+### Abstentions
+
+When the engine **cannot** produce a claim that meets the evidence threshold, it logs an **abstention** — a record that says "I looked at user U for predicate P and chose not to make a claim, because: insufficient evidence." Abstentions are stored in the `abstention_log` table and are just as important as claims: they prove the system is **defaulting to silence** rather than guessing.
 
 ---
 
@@ -246,19 +271,23 @@ The system enforces a **"default to unknown"** philosophy at two levels:
 ### Application-Level Gating
 
 Before writing a claim, the engine checks:
-1. **Minimum confidence**: `P(label) ≥ 0.15` (configurable via `minClaimConfidence`)
-2. **Minimum non-membership evidence**: role and intent claims require at least 1 evidence row that is **not** just group membership (configurable via `minNonMembershipEvidence`)
+1. **Minimum confidence**: `P(label) ≥ 0.15` (configurable via `gating.minClaimConfidence` in the inference config)
+2. **Minimum non-membership evidence**: role and intent claims require at least 1 evidence row that is **not** just group membership (configurable via `gating.minNonMembershipEvidence`)
 
-If either check fails, the claim is **silently dropped** — the user's role/intent simply stays unassigned rather than guessing.
+If either check fails, the claim is **not written** — an abstention is logged instead, recording the predicate and reason code.
 
-### Database-Level Triggers
+### Database-Level Triggers (Safety Net)
 
-Two `DEFERRABLE INITIALLY DEFERRED` constraint triggers act as a safety net:
+Four `DEFERRABLE INITIALLY DEFERRED` constraint triggers act as a **structural** safety net. Even if the application code has a bug, the database will reject invalid data at `COMMIT`:
 
-1. **`claim_must_have_evidence`** — every claim must have ≥1 `claim_evidence` row. A bare claim with no evidence is rejected at `COMMIT`.
-2. **`claim_role_intent_needs_real_evidence`** — `has_role` / `has_intent` claims must have at least one evidence row whose type is **not** `membership`. This prevents the system from labelling someone purely because they appeared in a certain group.
+| # | Trigger | Fires on | Enforces |
+|---|---------|----------|----------|
+| 1 | `claim_must_have_evidence` | `INSERT OR UPDATE` on `claims` | Every claim must have ≥1 `claim_evidence` row |
+| 2 | `claim_needs_real_evidence` | `INSERT OR UPDATE` on `claims` | `has_role`, `has_intent`, and `has_topic_affinity` claims must have ≥1 evidence row whose type is **not** `membership` |
+| 3 | `claim_validate_object_value` | `INSERT OR UPDATE` on `claims` | `has_role` / `has_intent` object_value must be a valid ENUM member; free-text predicates must be non-empty |
+| 4 | `evidence_change_revalidate_claim` | `UPDATE OR DELETE` on `claim_evidence` | After evidence is removed or changed, re-checks that the parent claim still satisfies triggers 1 & 2 |
 
-Both triggers fire at transaction commit time, ensuring atomicity.
+All four triggers are `DEFERRABLE INITIALLY DEFERRED`, meaning they evaluate at `COMMIT` time. This allows the application to insert a claim and its evidence in any order within a single transaction — the constraint is only checked once, atomically, when the transaction commits.
 
 ### What this means in practice
 
@@ -318,6 +347,46 @@ Each profile JSON has this structure:
 - `derived` contains computed aggregates — deterministic from `observed`
 - `claims` always include the full `evidence` array — you can audit exactly why each label was assigned
 - If no claim was emitted for a category, it is **absent** (not set to "unknown")
+
+---
+
+## Interpreting Profiles & Unknowns
+
+### The three sections
+
+| Section | What it contains | Source |
+|---------|-----------------|--------|
+| `observed` | Directly extracted data: display name, handle, bio text, group memberships, message counts | Telegram JSON export — zero inference |
+| `derived` | Computed aggregates: daily feature vectors, totals, averages | Deterministic SQL over `observed` data |
+| `claims` | Inferred labels with confidence and evidence | Inference engine output — always auditable |
+
+### Reading a claim
+
+Every claim entry has:
+- **`predicate`**: what kind of assertion (`has_role`, `has_intent`, `has_topic_affinity`, `affiliated_with`)
+- **`label`**: the asserted value (e.g., `founder_exec`, `networking`)
+- **`confidence`**: softmax probability (0–1). Higher = more evidence supporting this label vs. alternatives
+- **`status`**: `tentative` (meets threshold but weak) or `supported` (strong evidence)
+- **`evidence`**: array of `{ evidence_type, evidence_ref, weight }` — the full audit trail
+
+### What absence means
+
+If a user has **no `has_role` claim**, it means one of:
+1. The engine found no keyword matches in bio or messages for any role
+2. The confidence for the top role was below the threshold (`minClaimConfidence`)
+3. All evidence was membership-only (no bio/message/feature evidence)
+
+In all three cases, an **abstention** was logged in `abstention_log`. To see why a claim was not emitted:
+
+```sql
+SELECT * FROM abstention_log
+WHERE subject_user_id = <user_id>
+ORDER BY generated_at;
+```
+
+### Confidence is relative, not absolute
+
+A confidence of 0.72 means "72% of the softmax probability mass for this category landed on this label." It does **not** mean "72% chance this is correct." A user with only one weak keyword match might get a high confidence simply because no other label had any evidence at all. Always check the `evidence` array.
 
 ---
 
@@ -415,6 +484,243 @@ WHERE NOT EXISTS (
 );
 ```
 
+**7. Abstention log — why claims were NOT emitted:**
+```sql
+SELECT
+  u.display_name,
+  a.predicate,
+  a.reason_code,
+  a.details,
+  a.model_version,
+  a.generated_at
+FROM abstention_log a
+JOIN users u ON u.id = a.subject_user_id
+ORDER BY u.display_name, a.predicate;
+```
+
+**8. Claims with model version (idempotency check):**
+```sql
+SELECT
+  u.display_name,
+  c.predicate,
+  c.label,
+  c.model_version,
+  COUNT(ce.id) AS evidence_count
+FROM claims c
+JOIN users u ON u.id = c.user_id
+LEFT JOIN claim_evidence ce ON ce.claim_id = c.id
+GROUP BY u.display_name, c.predicate, c.label, c.model_version
+ORDER BY u.display_name;
+```
+
+---
+
+## Constraint Verification
+
+These queries let you **prove** the database-level anti-hallucination constraints are active. Run them in DBeaver (or any SQL client) against `localhost:5432/tgprofile`.
+
+### List all constraint triggers
+
+```sql
+SELECT
+  tg.tgname       AS trigger_name,
+  cl.relname      AS table_name,
+  CASE tg.tgtype & 66
+    WHEN 2  THEN 'BEFORE'
+    WHEN 66 THEN 'INSTEAD OF'
+    ELSE 'AFTER'
+  END              AS timing,
+  CASE
+    WHEN tg.tgtype & 4  > 0 AND tg.tgtype & 8  > 0 AND tg.tgtype & 16 > 0 THEN 'INSERT OR UPDATE OR DELETE'
+    WHEN tg.tgtype & 4  > 0 AND tg.tgtype & 8  > 0 THEN 'INSERT OR UPDATE'
+    WHEN tg.tgtype & 4  > 0 AND tg.tgtype & 16 > 0 THEN 'INSERT OR DELETE'
+    WHEN tg.tgtype & 8  > 0 AND tg.tgtype & 16 > 0 THEN 'UPDATE OR DELETE'
+    WHEN tg.tgtype & 4  > 0 THEN 'INSERT'
+    WHEN tg.tgtype & 8  > 0 THEN 'UPDATE'
+    WHEN tg.tgtype & 16 > 0 THEN 'DELETE'
+  END              AS events,
+  tg.tgdeferrable  AS deferrable,
+  tg.tginitdeferred AS initially_deferred,
+  p.proname        AS function_name
+FROM pg_trigger tg
+JOIN pg_class cl ON cl.oid = tg.tgrelid
+JOIN pg_proc  p  ON p.oid = tg.tgfoid
+WHERE cl.relname IN ('claims', 'claim_evidence')
+  AND NOT tg.tgisinternal
+ORDER BY cl.relname, tg.tgname;
+```
+
+**Expected output: 4 rows**, all with `deferrable = true` and `initially_deferred = true`:
+
+| trigger_name | table_name | timing | events | deferrable | initially_deferred |
+|---|---|---|---|---|---|
+| `claim_must_have_evidence` | claims | AFTER | INSERT OR UPDATE | true | true |
+| `claim_needs_real_evidence` | claims | AFTER | INSERT OR UPDATE | true | true |
+| `claim_validate_object_value` | claims | AFTER | INSERT OR UPDATE | true | true |
+| `evidence_change_revalidate_claim` | claim_evidence | AFTER | UPDATE OR DELETE | true | true |
+
+### Inspect trigger function source
+
+To read the body of any trigger function:
+
+```sql
+SELECT prosrc
+FROM pg_proc
+WHERE proname = 'trg_claim_must_have_evidence';
+-- Replace with: trg_claim_needs_real_evidence, trg_claim_validate_object_value,
+--               trg_evidence_change_revalidate_claim
+```
+
+### Verify the unique index (idempotent upserts)
+
+```sql
+SELECT indexname, indexdef
+FROM pg_indexes
+WHERE tablename = 'claims'
+  AND indexname = 'idx_claims_unique_per_version';
+```
+
+**Expected:** one row with `CREATE UNIQUE INDEX idx_claims_unique_per_version ON public.claims USING btree (subject_user_id, predicate, object_value, model_version)`.
+
+---
+
+## Negative Test Runbook
+
+These SQL scripts prove the constraint triggers **actually reject** invalid data. Run each one — every test should fail with a `RAISE EXCEPTION` error at `COMMIT`.
+
+> ⚠️ Each test runs in its own transaction and is designed to **fail**. Your SQL client will show an error — that is the expected outcome.
+
+### Test 1 — Bare claim (no evidence)
+
+A claim with zero evidence rows must be rejected by `claim_must_have_evidence`.
+
+```sql
+BEGIN;
+  INSERT INTO claims (subject_user_id, predicate, object_value, confidence, status, model_version)
+  SELECT id, 'has_role', 'builder', 0.5, 'tentative', 'test'
+  FROM users LIMIT 1;
+COMMIT;  -- ❌ ERROR: Claim <id> has no evidence rows
+```
+
+### Test 2 — `has_topic_affinity` with membership-only evidence
+
+`has_topic_affinity` requires non-membership evidence (enforced since Phase B).
+
+```sql
+BEGIN;
+  WITH ins AS (
+    INSERT INTO claims (subject_user_id, predicate, object_value, confidence, status, model_version)
+    SELECT id, 'has_topic_affinity', 'DeFi', 0.5, 'tentative', 'test'
+    FROM users LIMIT 1
+    RETURNING id
+  )
+  INSERT INTO claim_evidence (claim_id, evidence_type, evidence_ref, weight)
+  SELECT ins.id, 'membership', 'member_of:bd', 0.3 FROM ins;
+COMMIT;  -- ❌ ERROR: Claim <id> (has_topic_affinity) has no non-membership evidence
+```
+
+### Test 3 — `has_role` with membership-only evidence
+
+```sql
+BEGIN;
+  WITH ins AS (
+    INSERT INTO claims (subject_user_id, predicate, object_value, confidence, status, model_version)
+    SELECT id, 'has_role', 'builder', 0.5, 'tentative', 'test'
+    FROM users LIMIT 1
+    RETURNING id
+  )
+  INSERT INTO claim_evidence (claim_id, evidence_type, evidence_ref, weight)
+  SELECT ins.id, 'membership', 'member_of:bd', 0.3 FROM ins;
+COMMIT;  -- ❌ ERROR: Claim <id> (has_role) has no non-membership evidence
+```
+
+### Test 4a — `has_role` with invalid ENUM value
+
+`object_value` must be a valid `role_label` ENUM member.
+
+```sql
+BEGIN;
+  WITH ins AS (
+    INSERT INTO claims (subject_user_id, predicate, object_value, confidence, status, model_version)
+    SELECT id, 'has_role', 'buildre', 0.5, 'tentative', 'test'  -- typo!
+    FROM users LIMIT 1
+    RETURNING id
+  )
+  INSERT INTO claim_evidence (claim_id, evidence_type, evidence_ref, weight)
+  SELECT ins.id, 'bio', 'bio_keyword:builder', 3.0 FROM ins;
+COMMIT;  -- ❌ ERROR: invalid input value for enum role_label: "buildre"
+```
+
+### Test 4b — `has_intent` with invalid ENUM value
+
+```sql
+BEGIN;
+  WITH ins AS (
+    INSERT INTO claims (subject_user_id, predicate, object_value, confidence, status, model_version)
+    SELECT id, 'has_intent', 'vibing', 0.5, 'tentative', 'test'  -- not a real intent
+    FROM users LIMIT 1
+    RETURNING id
+  )
+  INSERT INTO claim_evidence (claim_id, evidence_type, evidence_ref, weight)
+  SELECT ins.id, 'bio', 'bio_keyword:networking', 3.0 FROM ins;
+COMMIT;  -- ❌ ERROR: invalid input value for enum intent_label: "vibing"
+```
+
+### Test 4c — `affiliated_with` empty value
+
+Free-text predicates must have a non-empty `object_value`.
+
+```sql
+BEGIN;
+  WITH ins AS (
+    INSERT INTO claims (subject_user_id, predicate, object_value, confidence, status, model_version)
+    SELECT id, 'affiliated_with', '', 0.5, 'tentative', 'test'  -- empty!
+    FROM users LIMIT 1
+    RETURNING id
+  )
+  INSERT INTO claim_evidence (claim_id, evidence_type, evidence_ref, weight)
+  SELECT ins.id, 'bio', 'bio_keyword:org', 3.0 FROM ins;
+COMMIT;  -- ❌ ERROR: Claim <id> (affiliated_with) has empty object_value
+```
+
+### Test 5 — UPDATE predicate to bypass trigger
+
+Updating an existing claim's predicate must be re-validated.
+
+```sql
+BEGIN;
+  UPDATE claims
+  SET predicate = 'has_topic_affinity'
+  WHERE predicate = 'affiliated_with'
+    AND id = (SELECT id FROM claims WHERE predicate = 'affiliated_with' LIMIT 1);
+COMMIT;  -- ❌ ERROR: Claim <id> (has_topic_affinity) has no non-membership evidence
+-- (Fails because the existing evidence was all membership-type, or the claim doesn't exist)
+```
+
+> **Note:** Test 5 only applies if there is an `affiliated_with` claim in the database. If not, the UPDATE is a no-op and the test is vacuously safe.
+
+### Positive test — valid claim passes
+
+This test should **succeed** (no error):
+
+```sql
+BEGIN;
+  WITH ins AS (
+    INSERT INTO claims (subject_user_id, predicate, object_value, confidence, status, model_version)
+    SELECT id, 'has_role', 'builder', 0.65, 'supported', 'test-positive'
+    FROM users LIMIT 1
+    RETURNING id
+  )
+  INSERT INTO claim_evidence (claim_id, evidence_type, evidence_ref, weight)
+  VALUES
+    ((SELECT id FROM ins), 'bio', 'bio_keyword:builder', 3.0),
+    ((SELECT id FROM ins), 'membership', 'member_of:bd', 0.3);
+COMMIT;  -- ✅ SUCCESS
+
+-- Cleanup:
+DELETE FROM claims WHERE model_version = 'test-positive';
+```
+
 ---
 
 ## Configuration
@@ -427,6 +733,36 @@ WHERE NOT EXISTS (
 | `POSTGRES_PASSWORD` | `localdev` | Database password |
 | `POSTGRES_DB` | `tgprofile` | Database name |
 | `POSTGRES_PORT` | `5432` | Host port for Postgres |
+| `INFERENCE_CONFIG` | `config/inference.v0.2.0.json` | Path to versioned inference config file |
+
+### Inference Config (`config/inference.v0.2.0.json`)
+
+The inference engine is configured via a **versioned JSON file**. This is the single source of truth for priors, gating thresholds, and model version:
+
+```json
+{
+  "version": "v0.2.0",
+  "gating": {
+    "minNonMembershipEvidence": 1,
+    "minClaimConfidence": 0.15
+  },
+  "rolePriors": {
+    "bd": { "bd": 0.5, "builder": 0.1, ... },
+    ...
+  },
+  "intentPriors": { ... }
+}
+```
+
+| Field | Purpose |
+|-------|---------|
+| `version` | Stamped on every claim and abstention → ties output to config |
+| `gating.minNonMembershipEvidence` | Minimum non-membership evidence rows required for role/intent/topic claims |
+| `gating.minClaimConfidence` | Minimum softmax probability to emit a claim |
+| `rolePriors[groupKind][roleLabel]` | Additive prior weight for each role given group membership |
+| `intentPriors[groupKind][intentLabel]` | Additive prior weight for each intent given group membership |
+
+To create a new config version: copy the file, change `version`, adjust weights, and set `INFERENCE_CONFIG` to point to the new file. Old claims (tagged with the old version) remain untouched.
 
 ### Application Config (`src/config/app-config.ts`)
 
@@ -434,12 +770,6 @@ WHERE NOT EXISTS (
 |---------|---------|-------------|
 | `dropRawTextAfterFeatures` | `false` | If true, scrub raw text after feature computation |
 | `pseudonymizeExternalIds` | `false` | If true, hash external IDs before storage |
-| `minNonMembershipEvidence` | `1` | Minimum non-membership evidence for role/intent claims |
-| `minClaimConfidence` | `0.15` | Minimum softmax probability to emit a claim |
-
-### Priors (`src/config/priors.ts`)
-
-Role and intent priors are configured per `group_kind`. These are small additive weights (0.1–0.5) that nudge the scoring based on what kind of group a user appears in. They are **not** sufficient on their own to generate a claim — additional evidence is always required.
 
 ---
 
@@ -447,38 +777,43 @@ Role and intent priors are configured per `group_kind`. These are small additive
 
 ```
 telethon/
+├── config/
+│   └── inference.v0.2.0.json     # Versioned inference config (priors + gating)
 ├── data/
 │   ├── exports/          # Place Telegram JSON exports here (gitignored)
 │   └── output/           # Generated profiles appear here (gitignored)
 ├── db/
 │   └── migrations/
 │       ├── 20260206120000_create_schema.sql
-│       └── 20260206120100_claim_evidence_triggers.sql
+│       ├── 20260206120100_claim_evidence_triggers.sql
+│       ├── 20260206130000_harden_claim_constraints.sql
+│       └── 20260206140000_abstention_log_and_claims_unique.sql
 ├── src/
 │   ├── cli/
 │   │   ├── ingest.ts
 │   │   ├── compute-features.ts
-│   │   ├── infer-claims.ts
+│   │   ├── infer-claims.ts       # Loads config, writes claims + abstentions
 │   │   └── export-profiles.ts
 │   ├── config/
-│   │   ├── taxonomies.ts       # ENUMs & type definitions
-│   │   ├── priors.ts           # Role/intent priors per group_kind
-│   │   └── app-config.ts       # Feature flags & thresholds
+│   │   ├── taxonomies.ts         # ENUMs & type definitions
+│   │   ├── priors.ts             # Legacy priors (no longer imported by engine)
+│   │   ├── app-config.ts         # Feature flags
+│   │   └── inference-config.ts   # Loads versioned JSON config
 │   ├── db/
-│   │   └── index.ts            # Postgres connection pool
+│   │   └── index.ts              # Postgres connection pool
 │   ├── inference/
-│   │   ├── engine.ts           # Deterministic scoring engine
-│   │   └── keywords.ts         # Bio/message keyword dictionaries
+│   │   ├── engine.ts             # Deterministic scoring + claim/abstention writes
+│   │   └── keywords.ts           # Bio/message keyword dictionaries
 │   ├── parsers/
-│   │   └── telegram.ts         # Zod schemas for Telegram export JSON
-│   └── utils.ts                # SHA-256, arg parsing, helpers
-├── .env                        # Local database credentials (gitignored)
+│   │   └── telegram.ts           # Zod schemas for Telegram export JSON
+│   └── utils.ts                  # SHA-256, arg parsing, helpers
+├── .env                          # Local database credentials (gitignored)
 ├── .gitignore
 ├── docker-compose.yml
 ├── Makefile
 ├── package.json
 ├── tsconfig.json
-└── README.md                   # ← You are here
+└── README.md                     # ← You are here
 ```
 
 ---
