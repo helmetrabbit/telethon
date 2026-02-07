@@ -36,7 +36,7 @@ const PAGE = parseInt(getArg('page', '1'), 10);
 const MAX_MSGS = parseInt(getArg('max-msgs', '200'), 10);
 const UNCATEGORIZED_COUNT = parseInt(getArg('uncategorized', '5'), 10);
 const OUT_DIR = getArg('out-dir', 'data/output');
-const MODEL_VERSION = getArg('model-version', 'v0.5.7');
+const MODEL_VERSION = getArg('model-version', 'v0.5.8');
 
 // ── Main ────────────────────────────────────────────────
 

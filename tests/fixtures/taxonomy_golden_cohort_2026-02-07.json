@@ -1,5 +1,5 @@
 {
-  "_comment": "Golden cohort — page 2 users. Locked at v0.5.7. Run with: npm run golden",
+  "_comment": "Golden cohort — page 2 users. Updated at v0.5.8. Run with: npm run golden",
   "cases": [
     {
       "id": "mahi-3159",
@@ -228,10 +228,10 @@
     {
       "id": "pandu-3056",
       "user_id": 3056,
-      "description": "Pandu — gated",
-      "expected_role": null,
+      "description": "Pandu — BD for Crust (detected from message self-ID)",
+      "expected_role": "bd",
       "expected_intent": null,
-      "notes": "No significant role signals."
+      "notes": "v0.5.8: bd_for_org_msg fires on 'BD for Crust'. evaluating_investment 'back' false positive fixed."
     },
     {
       "id": "hrushi-4034",
@@ -244,10 +244,10 @@
     {
       "id": "paulo-3146",
       "user_id": 3146,
-      "description": "Paulo Gouveia — gated",
-      "expected_role": null,
+      "description": "Paulo Gouveia — BD (Head of Growth detected from messages)",
+      "expected_role": "bd",
       "expected_intent": null,
-      "notes": "No significant role signals."
+      "notes": "v0.5.8: bd_title_msg fires on 'Head of Growth' pattern. Previously gated."
     },
     {
       "id": "mike-3827",

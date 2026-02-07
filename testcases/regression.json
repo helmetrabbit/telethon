@@ -449,6 +449,208 @@
       "forbidden": [
         { "predicate": "affiliated_with", "value": "Developer" }
       ]
+    },
+    {
+      "id": "pandu-back-no-evaluating",
+      "description": "v0.5.8: 'go back to calendly' must NOT trigger evaluating intent — bare 'back' is not an investment signal",
+      "displayName": "Pandu",
+      "bio": null,
+      "messages": [
+        "Yeah. I'm thinking to go back to calendly just for this option lol",
+        "Let me check the schedule",
+        "I'll call you back later"
+      ],
+      "memberGroupKinds": ["bd"],
+      "totalMsgCount": 5,
+      "expected": [],
+      "forbidden": [
+        { "predicate": "has_intent", "value": "evaluating" }
+      ]
+    },
+    {
+      "id": "schedule-alone-no-evaluating",
+      "description": "v0.5.8: Bare scheduling words (schedule, call, calendly, meeting) must NOT trigger evaluating without investment context",
+      "displayName": "TestUser",
+      "bio": null,
+      "messages": [
+        "Let's schedule a call",
+        "Check my calendly for availability",
+        "We have a meeting at 3pm",
+        "Can you call me tomorrow?"
+      ],
+      "memberGroupKinds": ["bd"],
+      "totalMsgCount": 8,
+      "expected": [],
+      "forbidden": [
+        { "predicate": "has_intent", "value": "evaluating" }
+      ]
+    },
+    {
+      "id": "schedule-with-investment-evaluating",
+      "description": "v0.5.8: Schedule + investment context SHOULD trigger evaluating",
+      "displayName": "TestInvestor",
+      "bio": null,
+      "messages": [
+        "Let's schedule a call to discuss the investment opportunity",
+        "Can we set up a meeting about your series A raise?"
+      ],
+      "memberGroupKinds": ["bd"],
+      "totalMsgCount": 8,
+      "expected": [
+        { "predicate": "has_intent", "value": "evaluating" }
+      ],
+      "forbidden": []
+    },
+    {
+      "id": "bd-self-id-msg",
+      "description": "v0.5.8: 'BD for Crust' in messages should trigger BD role",
+      "displayName": "Pandu",
+      "bio": null,
+      "messages": [
+        "I do BD for Crust Network",
+        "Looking to partner with protocols in the DeFi space",
+        "DMs are open if you want to collaborate",
+        "We're seeking ecosystem partners for Crust",
+        "Warm intro would be great",
+        "Let's explore integration opportunities"
+      ],
+      "memberGroupKinds": ["bd"],
+      "totalMsgCount": 20,
+      "expected": [
+        { "predicate": "has_role", "value": "bd" }
+      ],
+      "forbidden": []
+    },
+    {
+      "id": "head-of-growth-bd",
+      "description": "v0.5.8: 'Head of Growth at X' should trigger BD role",
+      "displayName": "Paulo",
+      "bio": null,
+      "messages": [
+        "I'm Head of Growth at Quill Protocol",
+        "Let's explore a partnership",
+        "Looking for integration partners",
+        "DMs open for collabs",
+        "Growth & Partnerships is what I do"
+      ],
+      "memberGroupKinds": ["bd"],
+      "totalMsgCount": 15,
+      "expected": [
+        { "predicate": "has_role", "value": "bd" }
+      ],
+      "forbidden": []
+    },
+    {
+      "id": "journalist-media-kol",
+      "description": "v0.5.8: 'I'm a journalist' in messages should trigger media_kol role",
+      "displayName": "Zoran",
+      "bio": null,
+      "messages": [
+        "I'm a journalist covering the web3 space",
+        "I write for CoinDesk about DeFi protocols",
+        "Working on an article about DEX aggregation"
+      ],
+      "memberGroupKinds": ["general_chat"],
+      "totalMsgCount": 10,
+      "expected": [
+        { "predicate": "has_role", "value": "media_kol" }
+      ],
+      "forbidden": [
+        { "predicate": "has_role", "value": "vendor_agency" }
+      ]
+    },
+    {
+      "id": "support-giving-direction",
+      "description": "v0.5.8: 'I can help you' should be support_giving, NOT support_seeking",
+      "displayName": "Vee",
+      "bio": null,
+      "messages": [
+        "I can help you with that integration",
+        "Happy to help with the setup",
+        "Let me help you debug the issue",
+        "Try this approach instead",
+        "Here's how you can fix it"
+      ],
+      "memberGroupKinds": ["general_chat"],
+      "totalMsgCount": 15,
+      "expected": [
+        { "predicate": "has_intent", "value": "support_giving" }
+      ],
+      "forbidden": [
+        { "predicate": "has_intent", "value": "support_seeking" }
+      ]
+    },
+    {
+      "id": "support-seeking-still-works",
+      "description": "v0.5.8: 'need help' / 'stuck' should still trigger support_seeking",
+      "displayName": "TestUser2",
+      "bio": null,
+      "messages": [
+        "I need help with this error",
+        "I'm stuck on the deployment",
+        "How do I fix this bug?",
+        "Can you help me with this issue?"
+      ],
+      "memberGroupKinds": ["general_chat"],
+      "totalMsgCount": 10,
+      "expected": [
+        { "predicate": "has_intent", "value": "support_seeking" }
+      ],
+      "forbidden": []
+    },
+    {
+      "id": "feature-only-intent-gated",
+      "description": "v0.5.8: Feature-only evidence (reply_ratio, mentions) must NOT originate intent claims",
+      "displayName": "Jay",
+      "bio": null,
+      "messages": [
+        "Sure", "Thanks", "Ok", "Agreed", "Yes", "Right", "Cool", "Nice",
+        "Sounds good", "Perfect", "Great", "Awesome"
+      ],
+      "memberGroupKinds": ["bd"],
+      "totalMsgCount": 12,
+      "totalReplyCount": 10,
+      "totalMentionCount": 8,
+      "expected": [],
+      "forbidden": [
+        { "predicate": "has_intent", "value": "support_giving" },
+        { "predicate": "has_intent", "value": "networking" }
+      ]
+    },
+    {
+      "id": "hiring-frontend-developer",
+      "description": "v0.5.8: 'looking for a frontend developer' should trigger hiring intent",
+      "displayName": "Mike HR",
+      "bio": null,
+      "messages": [
+        "We're looking for a frontend developer to join our team",
+        "Hiring senior Solidity engineers — DM me",
+        "We need a backend dev for our protocol",
+        "Open roles for smart contract developers"
+      ],
+      "memberGroupKinds": ["bd"],
+      "totalMsgCount": 15,
+      "expected": [
+        { "predicate": "has_intent", "value": "hiring" }
+      ],
+      "forbidden": []
+    },
+    {
+      "id": "builder-tech-alone-weak",
+      "description": "v0.5.8: 'smart contract' alone (without builder-action or dev identity) should be weak — builder may not win",
+      "displayName": "SalesGuy",
+      "bio": null,
+      "messages": [
+        "Our smart contract audit is complete",
+        "The smart contract is live on mainnet",
+        "Check out our smart contract integration"
+      ],
+      "memberGroupKinds": ["bd"],
+      "totalMsgCount": 10,
+      "expected": [],
+      "forbidden": [
+        { "predicate": "has_role", "value": "builder", "status": "supported" }
+      ]
     }
   ]
 }

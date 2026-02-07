@@ -468,6 +468,28 @@ export function scoreUser(input: UserInferenceInput, config: InferenceConfig): U
     });
   }
 
+  // Fix v0.5.8: builder_tech alone (without builder_action or dev identity from bio/display_name)
+  // is not sufficient — "smart contract" appears in sales/BD conversations too.
+  // If builder evidence is ONLY from builder_tech tags, halve the weight.
+  const hasBuilderTechMsg = [...msgRoleHits.keys()].some((k) => k === 'builder:builder_tech');
+  const hasBuilderActionMsg = [...msgRoleHits.keys()].some((k) => k === 'builder:builder_action');
+  const hasBuilderBioOrDN = roleEvidence.get('builder')!.some(
+    (e) => e.evidence_type === 'bio' || e.evidence_type === 'display_name',
+  );
+  if (hasBuilderTechMsg && !hasBuilderActionMsg && !hasBuilderBioOrDN) {
+    // builder_tech alone — discount the builder score by half of what builder_tech contributed
+    const techContrib = roleEvidence.get('builder')!
+      .filter((e) => e.evidence_ref.startsWith('msg:builder_tech'))
+      .reduce((sum, e) => sum + e.weight, 0);
+    const penalty = -(techContrib * 0.5);
+    roleScores.set('builder', (roleScores.get('builder') ?? 0) + penalty);
+    roleEvidence.get('builder')!.push({
+      evidence_type: 'message',
+      evidence_ref: 'msg:builder_tech_alone_discount',
+      weight: parseFloat(penalty.toFixed(3)),
+    });
+  }
+
   // Fix v0.5.5 #2: Directory/marketplace/broker override → force vendor_agency, suppress bd
   // If message evidence includes vendor_directory_msg or vendor_marketplace_msg, the user
   // operates a directory/marketplace (e.g. Semoto), NOT doing BD.  Clamp bd score to 0
@@ -601,9 +623,19 @@ export function scoreUser(input: UserInferenceInput, config: InferenceConfig): U
     const nonMembershipEvidence = topIntent.evidence.filter(
       (e) => e.evidence_type !== 'membership',
     );
+    // Fix v0.5.8: Feature-only evidence (reply_ratio, mention_count, groups_active)
+    // should NOT originate an intent claim on its own. Require at least one
+    // non-membership, non-feature evidence source (bio, message, display_name).
+    const nonMembershipNonFeatureEvidence = topIntent.evidence.filter(
+      (e) => e.evidence_type !== 'membership' && e.evidence_type !== 'feature',
+    );
     if (nonMembershipEvidence.length < config.gating.minNonMembershipEvidence) {
       result.gatingNotes.push(
         `intent:${topIntent.label} GATED — only ${nonMembershipEvidence.length} non-membership evidence (need ≥${config.gating.minNonMembershipEvidence})`,
+      );
+    } else if (nonMembershipNonFeatureEvidence.length === 0) {
+      result.gatingNotes.push(
+        `intent:${topIntent.label} GATED — feature-only evidence (no bio/message/display_name support)`,
       );
     } else if (topIntent.probability < config.gating.minClaimConfidence) {
       result.gatingNotes.push(

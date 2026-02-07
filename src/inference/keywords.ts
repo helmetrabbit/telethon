@@ -143,6 +143,12 @@ export const MSG_ROLE_KEYWORDS: KeywordSignal<Role>[] = [
   // BD (fix v0.5.4: added partnerships plural, business development, listing/integration BD patterns)
   { pattern: /\b(partnerships?|collab|intro\s+to|warm\s+intro|deal)\b/i, label: 'bd', weight: 1.0, tag: 'bd_action' },
   { pattern: /\b(business\s+develop|biz\s*dev)\b/i, label: 'bd', weight: 1.5, tag: 'bd_role_msg' },
+  // Fix v0.5.8: Self-ID BD patterns — "BD for Crust", "I'm in BD at…", "Head of Growth at…"
+  // Require first-person or self-declare context to avoid 3rd-party references.
+  { pattern: /\b(?:I(?:'m|\s+am)\s+(?:in\s+)?BD|(?:I|we)\s+(?:do|handle|run|lead)\s+BD)\b/i, label: 'bd', weight: 1.5, tag: 'bd_self_id_msg' },
+  { pattern: /\bBD\s+(?:for|at|with)\s+[A-Z]/i, label: 'bd', weight: 1.5, tag: 'bd_for_org_msg' },
+  { pattern: /\b(?:head|director|vp)\s+of\s+(?:growth|partnerships?|BD|business\s+dev)/i, label: 'bd', weight: 1.5, tag: 'bd_title_msg' },
+  { pattern: /\b(?:growth\s+(?:&|and)\s+partnerships?|partnerships?\s+(?:&|and)\s+growth)\b/i, label: 'bd', weight: 1.5, tag: 'bd_growth_partnerships_msg' },
   // Token/chain listing patterns — BD signals for protocol/project reps (Aaron/HoudiniSwap)
   // Fix v0.5.5: Made more specific to CEX/DEX/chain context to avoid matching directory listings
   { pattern: /\b(token\s+listing|chain\s+listing|CEX\s+listing|DEX\s+listing)\b/i, label: 'bd', weight: 1.5, tag: 'bd_listing_msg' },
@@ -160,6 +166,11 @@ export const MSG_ROLE_KEYWORDS: KeywordSignal<Role>[] = [
   // NOTE: media_kol removed from msg role signals — discussing/selling KOL services doesn't
   //       make someone a KOL. Erhan (EAK agency) mentions "KOL" 7x but is a vendor, not a KOL.
   //       media_kol should only fire from display_name/bio self-identification.
+  // Fix v0.5.8: Added first-person self-ID patterns for journalists/editors.
+  //             These require "I'm a journalist" / "I work as a reporter" — not 3rd-party references.
+  { pattern: /\b(?:I(?:'m|\s+am)\s+a\s+(?:journalist|reporter|editor|columnist|correspondent|content\s*creator))\b/i, label: 'media_kol', weight: 1.5, tag: 'media_kol_self_id_msg' },
+  { pattern: /\b(?:I\s+(?:write|cover|report)\s+(?:for|on|about))\b/i, label: 'media_kol', weight: 1.2, tag: 'media_kol_activity_msg' },
+  { pattern: /\b(?:editor[- ]in[- ]chief|managing\s+editor)\b/i, label: 'media_kol', weight: 1.5, tag: 'media_kol_title_msg' },
 
   // NOTE: market_maker removed from msg role signals — discussing liquidity/spreads doesn't
   //       make someone a market maker. Causes false positives (Rhythm, Marcelo).
@@ -211,11 +222,17 @@ export const MSG_INTENT_KEYWORDS: KeywordSignal<Intent>[] = [
   // Hiring
   // Fix v0.5.7: Removed "we're looking" (too broad — fires on BD/networking).
   //             Added "looking for" + role noun, and CV/resume patterns.
-  { pattern: /\b(hiring|recruit|job\s*(?:posting|opening)|open\s*roles?|vacancy|send\s+(?:your\s+)?(?:CV|resume)|looking\s+for\s+(?:a\s+)?(?:developer|engineer|designer|analyst|manager|lead|intern|candidate))\b/i, label: 'hiring', weight: 0.8, tag: 'hiring_msg' },
+  // Fix v0.5.8: Expanded role noun list after "looking for" to include modifiers
+  //             (e.g., "looking for a frontend developer", "looking for senior engineers").
+  //             Also added "we need a <role>" pattern.
+  { pattern: /\b(hiring|recruit|job\s*(?:posting|opening)|open\s*roles?|vacancy|send\s+(?:your\s+)?(?:CV|resume)|looking\s+for\s+(?:a\s+)?(?:(?:senior|junior|lead|staff|principal|frontend|backend|full[- ]?stack|solidity|smart\s*contract|web3|defi|blockchain|remote)\s+)*(?:developer|engineer|designer|analyst|manager|lead|intern|candidate|dev\b|devs\b)|we\s+need\s+(?:a\s+)?(?:(?:senior|junior|lead|frontend|backend)\s+)*(?:developer|engineer|designer|dev\b))\b/i, label: 'hiring', weight: 0.8, tag: 'hiring_msg' },
 
   // Support
-  { pattern: /\b(help|stuck|issue|bug|problem|how\s*do\s*i)\b/i, label: 'support_seeking', weight: 0.8, tag: 'support_seeking_msg' },
-  { pattern: /\b(try\s*this|here.s\s*how|you\s*can|solution|fix)\b/i, label: 'support_giving', weight: 0.8, tag: 'support_giving_msg' },
+  // Fix v0.5.8: Split "help" by direction. "I can help" / "happy to help" → support_giving.
+  //             "help me" / "need help" / bare "help" in question context → support_seeking.
+  //             Removed bare "help" from support_seeking to avoid mis-direction.
+  { pattern: /\b(stuck|issue|bug|problem|how\s*do\s*i|need\s+help|help\s+me|can\s+you\s+help|please\s+help)\b/i, label: 'support_seeking', weight: 0.8, tag: 'support_seeking_msg' },
+  { pattern: /\b(try\s*this|here.s\s*how|you\s*can|solution|fix|I\s+can\s+help|happy\s+to\s+help|let\s+me\s+help|glad\s+to\s+help|I(?:'ll|\s+will)\s+help)\b/i, label: 'support_giving', weight: 0.8, tag: 'support_giving_msg' },
 
   // Broadcasting — strengthened (fix #5)
   // Fix v0.5.7: Removed bare "update" (too broad — any progress message).
@@ -228,8 +245,14 @@ export const MSG_INTENT_KEYWORDS: KeywordSignal<Intent>[] = [
   { pattern: /\b(reminder|don'?t\s+miss|register\s+(?:now|here|today)|sign\s+up\s+(?:here|now))\b/i, label: 'broadcasting', weight: 1.0, tag: 'broadcasting_reminder_msg' },
 
   // Evaluating
-  { pattern: /\b(schedule|calendar|call|meeting|calendly)\b/i, label: 'evaluating', weight: 0.6, tag: 'evaluating_schedule' },
-  { pattern: /\b(investment|fund|back|series)\b/i, label: 'evaluating', weight: 0.6, tag: 'evaluating_investment' },
+  // Fix v0.5.8: Tightened — bare schedule/call/calendly/meeting alone is too noisy.
+  //             Require explicit investment context: "schedule a call to discuss investment", etc.
+  //             Pure scheduling chatter ("go back to calendly") no longer triggers evaluating.
+  { pattern: /\b(schedule|calendar|call|meeting|calendly)\b.*\b(invest|fund|evaluat|portfolio|due\s*diligence|series\s*[a-d]|raise)/i, label: 'evaluating', weight: 0.6, tag: 'evaluating_schedule' },
+  { pattern: /\b(invest|fund|evaluat|portfolio|due\s*diligence|series\s*[a-d]|raise)\b.*\b(schedule|calendar|call|meeting|calendly)/i, label: 'evaluating', weight: 0.6, tag: 'evaluating_schedule' },
+  // Fix v0.5.8: Removed bare "back" — too ambiguous ("go back to calendly", "I'll be back").
+  //             Replaced with bounded investment phrases: "backed by", "backing", "backers".
+  { pattern: /\b(investment|fund|backed\s+by|backing|backers|series)\b/i, label: 'evaluating', weight: 0.6, tag: 'evaluating_investment' },
 ];
 
 // ── Affiliation signals ────────────────────────────────
