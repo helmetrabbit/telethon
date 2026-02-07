@@ -1,5 +1,5 @@
 {
-  "_comment": "Regression test cases for inference engine. Each case defines expected and forbidden predicates for a known user. Run with: npm run regress",
+  "_comment": "Regression test cases for inference engine v0.5.6. Run with: npm run regress",
   "cases": [
     {
       "id": "drishti-solidityscan",
@@ -376,6 +376,78 @@
       "expected": [],
       "forbidden": [
         { "predicate": "affiliated_with", "value": "different projects" }
+      ]
+    },
+    {
+      "id": "jc-trader-not-org",
+      "description": "Display name 'JC | Trader' — 'Trader' is a bare title, NOT an org name. Must NOT emit affiliated_with=Trader.",
+      "displayName": "JC | Trader",
+      "bio": null,
+      "messages": [
+        "Looking for alpha on new tokens",
+        "Anyone trading the dip?",
+        "DMs open for collabs"
+      ],
+      "memberGroupKinds": ["bd"],
+      "totalMsgCount": 10,
+      "expected": [],
+      "forbidden": [
+        { "predicate": "affiliated_with", "value": "Trader" }
+      ]
+    },
+    {
+      "id": "jc-awesome-capital-is-a",
+      "description": "Display name 'JC | Awesome Capital is a VC fund' — 'is a' clause should be clamped, affiliation = Awesome Capital",
+      "displayName": "JC | Awesome Capital is a VC fund",
+      "bio": null,
+      "messages": [
+        "We at Awesome Capital focus on early-stage deals",
+        "Evaluating series A opportunities",
+        "Our fund thesis focuses on DeFi"
+      ],
+      "memberGroupKinds": ["bd"],
+      "totalMsgCount": 12,
+      "expected": [
+        { "predicate": "affiliated_with", "value": "Awesome Capital" }
+      ],
+      "forbidden": [
+        { "predicate": "affiliated_with", "value": "Awesome Capital is a VC fund" }
+      ]
+    },
+    {
+      "id": "samuel-business-developer",
+      "description": "Display name 'Samuel | Business Developer' — must classify as bd (NOT builder). 'Business Developer' != code developer.",
+      "displayName": "Samuel | Business Developer",
+      "bio": null,
+      "messages": [
+        "Looking for partnerships in the DeFi space",
+        "Let's explore integration opportunities",
+        "DMs are open for collabs",
+        "We're seeking ecosystem partners",
+        "Business development is key for growth",
+        "Warm intro would be appreciated"
+      ],
+      "memberGroupKinds": ["bd"],
+      "totalMsgCount": 20,
+      "expected": [
+        { "predicate": "has_role", "value": "bd" }
+      ],
+      "forbidden": [
+        { "predicate": "has_role", "value": "builder" },
+        { "predicate": "affiliated_with", "value": "Business Developer" }
+      ]
+    },
+    {
+      "id": "title-as-affiliation-reject",
+      "description": "Various bare titles in pipe segments should all be rejected as affiliations",
+      "displayName": "Mike | Developer",
+      "bio": null,
+      "messages": [],
+      "memberGroupKinds": ["work"],
+      "totalMsgCount": 0,
+      "expected": [],
+      "forbidden": [
+        { "predicate": "affiliated_with", "value": "Developer" }
       ]
     }
   ]

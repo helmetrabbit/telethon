@@ -291,6 +291,19 @@ export const ORG_CAPTURE_STOPWORDS = new Set([
 ]);
 
 /**
+ * Bare titles that should NEVER be treated as org names.
+ * Catches display names like "JC | Trader" where the pipe segment is a title, not a company.
+ * Applied by the org-candidate validator to ALL extraction paths.
+ */
+export const ORG_TITLE_REJECT_SET = new Set([
+  'trader', 'developer', 'engineer', 'founder', 'ceo', 'cto', 'cfo', 'cmo',
+  'bd', 'bizdev', 'marketing', 'sales', 'recruiter', 'manager', 'lead',
+  'analyst', 'investor', 'vc', 'admin', 'mod', 'community',
+  // Multi-word variants
+  'business developer', 'business development', 'biz dev',
+]);
+
+/**
  * Trailing words to strip from org captures (clause bleed-through).
  * Extended in v0.5.5 to include time/adverb words and chain qualifiers.
  */

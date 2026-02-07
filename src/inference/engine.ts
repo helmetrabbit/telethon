@@ -233,6 +233,28 @@ export function scoreUser(input: UserInferenceInput, config: InferenceConfig): U
       }
     }
 
+    // Fix v0.5.6 B: "Business Developer" / "Business Development" / "BizDev" in display name
+    // must route to BD, NOT builder.  The word "Developer" inside this compound phrase
+    // should NOT fire the dn_dev_title builder signal.
+    if (/\b(business\s+developer|business\s+development|bizdev)\b/i.test(dn)) {
+      const bdOverrideW = 4.0; // strong enough to beat dn_dev_title's 3.0
+      roleScores.set('bd', (roleScores.get('bd') ?? 0) + bdOverrideW);
+      roleEvidence.get('bd')!.push({
+        evidence_type: 'display_name',
+        evidence_ref: 'display_name:dn_business_developer_override',
+        weight: bdOverrideW,
+      });
+      // Neutralise the dn_dev_title builder signal that matched "Developer"
+      // by subtracting the same weight that dn_dev_title would have added (3.0)
+      const builderPenalty = -3.0;
+      roleScores.set('builder', (roleScores.get('builder') ?? 0) + builderPenalty);
+      roleEvidence.get('builder')!.push({
+        evidence_type: 'display_name',
+        evidence_ref: 'display_name:dn_business_developer_builder_block',
+        weight: builderPenalty,
+      });
+    }
+
     // Agency / vendor detection override (fix #4):
     // If the display name contains selling language (discount, %, pricing, services, packages),
     // this is a commercial entity, not an individual KOL. Boost vendor_agency.
