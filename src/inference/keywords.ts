@@ -70,8 +70,10 @@ export interface OrgTypeSignal {
 }
 
 export const ORG_TYPE_SIGNALS: OrgTypeSignal[] = [
-  { pattern: /\bMM\b/, orgType: 'market_maker', tag: 'org_mm' },
-  { pattern: /\b(market\s*mak|liquidity\s*provid)\b/i, orgType: 'market_maker', tag: 'org_mm_name' },
+  // Fix v0.5.7: Bare "MM" removed — too ambiguous (catches "MM DOOM", initials, etc.)
+  //             Now requires: org context ("CompanyName MM") or longform "market maker/making".
+  { pattern: /(?<=[A-Z][a-z]+\s)MM\b/, orgType: 'market_maker', tag: 'org_mm' },
+  { pattern: /\b(market\s*mak(?:er|ing)|liquidity\s*provid)\b/i, orgType: 'market_maker', tag: 'org_mm_name' },
   { pattern: /\b(exchange|CEX|DEX)\b/i, orgType: 'exchange', tag: 'org_exchange' },
   { pattern: /\b(fund|capital|ventures?|vc\b)\b/i, orgType: 'fund', tag: 'org_fund' },
   { pattern: /\b(agency|studio|consultancy)\b/i, orgType: 'agency', tag: 'org_agency' },
@@ -125,12 +127,16 @@ export const BIO_ROLE_KEYWORDS: KeywordSignal<Role>[] = [
 
 export const MSG_ROLE_KEYWORDS: KeywordSignal<Role>[] = [
   // Builder — hard technical signals only (fix v0.5.4 #2: tightened)
-  // Action verbs require actual shipping code, not discussing launches
-  { pattern: /\b(shipped|deployed|merged|refactored|committed|pushed)\b/i, label: 'builder', weight: 1.0, tag: 'builder_action' },
+  // Action verbs require first-person subject — "I/we shipped" not "they pushed"
+  // Fix v0.5.7: Added first-person constraint to avoid 3rd-party statements.
+  { pattern: /\b(?:I|we)\s+(?:shipped|deployed|merged|refactored|committed|pushed)\b/i, label: 'builder', weight: 1.0, tag: 'builder_action' },
   // Tech keywords: require HARD engineering context, not sales-pitch "API integration"
   // Removed: API, SDK (too generic — salespeople discuss these)
   // Kept: low-level tech signals that indicate actual engineering work
-  { pattern: /\b(smart\s*contract|solidity|rust|typescript|RPC|repo|github|PR\b|pull\s+request|commit|branch|bug\s*fix|stack\s*trace|error\s*log)\b/i, label: 'builder', weight: 1.0, tag: 'builder_tech' },
+  // Fix v0.5.7: "PR" now requires "#" (PR #123) or explicit "pull request";
+  //             "rust" requires word boundary (\brust\b) to avoid matching "trust".
+  //             Bare "PR" removed — too ambiguous (public relations vs pull request).
+  { pattern: /\b(smart\s*contract|solidity|\brust\b|typescript|RPC|repo|github|PR\s*#\d+|pull\s+request|commit|branch|bug\s*fix|stack\s*trace|error\s*log)\b/i, label: 'builder', weight: 1.0, tag: 'builder_tech' },
   // NOTE: removed "built", "launched" (too generic), "defi"/"tvl"/"protocol" (topic not role),
   //       "mainnet"/"testnet" (everyone discusses these), "API"/"SDK" (sales pitch language)
 
@@ -203,14 +209,19 @@ export const MSG_INTENT_KEYWORDS: KeywordSignal<Intent>[] = [
   { pattern: /\b(DM\s+(?:me|us)\s+for|reach\s+out\s+for|contact\s+(?:me|us)\s+for)\b/i, label: 'selling', weight: 0.8, tag: 'selling_cta_msg' },
 
   // Hiring
-  { pattern: /\b(hiring|recruit|job|open\s*role|we.re\s*looking)\b/i, label: 'hiring', weight: 0.8, tag: 'hiring_msg' },
+  // Fix v0.5.7: Removed "we're looking" (too broad — fires on BD/networking).
+  //             Added "looking for" + role noun, and CV/resume patterns.
+  { pattern: /\b(hiring|recruit|job\s*(?:posting|opening)|open\s*roles?|vacancy|send\s+(?:your\s+)?(?:CV|resume)|looking\s+for\s+(?:a\s+)?(?:developer|engineer|designer|analyst|manager|lead|intern|candidate))\b/i, label: 'hiring', weight: 0.8, tag: 'hiring_msg' },
 
   // Support
   { pattern: /\b(help|stuck|issue|bug|problem|how\s*do\s*i)\b/i, label: 'support_seeking', weight: 0.8, tag: 'support_seeking_msg' },
   { pattern: /\b(try\s*this|here.s\s*how|you\s*can|solution|fix)\b/i, label: 'support_giving', weight: 0.8, tag: 'support_giving_msg' },
 
   // Broadcasting — strengthened (fix #5)
-  { pattern: /\b(announce|update|release|congrat)\b/i, label: 'broadcasting', weight: 0.8, tag: 'broadcasting_msg' },
+  // Fix v0.5.7: Removed bare "update" (too broad — any progress message).
+  //             Kept announce/release/congrat. "update" now requires link or explicit context.
+  { pattern: /\b(announce|release|congrat)\b/i, label: 'broadcasting', weight: 0.8, tag: 'broadcasting_msg' },
+  { pattern: /\bupdate\b.*(?:https?:\/\/|\bcheck\s+(?:out|it))/i, label: 'broadcasting', weight: 0.8, tag: 'broadcasting_update_link_msg' },
   { pattern: /\b(webinar|live\s+session|ama\b|spaces\b|twitter\s+spaces)\b/i, label: 'broadcasting', weight: 1.0, tag: 'broadcasting_event_msg' },
   { pattern: /\b(we\s+(?:launched|shipped|released|just\s+dropped)|check\s+(?:out|it\s+out))\b/i, label: 'broadcasting', weight: 1.0, tag: 'broadcasting_launch_msg' },
   { pattern: /(?:luma\.com|lu\.ma|eventbrite|meetup\.com)\b/i, label: 'broadcasting', weight: 1.2, tag: 'broadcasting_link_msg' },
@@ -335,7 +346,12 @@ export const DISPLAY_NAME_ROLE_KEYWORDS: KeywordSignal<Role>[] = [
   // NOTE: removed loose "builder|building|hacker" — too ambiguous in crypto display names
 
   // Investor / Analyst
-  { pattern: /\b(investor|vc\b|venture|capital|fund|analyst|portfolio)\b/i, label: 'investor_analyst', weight: 3.0, tag: 'dn_investor_title' },
+  // Fix v0.5.7: Split VC into separate pattern requiring title context.
+  //             "Bloccelerate VC" or "VC at Firm" matches, but "Projects and VC" does not.
+  { pattern: /\b(investor|venture|capital|fund|analyst|portfolio)\b/i, label: 'investor_analyst', weight: 3.0, tag: 'dn_investor_title' },
+  // VC requires: preceded by an org name (Uppercase word) OR followed by "at/fund/partner/capital"
+  // Negative: "and VC" / "or VC" / "& VC" context rejected
+  { pattern: /(?:(?<=[A-Z][a-z]+\s)|(?:^|\|\s*))VC\b(?!\s+(?:in|and|or|&))/i, label: 'investor_analyst', weight: 3.0, tag: 'dn_investor_vc' },
 
   // Recruiter
   { pattern: /\b(recruiter|recruiting|talent|headhunter|staffing|hiring)\b/i, label: 'recruiter', weight: 3.0, tag: 'dn_recruiter_title' },

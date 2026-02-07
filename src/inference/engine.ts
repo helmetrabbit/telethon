@@ -65,6 +65,35 @@ export interface ScoredLabel<T extends string> {
   evidence: EvidenceRow[];
 }
 
+export interface MessageMeta {
+  id: number;
+  text: string;
+  sent_at: string;
+}
+
+export interface MessageHit {
+  message_id: number;
+  sent_at: string;
+  text_snippet: string;
+  matched_span: string;
+  pattern_id: string;
+  label: string;
+  label_type: 'role' | 'intent';
+  weight: number;
+}
+
+export interface LabelScoreRow {
+  label: string;
+  raw_score: number;
+  probability: number;
+}
+
+export interface TraceResult {
+  role_scores: LabelScoreRow[];
+  intent_scores: LabelScoreRow[];
+  message_hits: MessageHit[];
+}
+
 export interface UserInferenceInput {
   userId: number;
   displayName: string | null;
@@ -73,6 +102,10 @@ export interface UserInferenceInput {
   memberGroupKinds: GroupKind[];
   /** All message texts (plain) */
   messageTexts: string[];
+  /** Message metadata for trace mode (parallel array to messageTexts) */
+  messageMetas?: MessageMeta[];
+  /** Enable detailed trace capture */
+  trace?: boolean;
   /** Aggregated features */
   totalMsgCount: number;
   totalReplyCount: number;
@@ -102,6 +135,8 @@ export interface UserInferenceResult {
   orgTypes: OrgTypeResult[];
   /** Notes about gating decisions */
   gatingNotes: string[];
+  /** Detailed trace (only populated when input.trace=true) */
+  trace?: TraceResult;
 }
 
 // ── Softmax ─────────────────────────────────────────────
@@ -319,20 +354,50 @@ export function scoreUser(input: UserInferenceInput, config: InferenceConfig): U
   // Scan a sample of messages (up to 200) for patterns.
 
   const messageSample = input.messageTexts.slice(0, 200);
+  const metaSample = input.messageMetas?.slice(0, 200);
   const msgRoleHits = new Map<string, number>(); // tag → count
   const msgIntentHits = new Map<string, number>();
+  const messageHits: MessageHit[] = [];  // trace mode only
 
-  for (const text of messageSample) {
+  for (let mi = 0; mi < messageSample.length; mi++) {
+    const text = messageSample[mi];
+    const meta = metaSample?.[mi];
     for (const kw of MSG_ROLE_KEYWORDS) {
-      if (kw.pattern.test(text)) {
+      const m = text.match(kw.pattern);
+      if (m) {
         const key = `${kw.label}:${kw.tag}`;
         msgRoleHits.set(key, (msgRoleHits.get(key) ?? 0) + 1);
+        if (input.trace && meta) {
+          messageHits.push({
+            message_id: meta.id,
+            sent_at: meta.sent_at,
+            text_snippet: text.length > 120 ? text.slice(0, 120) + '…' : text,
+            matched_span: m[0],
+            pattern_id: kw.tag,
+            label: kw.label,
+            label_type: 'role',
+            weight: kw.weight,
+          });
+        }
       }
     }
     for (const kw of MSG_INTENT_KEYWORDS) {
-      if (kw.pattern.test(text)) {
+      const m = text.match(kw.pattern);
+      if (m) {
         const key = `${kw.label}:${kw.tag}`;
         msgIntentHits.set(key, (msgIntentHits.get(key) ?? 0) + 1);
+        if (input.trace && meta) {
+          messageHits.push({
+            message_id: meta.id,
+            sent_at: meta.sent_at,
+            text_snippet: text.length > 120 ? text.slice(0, 120) + '…' : text,
+            matched_span: m[0],
+            pattern_id: kw.tag,
+            label: kw.label,
+            label_type: 'intent',
+            weight: kw.weight,
+          });
+        }
       }
     }
 
@@ -547,6 +612,30 @@ export function scoreUser(input: UserInferenceInput, config: InferenceConfig): U
     } else {
       result.intentClaim = topIntent;
     }
+  }
+
+  // ── 8. Populate trace (if requested) ────────────────
+
+  if (input.trace) {
+    result.trace = {
+      role_scores: ROLES
+        .filter((r) => r !== 'unknown')
+        .map((r) => ({
+          label: r,
+          raw_score: parseFloat((roleScores.get(r) ?? 0).toFixed(4)),
+          probability: parseFloat((roleProbs.get(r) ?? 0).toFixed(6)),
+        }))
+        .sort((a, b) => b.raw_score - a.raw_score),
+      intent_scores: INTENTS
+        .filter((i) => i !== 'unknown')
+        .map((i) => ({
+          label: i,
+          raw_score: parseFloat((intentScores.get(i) ?? 0).toFixed(4)),
+          probability: parseFloat((intentProbs.get(i) ?? 0).toFixed(6)),
+        }))
+        .sort((a, b) => b.raw_score - a.raw_score),
+      message_hits: messageHits,
+    };
   }
 
   return result;

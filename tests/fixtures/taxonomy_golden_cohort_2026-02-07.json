@@ -1,0 +1,269 @@
+{
+  "_comment": "Golden cohort — page 2 users. Locked at v0.5.7. Run with: npm run golden",
+  "cases": [
+    {
+      "id": "mahi-3159",
+      "user_id": 3159,
+      "description": "BD with Growth & Partnerships in display name — clear BD",
+      "expected_role": "bd",
+      "expected_intent": "networking",
+      "notes": "Display name fires dn_bd_title + dn_bd_role. Clean."
+    },
+    {
+      "id": "kate-cryptorsy-3717",
+      "user_id": 3717,
+      "description": "Kate | Cryptorsy — 8 hits on bd_role_msg, strong BD",
+      "expected_role": "bd",
+      "expected_intent": null,
+      "notes": "Clean classification. High-confidence BD."
+    },
+    {
+      "id": "aaron-houdiniswap-3147",
+      "user_id": 3147,
+      "description": "Aaron I HoudiniSwap — clear BD listing patterns",
+      "expected_role": "bd",
+      "expected_intent": "selling",
+      "notes": "CEX/DEX listing BD patterns fire correctly."
+    },
+    {
+      "id": "pauline-2894",
+      "user_id": 2894,
+      "description": "Pauline Shangett — chatty community member, not really BD",
+      "expected_role": "builder",
+      "expected_intent": null,
+      "notes": "Weak builder signal (p=0.254) from residual tech keywords. Tentative — acceptable."
+    },
+    {
+      "id": "mike-4067",
+      "user_id": 4067,
+      "description": "Mike — hiring_msg overmatch ('we're looking' too broad). Real role unclear.",
+      "expected_role": "builder",
+      "expected_intent": null,
+      "notes": "builder_tech signals survive fix. hiring_msg dropped from 9 to fewer after 'we're looking' removal."
+    },
+    {
+      "id": "uc-5413",
+      "user_id": 5413,
+      "description": "UC — BTCWire PR services. 'PR' = public relations not pull request",
+      "expected_role": "vendor_agency",
+      "expected_intent": null,
+      "notes": "After builder_tech fix, 'PR' no longer fires as builder. vendor_agency signals from BTCWire services remain."
+    },
+    {
+      "id": "dmytro-hackenproof-5306",
+      "user_id": 5306,
+      "description": "Dmytro | CEO HackenProof — clear founder_exec",
+      "expected_role": "founder_exec",
+      "expected_intent": null,
+      "notes": "Display name CEO fires dn_founder_title. Clean."
+    },
+    {
+      "id": "filip-cookie3-6111",
+      "user_id": 6111,
+      "description": "Filip OOO | CEO Cookie3 — clear founder_exec",
+      "expected_role": "founder_exec",
+      "expected_intent": null,
+      "notes": "Display name CEO fires dn_founder_title. Clean."
+    },
+    {
+      "id": "chuck-polyflow-6705",
+      "user_id": 6705,
+      "description": "Chuck | Polyflow CFO — clear founder_exec",
+      "expected_role": "founder_exec",
+      "expected_intent": null,
+      "notes": "Display name CFO fires dn_founder_title. Clean."
+    },
+    {
+      "id": "charlie-4",
+      "user_id": 4,
+      "description": "Charlie Silent — investor_analyst signals",
+      "expected_role": "investor_analyst",
+      "expected_intent": "evaluating",
+      "notes": "Investor role from message signals."
+    },
+    {
+      "id": "gabri-50x-4821",
+      "user_id": 4821,
+      "description": "Gabri | 50x Capital — investor_analyst from display name",
+      "expected_role": "investor_analyst",
+      "expected_intent": null,
+      "notes": "Display name 'Capital' fires dn_investor_title. Clean."
+    },
+    {
+      "id": "kate-bloccelerate-5807",
+      "user_id": 5807,
+      "description": "Kate (Ksenia) Laurence | Bloccelerate VC — investor_analyst",
+      "expected_role": "investor_analyst",
+      "expected_intent": null,
+      "notes": "After dn_investor_title fix, 'VC' with 'Bloccelerate' should still match (VC follows org name)."
+    },
+    {
+      "id": "igor-hype-talent-5634",
+      "user_id": 5634,
+      "description": "Igor | Hype Talent — recruiter from display name",
+      "expected_role": "recruiter",
+      "expected_intent": null,
+      "notes": "Display name 'Talent' fires dn_recruiter_title. Clean."
+    },
+    {
+      "id": "valeria-recruiter-6014",
+      "user_id": 6014,
+      "description": "Valeria | IT Recruiter — recruiter from display name",
+      "expected_role": "recruiter",
+      "expected_intent": null,
+      "notes": "Display name 'Recruiter' fires dn_recruiter_title. Clean."
+    },
+    {
+      "id": "dave-kim-5",
+      "user_id": 5,
+      "description": "Dave Kim — recruiter from message signals",
+      "expected_role": "recruiter",
+      "expected_intent": null,
+      "notes": "Message patterns trigger recruiter_action."
+    },
+    {
+      "id": "marco-m-3293",
+      "user_id": 3293,
+      "description": "Marco M — vendor_agency (directory/marketplace)",
+      "expected_role": "vendor_agency",
+      "expected_intent": null,
+      "notes": "Directory vendor override. Clean."
+    },
+    {
+      "id": "erhan-eak-4632",
+      "user_id": 4632,
+      "description": "Erhan | EAK — vendor_agency (KOL agency)",
+      "expected_role": "vendor_agency",
+      "expected_intent": "networking",
+      "notes": "KOL agency vendor signals. Clean."
+    },
+    {
+      "id": "cotton-3465",
+      "user_id": 3465,
+      "description": "COTTON — vendor_agency with broadcasting intent",
+      "expected_role": "vendor_agency",
+      "expected_intent": "broadcasting",
+      "notes": "Strong vendor + broadcasting signals."
+    },
+    {
+      "id": "krishna-rocketx-2871",
+      "user_id": 2871,
+      "description": "Krishna | RocketX.exchange — gated (no role claim)",
+      "expected_role": null,
+      "expected_intent": "networking",
+      "notes": "Exchange in display name but insufficient role evidence."
+    },
+    {
+      "id": "bassam-n-exchange-3436",
+      "user_id": 3436,
+      "description": "Bassam | n.exchange — gated (no role claim)",
+      "expected_role": null,
+      "expected_intent": null,
+      "notes": "Exchange in display name but insufficient role evidence."
+    },
+    {
+      "id": "jay-wong-2962",
+      "user_id": 2962,
+      "description": "Jay Wong — 'Connecting People, Projects and VC' is NOT an investor title",
+      "expected_role": null,
+      "expected_intent": null,
+      "notes": "After dn_investor_title fix, 'VC' in 'Projects and VC' won't fire. No other role evidence → gated."
+    },
+    {
+      "id": "milos-arditi-2918",
+      "user_id": 2918,
+      "description": "Miloš | Arditi VC Collective — investor_analyst",
+      "expected_role": "investor_analyst",
+      "expected_intent": null,
+      "notes": "'VC' after org name 'Arditi' should still fire."
+    },
+    {
+      "id": "mm-doom-6016",
+      "user_id": 6016,
+      "description": "MM DOOM — should NOT trigger market_maker org type",
+      "expected_role": null,
+      "expected_intent": null,
+      "notes": "After org_mm fix, 'MM DOOM' won't match bare MM. No role signals."
+    },
+    {
+      "id": "nick-angelabs-6336",
+      "user_id": 6336,
+      "description": "Nick | BD at AngeLabs MM — BD from display name, org_type market_maker OK",
+      "expected_role": "bd",
+      "expected_intent": null,
+      "notes": "dn_bd fires. 'MM' after company name 'AngeLabs' should still fire org_mm (has org context)."
+    },
+    {
+      "id": "vadim-lucid-media-6817",
+      "user_id": 6817,
+      "description": "Vadim I Lucid Media — gated",
+      "expected_role": null,
+      "expected_intent": null,
+      "notes": "No significant role/intent signals."
+    },
+    {
+      "id": "kang-tk-media-6066",
+      "user_id": 6066,
+      "description": "Kang | TK Media — weak bd",
+      "expected_role": "bd",
+      "expected_intent": null,
+      "notes": "Weak BD (p=0.254) from residual message signals. Tentative."
+    },
+    {
+      "id": "web3-gate-labs-6512",
+      "user_id": 6512,
+      "description": "web3 | Gate Labs — gated",
+      "expected_role": null,
+      "expected_intent": null,
+      "notes": "No significant role signals."
+    },
+    {
+      "id": "penguin-orochi-6642",
+      "user_id": 6642,
+      "description": "Penguin|Orochi Network — gated",
+      "expected_role": null,
+      "expected_intent": null,
+      "notes": "No significant role signals."
+    },
+    {
+      "id": "pandu-3056",
+      "user_id": 3056,
+      "description": "Pandu — gated",
+      "expected_role": null,
+      "expected_intent": null,
+      "notes": "No significant role signals."
+    },
+    {
+      "id": "hrushi-4034",
+      "user_id": 4034,
+      "description": "Hrushi — gated, networking intent",
+      "expected_role": null,
+      "expected_intent": "networking",
+      "notes": "Networking intent from message signals."
+    },
+    {
+      "id": "paulo-3146",
+      "user_id": 3146,
+      "description": "Paulo Gouveia — gated",
+      "expected_role": null,
+      "expected_intent": null,
+      "notes": "No significant role signals."
+    },
+    {
+      "id": "mike-3827",
+      "user_id": 3827,
+      "description": "Miʞe꩜⟠ — gated",
+      "expected_role": null,
+      "expected_intent": null,
+      "notes": "No significant role signals."
+    },
+    {
+      "id": "sunny-3611",
+      "user_id": 3611,
+      "description": "Sunny — gated",
+      "expected_role": null,
+      "expected_intent": null,
+      "notes": "No significant role signals."
+    }
+  ]
+}

@@ -1,5 +1,5 @@
 {
-  "_comment": "Regression test cases for inference engine v0.5.6. Run with: npm run regress",
+  "_comment": "Regression test cases for inference engine v0.5.7. Run with: npm run regress",
   "cases": [
     {
       "id": "drishti-solidityscan",
@@ -147,12 +147,12 @@
       "displayName": "Bob",
       "bio": "Solidity developer, full-stack engineer. Shipped 5+ protocols.",
       "messages": [
-        "Just deployed the smart contract to testnet",
-        "Merged the PR fixing the RPC bug",
-        "Refactored the token contract for gas optimization",
+        "I just deployed the smart contract to testnet",
+        "I merged the PR fixing the RPC bug",
+        "I refactored the token contract for gas optimization",
         "Check the github repo for the latest commit",
         "Stack trace shows the error in the constructor",
-        "Pushed the bug fix to the branch"
+        "We pushed the bug fix to the branch"
       ],
       "memberGroupKinds": ["work"],
       "totalMsgCount": 40,

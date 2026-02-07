@@ -1,0 +1,22 @@
+{
+  "version": "v0.5.7",
+  "description": "v0.5.7 — FINAL PATCH + FREEZE. (A) ORG_TITLE_REJECT_SET blocks bare titles as affiliations, 'is a/an' definitional clause clamp. (B) Business Developer display name routes to bd, not builder. (C) Regression harness with 24 test cases.",
+  "gating": {
+    "minNonMembershipEvidence": 1,
+    "minClaimConfidence": 0.15
+  },
+
+  "rolePriors": {
+    "bd": {},
+    "work": {},
+    "general_chat": {},
+    "unknown": {}
+  },
+
+  "intentPriors": {
+    "bd": {},
+    "work": {},
+    "general_chat": {},
+    "unknown": {}
+  }
+}

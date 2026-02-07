@@ -13,6 +13,15 @@
 import { db } from '../db/index.js';
 import { writeFileSync, mkdirSync } from 'fs';
 import { resolve } from 'path';
+import {
+  scoreUser,
+  type UserInferenceInput,
+  type MessageMeta,
+  type TraceResult,
+  type MessageHit,
+} from '../inference/engine.js';
+import { loadInferenceConfig } from '../config/inference-config.js';
+import type { GroupKind } from '../config/taxonomies.js';
 
 // ── Config ──────────────────────────────────────────────
 
@@ -23,17 +32,20 @@ function getArg(name: string, fallback: string): string {
 }
 
 const PER_ROLE = parseInt(getArg('per-role', '3'), 10);
+const PAGE = parseInt(getArg('page', '1'), 10);
 const MAX_MSGS = parseInt(getArg('max-msgs', '200'), 10);
 const UNCATEGORIZED_COUNT = parseInt(getArg('uncategorized', '5'), 10);
 const OUT_DIR = getArg('out-dir', 'data/output');
-const MODEL_VERSION = getArg('model-version', 'v0.5.6');
+const MODEL_VERSION = getArg('model-version', 'v0.5.7');
 
 // ── Main ────────────────────────────────────────────────
 
 async function main(): Promise<void> {
-  console.log('\n📋 Exporting taxonomy review sample...\n');
+  console.log(`\n📋 Exporting taxonomy review sample (page ${PAGE})...\n`);
 
-  // 1. Find sample user IDs: top N per role + uncategorized heavy posters
+  const offset = (PAGE - 1) * PER_ROLE;
+
+  // 1. Find sample user IDs: N per role (paged) + uncategorized heavy posters
   const roleUsers = await db.query<{ user_id: number; role: string; confidence: number }>(`
     WITH ranked AS (
       SELECT subject_user_id AS user_id, object_value AS role, confidence,
@@ -41,11 +53,12 @@ async function main(): Promise<void> {
       FROM claims
       WHERE model_version = $1 AND predicate = 'has_role'
     )
-    SELECT user_id, role, confidence FROM ranked WHERE rn <= $2
+    SELECT user_id, role, confidence FROM ranked WHERE rn > $2 AND rn <= $3
     ORDER BY role, confidence DESC
-  `, [MODEL_VERSION, PER_ROLE]);
+  `, [MODEL_VERSION, offset, offset + PER_ROLE]);
 
   // Users with org_type claims — include a sample so the AI reviewer can evaluate them
+  const orgOffset = (PAGE - 1) * 2;
   const orgTypeUsers = await db.query<{ user_id: number; org_type: string }>(`
     WITH ranked AS (
       SELECT subject_user_id AS user_id, object_value AS org_type,
@@ -53,12 +66,13 @@ async function main(): Promise<void> {
       FROM claims
       WHERE model_version = $1 AND predicate = 'has_org_type'
     )
-    SELECT user_id, org_type FROM ranked WHERE rn <= 2
+    SELECT user_id, org_type FROM ranked WHERE rn > $2 AND rn <= $3
     ORDER BY org_type
-  `, [MODEL_VERSION]);
+  `, [MODEL_VERSION, orgOffset, orgOffset + 2]);
 
   // Users with messages but no role claim at all — OR if none exist,
   // grab the heaviest posters as additional review samples
+  const uncatOffset = (PAGE - 1) * UNCATEGORIZED_COUNT;
   const uncategorized = await db.query<{ user_id: number; msg_count: number }>(`
     (
       SELECT m.user_id, COUNT(*) AS msg_count
@@ -71,7 +85,7 @@ async function main(): Promise<void> {
       GROUP BY m.user_id
       HAVING COUNT(*) >= 3
       ORDER BY COUNT(*) DESC
-      LIMIT $2
+      LIMIT $2 OFFSET $3
     )
     UNION ALL
     (
@@ -91,10 +105,10 @@ async function main(): Promise<void> {
         )
       GROUP BY m.user_id
       ORDER BY COUNT(*) DESC
-      LIMIT $2
+      LIMIT $2 OFFSET $3
     )
     LIMIT $2
-  `, [MODEL_VERSION, UNCATEGORIZED_COUNT]);
+  `, [MODEL_VERSION, UNCATEGORIZED_COUNT, uncatOffset]);
 
   const userIds = [
     ...roleUsers.rows.map(r => r.user_id),
@@ -108,8 +122,10 @@ async function main(): Promise<void> {
   console.log(`   Selected ${uncategorized.rows.length} uncategorized heavy posters`);
   console.log(`   Total sample: ${uniqueIds.length} users\n`);
 
-  // 2. Build profiles
+  // 2. Build profiles with trace data
+  const config = loadInferenceConfig();
   const profiles: Record<string, unknown>[] = [];
+  const traceProfiles: Record<string, unknown>[] = []; // condensed trace-only output
 
   for (const userId of uniqueIds) {
     // User metadata
@@ -170,12 +186,12 @@ async function main(): Promise<void> {
       }
     }
 
-    // Messages (newest first, capped)
+    // Messages (newest first, capped) — with IDs for trace
     const msgsRes = await db.query<{
-      sent_at: string; text: string | null; has_links: boolean;
+      id: number; sent_at: string; text: string | null; has_links: boolean;
       has_mentions: boolean; reply_to: string | null;
     }>(`
-      SELECT sent_at, text, has_links, has_mentions,
+      SELECT id, sent_at, text, has_links, has_mentions,
         reply_to_external_message_id AS reply_to
       FROM messages
       WHERE user_id = $1 AND text IS NOT NULL
@@ -187,14 +203,103 @@ async function main(): Promise<void> {
     const featRes = await db.query<{
       total_msg_count: string; total_reply_count: string;
       total_mention_count: string; avg_msg_len: string;
+      bd_group_msg_share: string; groups_active_count: string;
     }>(`
       SELECT SUM(msg_count)::text AS total_msg_count,
         SUM(reply_count)::text AS total_reply_count,
         SUM(mention_count)::text AS total_mention_count,
-        AVG(avg_msg_len)::text AS avg_msg_len
+        AVG(avg_msg_len)::text AS avg_msg_len,
+        AVG(bd_group_msg_share)::text AS bd_group_msg_share,
+        MAX(groups_active_count)::text AS groups_active_count
       FROM user_features_daily WHERE user_id = $1
     `, [userId]);
     const feat = featRes.rows[0];
+
+    // Memberships for group_kinds
+    const groupKinds: GroupKind[] = memRes.rows.map(r => r.group_kind as GroupKind);
+
+    // Build message texts + metas for trace mode
+    const messageTexts = msgsRes.rows
+      .filter(m => m.text != null)
+      .map(m => m.text!);
+    const messageMetas: MessageMeta[] = msgsRes.rows
+      .filter(m => m.text != null)
+      .map(m => ({
+        id: m.id,
+        text: m.text!,
+        sent_at: m.sent_at,
+      }));
+
+    // Re-run scoreUser with trace=true
+    const traceInput: UserInferenceInput = {
+      userId,
+      displayName: user.display_name,
+      bio: user.bio,
+      memberGroupKinds: groupKinds,
+      messageTexts,
+      messageMetas,
+      trace: true,
+      totalMsgCount: parseInt(feat?.total_msg_count ?? '0', 10),
+      totalReplyCount: parseInt(feat?.total_reply_count ?? '0', 10),
+      totalMentionCount: parseInt(feat?.total_mention_count ?? '0', 10),
+      avgMsgLen: parseFloat(feat?.avg_msg_len ?? '0'),
+      bdGroupMsgShare: parseFloat(feat?.bd_group_msg_share ?? '0'),
+      groupsActiveCount: parseInt(feat?.groups_active_count ?? '0', 10),
+    };
+    const traceResult = scoreUser(traceInput, config);
+
+    // Build debug_trace for each emitted claim
+    const debugTraces: Record<string, unknown>[] = [];
+    const allClaims = [...claimsMap.values()];
+    for (const claim of allClaims) {
+      // Match to scored label from traceResult
+      let finalScore: number | null = null;
+      let probability: number | null = null;
+      let evidenceItems: { evidence_ref: string; source_type: string; pattern_id: string; weight: number }[] = [];
+
+      if (claim.predicate === 'has_role' && traceResult.roleClaim?.label === claim.object_value) {
+        finalScore = traceResult.roleClaim.score;
+        probability = traceResult.roleClaim.probability;
+        evidenceItems = traceResult.roleClaim.evidence.map(e => ({
+          evidence_ref: e.evidence_ref,
+          source_type: e.evidence_type,
+          pattern_id: e.evidence_ref.split(':')[1] ?? e.evidence_ref,
+          weight: e.weight,
+        }));
+      } else if (claim.predicate === 'has_intent' && traceResult.intentClaim?.label === claim.object_value) {
+        finalScore = traceResult.intentClaim.score;
+        probability = traceResult.intentClaim.probability;
+        evidenceItems = traceResult.intentClaim.evidence.map(e => ({
+          evidence_ref: e.evidence_ref,
+          source_type: e.evidence_type,
+          pattern_id: e.evidence_ref.split(':')[1] ?? e.evidence_ref,
+          weight: e.weight,
+        }));
+      }
+
+      // Find message-level hits for this claim
+      const msgHitsForClaim = (traceResult.trace?.message_hits ?? []).filter(
+        h => h.label === claim.object_value,
+      ).map(h => ({
+        message_id: h.message_id,
+        sent_at: h.sent_at,
+        matched_span: h.matched_span,
+        pattern_id: h.pattern_id,
+        text_snippet: h.text_snippet,
+        weight: h.weight,
+      }));
+
+      debugTraces.push({
+        predicate: claim.predicate,
+        object_value: claim.object_value,
+        final_score: finalScore != null ? parseFloat(finalScore.toFixed(4)) : null,
+        probability: probability != null ? parseFloat(probability.toFixed(6)) : null,
+        evidence: evidenceItems,
+        message_hits: msgHitsForClaim,
+        raw_role_scores: traceResult.trace?.role_scores ?? [],
+        raw_intent_scores: traceResult.trace?.intent_scores ?? [],
+      });
+    }
 
     // Selection reason
     const roleMatch = roleUsers.rows.find(r => r.user_id === userId);
@@ -213,7 +318,8 @@ async function main(): Promise<void> {
         bio: user.bio,
         memberships: memRes.rows,
       },
-      our_claims: [...claimsMap.values()],
+      our_claims: allClaims,
+      debug_trace: debugTraces,
       features: feat ? {
         total_messages: parseInt(feat.total_msg_count ?? '0', 10),
         total_replies: parseInt(feat.total_reply_count ?? '0', 10),
@@ -231,6 +337,80 @@ async function main(): Promise<void> {
     });
 
     console.log(`   ✅ ${user.display_name ?? user.id} — ${selectionReason} (${msgsRes.rows.length} msgs)`);
+
+    // Build condensed trace profile for taxonomy_review_trace.json
+    // Top 5 messages by total evidence weight across all hits
+    const allMsgHits = traceResult.trace?.message_hits ?? [];
+    const msgWeightMap = new Map<number, { totalWeight: number; hit: MessageHit }>();
+    for (const hit of allMsgHits) {
+      const existing = msgWeightMap.get(hit.message_id);
+      if (!existing || hit.weight > existing.totalWeight) {
+        msgWeightMap.set(hit.message_id, {
+          totalWeight: (existing?.totalWeight ?? 0) + hit.weight,
+          hit,
+        });
+      }
+    }
+    // Accumulate total weight properly
+    for (const hit of allMsgHits) {
+      const entry = msgWeightMap.get(hit.message_id)!;
+      if (entry.hit !== hit) {
+        entry.totalWeight += hit.weight;
+      }
+    }
+    const topMsgHits = [...msgWeightMap.values()]
+      .sort((a, b) => b.totalWeight - a.totalWeight)
+      .slice(0, 5)
+      .map(e => ({
+        message_id: e.hit.message_id,
+        sent_at: e.hit.sent_at,
+        text_snippet: e.hit.text_snippet,
+        total_evidence_weight: parseFloat(e.totalWeight.toFixed(3)),
+        hits: allMsgHits.filter(h => h.message_id === e.hit.message_id).map(h => ({
+          pattern_id: h.pattern_id,
+          label: h.label,
+          label_type: h.label_type,
+          matched_span: h.matched_span,
+          weight: h.weight,
+        })),
+      }));
+
+    // Role claim trace
+    const roleClaimTrace = traceResult.roleClaim ? {
+      label: traceResult.roleClaim.label,
+      raw_score: parseFloat(traceResult.roleClaim.score.toFixed(4)),
+      probability: parseFloat(traceResult.roleClaim.probability.toFixed(6)),
+      evidence: traceResult.roleClaim.evidence.map(e => ({
+        source_type: e.evidence_type,
+        evidence_ref: e.evidence_ref,
+        pattern_id: e.evidence_ref.split(':')[1] ?? e.evidence_ref,
+        weight: e.weight,
+      })),
+    } : null;
+
+    // Intent claim trace
+    const intentClaimTrace = traceResult.intentClaim ? {
+      label: traceResult.intentClaim.label,
+      raw_score: parseFloat(traceResult.intentClaim.score.toFixed(4)),
+      probability: parseFloat(traceResult.intentClaim.probability.toFixed(6)),
+      evidence: traceResult.intentClaim.evidence.map(e => ({
+        source_type: e.evidence_type,
+        evidence_ref: e.evidence_ref,
+        pattern_id: e.evidence_ref.split(':')[1] ?? e.evidence_ref,
+        weight: e.weight,
+      })),
+    } : null;
+
+    traceProfiles.push({
+      user_id: user.id,
+      display_name: user.display_name,
+      role_claim_trace: roleClaimTrace,
+      intent_claim_trace: intentClaimTrace,
+      raw_role_scores: traceResult.trace?.role_scores ?? [],
+      raw_intent_scores: traceResult.trace?.intent_scores ?? [],
+      top_evidence_messages: topMsgHits,
+      gating_notes: traceResult.gatingNotes,
+    });
   }
 
   // 3. Write output
@@ -259,6 +439,22 @@ async function main(): Promise<void> {
 
   const sizeMB = (Buffer.byteLength(JSON.stringify(output)) / (1024 * 1024)).toFixed(1);
   console.log(`\n   📁 ${outPath} (${sizeMB} MB, ${profiles.length} users)`);
+
+  // 4. Write trace-only output
+  const tracePath = resolve(OUT_DIR, 'taxonomy_review_trace.json');
+  const traceOutput = {
+    _meta: {
+      description: 'Condensed inference trace. For each user: role/intent claim traces with all evidence, raw scores for ALL labels, and top 5 messages that triggered evidence.',
+      exported_at: new Date().toISOString(),
+      model_version: MODEL_VERSION,
+      total_users: traceProfiles.length,
+    },
+    users: traceProfiles,
+  };
+  writeFileSync(tracePath, JSON.stringify(traceOutput, null, 2));
+  const traceSizeMB = (Buffer.byteLength(JSON.stringify(traceOutput)) / (1024 * 1024)).toFixed(1);
+  console.log(`   📁 ${tracePath} (${traceSizeMB} MB, ${traceProfiles.length} users)`);
+
   console.log('\n✅ Sample export complete.\n');
 
   await db.close();
