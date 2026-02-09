@@ -1,0 +1,756 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Telethon Profile Viewer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="data.js?v=8"></script>
+    <style>
+        .tag { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 11px; margin-right: 3px; margin-bottom: 3px; border: 1px solid; font-weight: 500; }
+        .kv { font-size: 12px; color: #475569; }
+        .kv strong { color: #94a3b8; font-weight: 500; }
+        details summary { cursor: pointer; list-style: none; }
+        details summary::-webkit-details-marker { display: none; }
+        .clickable { cursor: pointer; transition: all 0.1s; }
+        .clickable:hover { opacity: 0.7; text-decoration: underline; }
+        .filter-pill { display: inline-flex; align-items: center; gap: 4px; padding: 2px 10px; border-radius: 9999px; font-size: 11px; font-weight: 600; cursor: pointer; }
+        .filter-pill:hover { opacity: 0.75; }
+        .filter-pill .x { font-weight: bold; font-size: 14px; line-height: 1; margin-left: 2px; }
+
+        .combo { position: relative; display: inline-block; }
+        .combo input {
+            font-size: 12px; padding: 5px 10px; border-radius: 6px; border: 1px solid #cbd5e1;
+            background: white; width: 180px; outline: none;
+        }
+        .combo input:focus { border-color: #3b82f6; box-shadow: 0 0 0 1px #3b82f6; }
+        .combo input:disabled { background: #f1f5f9; color: #94a3b8; }
+        .combo-list {
+            position: absolute; top: 100%; left: 0; right: 0; z-index: 50;
+            max-height: 260px; overflow-y: auto; border: 1px solid #cbd5e1;
+            border-radius: 6px; margin-top: 2px; background: white;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1); display: none;
+        }
+        .combo-list.open { display: block; }
+        .combo-item {
+            padding: 5px 10px; font-size: 12px; cursor: pointer;
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .combo-item:hover, .combo-item.highlighted { background: #eff6ff; }
+        .combo-item .cnt { font-size: 10px; color: #94a3b8; }
+        .combo-empty { padding: 8px 10px; font-size: 11px; color: #94a3b8; text-align: center; }
+
+        .fb-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+        .fb-row button { font-size: 12px; padding: 5px 14px; border-radius: 6px; border: none; background: #3b82f6; color: white; cursor: pointer; font-weight: 600; }
+        .fb-row button:hover { background: #2563eb; }
+        .fb-row button:disabled { background: #94a3b8; cursor: default; }
+
+        /* ── Heatmap ── */
+        .heatmap-wrap {
+            background: white; border: 1px solid #e2e8f0; border-radius: 8px;
+            padding: 16px; margin-bottom: 12px;
+        }
+        .heatmap-grid {
+            display: grid;
+            grid-template-columns: 48px repeat(24, 1fr);
+            gap: 2px;
+        }
+        .hm-cell {
+            aspect-ratio: 1; border-radius: 3px; position: relative;
+            min-width: 0; min-height: 0;
+        }
+        .hm-cell:hover { outline: 2px solid #3b82f6; outline-offset: -1px; z-index: 1; }
+        .hm-label {
+            font-size: 10px; color: #94a3b8; display: flex; align-items: center;
+            justify-content: flex-end; padding-right: 6px; font-weight: 500;
+        }
+        .hm-hour {
+            font-size: 9px; color: #94a3b8; text-align: center; font-weight: 500;
+        }
+        .hm-tooltip {
+            position: absolute; bottom: calc(100% + 4px); left: 50%; transform: translateX(-50%);
+            background: #1e293b; color: white; padding: 3px 8px; border-radius: 4px;
+            font-size: 10px; white-space: nowrap; pointer-events: none; display: none; z-index: 10;
+        }
+        .hm-cell:hover .hm-tooltip { display: block; }
+        .hm-legend { display: flex; align-items: center; gap: 4px; margin-top: 8px; }
+        .hm-legend-label { font-size: 10px; color: #94a3b8; }
+        .hm-legend-bar {
+            height: 10px; width: 120px; border-radius: 3px;
+            background: linear-gradient(to right, #f1f5f9, #bfdbfe, #3b82f6, #1e40af, #312e81);
+        }
+        .hm-header {
+            display: flex; justify-content: space-between; align-items: center;
+            margin-bottom: 10px; cursor: pointer;
+        }
+        .hm-header:hover .hm-title { color: #1e293b; }
+        .hm-title { font-size: 13px; font-weight: 600; color: #475569; transition: color 0.1s; }
+        .hm-subtitle { font-size: 10px; color: #94a3b8; }
+        .hm-toggle { font-size: 11px; color: #3b82f6; font-weight: 500; }
+        .hm-best { margin-top: 8px; font-size: 11px; color: #475569; }
+        .hm-best strong { color: #1e40af; }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-800 font-sans">
+
+    <div class="max-w-6xl mx-auto px-4 py-6">
+        <div class="flex justify-between items-end mb-5">
+            <div>
+                <h1 class="text-2xl font-bold text-slate-900">Telethon Profiles</h1>
+                <div class="text-xs text-slate-400 mt-0.5" id="stats-header">Loading...</div>
+            </div>
+            <div class="flex gap-2 items-center flex-wrap">
+                <select id="sort-select" onchange="render()" class="text-xs border border-slate-300 rounded px-2 py-1.5 bg-white">
+                    <option value="msgs">Sort: Most Messages</option>
+                    <option value="reactions">Sort: Most Reactions</option>
+                    <option value="engagement">Sort: Engagement Rate</option>
+                    <option value="recent">Sort: Recently Active</option>
+                    <option value="scam">Sort: Scam Risk</option>
+                    <option value="name">Sort: Name A-Z</option>
+                </select>
+                <select id="group-filter" onchange="render()" class="text-xs border border-slate-300 rounded px-2 py-1.5 bg-white">
+                    <option value="">All Groups</option>
+                </select>
+                <select id="archetype-filter" onchange="render()" class="text-xs border border-slate-300 rounded px-2 py-1.5 bg-white">
+                    <option value="">All Archetypes</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="mb-3">
+            <input type="text" id="search" placeholder="Search name, bio, role, skills, tags..."
+                   class="w-full text-sm px-4 py-2.5 rounded border border-slate-300 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
+                   onkeyup="render()">
+        </div>
+
+        <div class="fb-row mb-3">
+            <span class="text-xs text-slate-400">Add filter:</span>
+            <div class="combo" id="combo-field">
+                <input type="text" placeholder="Select field..." id="fb-field-input" autocomplete="off">
+                <div class="combo-list" id="fb-field-list"></div>
+            </div>
+            <div class="combo" id="combo-value">
+                <input type="text" placeholder="Pick a field first" id="fb-value-input" disabled autocomplete="off">
+                <div class="combo-list" id="fb-value-list"></div>
+            </div>
+            <button id="fb-add" onclick="addFilterFromBuilder()" disabled>+ Add</button>
+        </div>
+
+        <div id="active-filters" class="hidden mb-3 flex flex-wrap items-center gap-1.5"></div>
+
+        <!-- Activity Heatmap -->
+        <div class="heatmap-wrap" id="heatmap-section">
+            <div class="hm-header" onclick="toggleHeatmap()">
+                <div>
+                    <span class="hm-title">📊 Activity Heatmap</span>
+                    <span class="hm-subtitle" id="hm-user-count"></span>
+                </div>
+                <span class="hm-toggle" id="hm-toggle-text">▼ Hide</span>
+            </div>
+            <div id="hm-body">
+                <div class="heatmap-grid" id="heatmap"></div>
+                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap;">
+                    <div class="hm-legend">
+                        <span class="hm-legend-label">Low</span>
+                        <div class="hm-legend-bar"></div>
+                        <span class="hm-legend-label">High</span>
+                    </div>
+                    <div class="hm-best" id="hm-best"></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="text-xs text-slate-400 mb-3" id="stats-count"></div>
+        <div id="feed" class="space-y-3"></div>
+    </div>
+
+    <script>
+        var data = window.TELETHON_DATA;
+        var users = new Map();
+        var activeFilters = [];
+        var valueIndex = {};
+        var heatmapVisible = true;
+
+        var DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+        var FIELD_OPTIONS = [
+            { key: 'role', label: 'Role' }, { key: 'company', label: 'Company' },
+            { key: 'archetype', label: 'Archetype' }, { key: 'stage', label: 'Career Stage' },
+            { key: 'skill', label: 'Skill' }, { key: 'based', label: 'Based In' },
+            { key: 'group', label: 'Group' }, { key: 'tribe', label: 'Tribe' },
+            { key: 'buying', label: 'Buying Power' }, { key: 'seniority', label: 'Seniority' },
+            { key: 'tone', label: 'Tone' }, { key: 'professionalism', label: 'Professionalism' },
+            { key: 'verbosity', label: 'Verbosity' }, { key: 'decision', label: 'Decision Style' },
+            { key: 'contact', label: 'Contact Style' }, { key: 'lang', label: 'Language' },
+            { key: 'topic', label: 'Topic' }, { key: 'tech', label: 'Tech' },
+            { key: 'biz', label: 'Biz Focus' }, { key: 'value', label: 'Driving Values' },
+            { key: 'pain', label: 'Pain Points' }, { key: 'seeking', label: 'Seeking' },
+            { key: 'event', label: 'Events' }, { key: 'platform', label: 'Platform' },
+            { key: 'tag', label: 'Fingerprint Tag' }
+        ];
+
+        var FILTER_COLORS = {
+            role:'bg-blue-100 text-blue-700', company:'bg-cyan-100 text-cyan-700',
+            skill:'bg-amber-100 text-amber-700', based:'bg-emerald-100 text-emerald-700',
+            tribe:'bg-pink-100 text-pink-700', tag:'bg-slate-200 text-slate-700',
+            tone:'bg-violet-100 text-violet-700', buying:'bg-green-100 text-green-700',
+            seniority:'bg-yellow-100 text-yellow-700', archetype:'bg-indigo-100 text-indigo-700',
+            lang:'bg-orange-100 text-orange-700', event:'bg-rose-100 text-rose-700',
+            platform:'bg-teal-100 text-teal-700', topic:'bg-fuchsia-100 text-fuchsia-700',
+            group:'bg-violet-100 text-violet-700', tech:'bg-lime-100 text-lime-700',
+            biz:'bg-sky-100 text-sky-700', value:'bg-emerald-100 text-emerald-700',
+            pain:'bg-red-100 text-red-700', seeking:'bg-blue-100 text-blue-700',
+            contact:'bg-slate-200 text-slate-700', stage:'bg-yellow-100 text-yellow-700',
+            professionalism:'bg-violet-100 text-violet-700', verbosity:'bg-violet-100 text-violet-700',
+            decision:'bg-violet-100 text-violet-700'
+        };
+
+        /* ── Heatmap ── */
+        function toggleHeatmap() {
+            heatmapVisible = !heatmapVisible;
+            document.getElementById('hm-body').style.display = heatmapVisible ? 'block' : 'none';
+            document.getElementById('hm-toggle-text').textContent = heatmapVisible ? '▼ Hide' : '▶ Show';
+        }
+
+        function heatColor(ratio) {
+            if (ratio === 0) return '#f1f5f9';
+            if (ratio < 0.2) return '#dbeafe';
+            if (ratio < 0.4) return '#93c5fd';
+            if (ratio < 0.6) return '#3b82f6';
+            if (ratio < 0.8) return '#1e40af';
+            return '#312e81';
+        }
+
+        function renderHeatmap(filteredUserIds) {
+            var activity = data.activity || {};
+            var grid = Array.from({ length: 7 }, function() { return new Array(24).fill(0); });
+            var userCount = 0;
+
+            filteredUserIds.forEach(function(uid) {
+                var ua = activity[uid];
+                if (!ua) return;
+                userCount++;
+                for (var d = 0; d < 7; d++) {
+                    for (var h = 0; h < 24; h++) {
+                        grid[d][h] += (ua[d] && ua[d][h]) || 0;
+                    }
+                }
+            });
+
+            var maxVal = 0;
+            var bestDay = 0, bestHour = 0;
+            for (var d = 0; d < 7; d++) {
+                for (var h = 0; h < 24; h++) {
+                    if (grid[d][h] > maxVal) { maxVal = grid[d][h]; bestDay = d; bestHour = h; }
+                }
+            }
+
+            document.getElementById('hm-user-count').textContent =
+                ' \u2022 ' + userCount + ' users with activity data';
+
+            var el = document.getElementById('heatmap');
+            var html = '<div class="hm-label"></div>';
+            for (var h = 0; h < 24; h++) {
+                html += '<div class="hm-hour">' + (h < 10 ? '0' : '') + h + '</div>';
+            }
+            for (var d = 0; d < 7; d++) {
+                html += '<div class="hm-label">' + DAY_NAMES[d] + '</div>';
+                for (var h = 0; h < 24; h++) {
+                    var val = grid[d][h];
+                    var ratio = maxVal > 0 ? val / maxVal : 0;
+                    var color = heatColor(ratio);
+                    var textColor = ratio > 0.5 ? 'white' : '#475569';
+                    html += '<div class="hm-cell" style="background:' + color + '">' +
+                        '<div class="hm-tooltip">' + DAY_NAMES[d] + ' ' +
+                        (h < 10 ? '0' : '') + h + ':00 UTC \u2022 ' +
+                        val.toLocaleString() + ' msgs</div></div>';
+                }
+            }
+            el.innerHTML = html;
+
+            var bestEl = document.getElementById('hm-best');
+            if (maxVal > 0) {
+                bestEl.innerHTML = '🎯 Peak: <strong>' + DAY_NAMES[bestDay] + ' ' +
+                    (bestHour < 10 ? '0' : '') + bestHour + ':00 UTC</strong> (' +
+                    maxVal.toLocaleString() + ' msgs)';
+            } else {
+                bestEl.innerHTML = 'No activity data for current filter.';
+            }
+        }
+
+        /* ── Searchable Combo-box Controller ── */
+        var selectedField = '';
+        var selectedValue = '';
+
+        function initCombo(inputId, listId, getItems, onSelect) {
+            var input = document.getElementById(inputId);
+            var list = document.getElementById(listId);
+            var highlighted = -1;
+            var items = [];
+
+            function showList() {
+                items = getItems(input.value);
+                highlighted = -1;
+                list.innerHTML = '';
+                if (items.length === 0) {
+                    list.innerHTML = '<div class="combo-empty">No matches</div>';
+                } else {
+                    items.forEach(function(item, i) {
+                        var div = document.createElement('div');
+                        div.className = 'combo-item';
+                        div.innerHTML = '<span>' + esc(item.label) + '</span>' +
+                            (item.count != null ? '<span class="cnt">' + item.count + '</span>' : '');
+                        div.addEventListener('mousedown', function(e) {
+                            e.preventDefault();
+                            onSelect(item);
+                            list.classList.remove('open');
+                        });
+                        list.appendChild(div);
+                    });
+                }
+                list.classList.add('open');
+            }
+
+            function highlight(idx) {
+                var divs = list.querySelectorAll('.combo-item');
+                divs.forEach(function(d) { d.classList.remove('highlighted'); });
+                if (idx >= 0 && idx < divs.length) {
+                    divs[idx].classList.add('highlighted');
+                    divs[idx].scrollIntoView({ block: 'nearest' });
+                }
+                highlighted = idx;
+            }
+
+            input.addEventListener('focus', showList);
+            input.addEventListener('input', showList);
+            input.addEventListener('keydown', function(e) {
+                if (e.key === 'ArrowDown') { e.preventDefault(); highlight(Math.min(highlighted + 1, items.length - 1)); }
+                else if (e.key === 'ArrowUp') { e.preventDefault(); highlight(Math.max(highlighted - 1, 0)); }
+                else if (e.key === 'Enter') {
+                    e.preventDefault();
+                    if (highlighted >= 0 && highlighted < items.length) {
+                        onSelect(items[highlighted]);
+                        list.classList.remove('open');
+                    }
+                }
+                else if (e.key === 'Escape') { list.classList.remove('open'); input.blur(); }
+            });
+            input.addEventListener('blur', function() {
+                setTimeout(function() { list.classList.remove('open'); }, 150);
+            });
+        }
+
+        function setupFieldCombo() {
+            initCombo('fb-field-input', 'fb-field-list',
+                function(query) {
+                    var q = query.toLowerCase();
+                    return FIELD_OPTIONS.filter(function(f) {
+                        return f.label.toLowerCase().indexOf(q) !== -1 || f.key.indexOf(q) !== -1;
+                    });
+                },
+                function(item) {
+                    selectedField = item.key;
+                    document.getElementById('fb-field-input').value = item.label;
+                    var vi = document.getElementById('fb-value-input');
+                    vi.disabled = false;
+                    vi.placeholder = 'Type to search ' + item.label + '...';
+                    vi.value = '';
+                    selectedValue = '';
+                    vi.focus();
+                    document.getElementById('fb-add').disabled = true;
+                }
+            );
+        }
+
+        function setupValueCombo() {
+            initCombo('fb-value-input', 'fb-value-list',
+                function(query) {
+                    if (!selectedField) return [];
+                    var counts = valueIndex[selectedField] || {};
+                    var q = query.toLowerCase();
+                    var entries = Object.keys(counts).map(function(k) {
+                        return { key: k, label: k, count: counts[k] };
+                    });
+                    entries.sort(function(a, b) { return b.count - a.count; });
+                    if (q) {
+                        entries = entries.filter(function(e) { return e.label.toLowerCase().indexOf(q) !== -1; });
+                    }
+                    return entries.slice(0, 80);
+                },
+                function(item) {
+                    selectedValue = item.key;
+                    document.getElementById('fb-value-input').value = item.label;
+                    document.getElementById('fb-add').disabled = false;
+                }
+            );
+        }
+
+        /* ── Filter Logic ── */
+        function toggleFilter(field, value) {
+            if (!value) return;
+            var val = String(value).trim();
+            if (!val) return;
+            var lc = val.toLowerCase();
+            var idx = activeFilters.findIndex(function(f) { return f.field === field && f.value === lc; });
+            if (idx !== -1) { activeFilters.splice(idx, 1); }
+            else { activeFilters.push({ field: field, value: lc, label: field + ': ' + val }); }
+            renderFilterBar();
+            render();
+        }
+
+        function removeFilter(i) { activeFilters.splice(i, 1); renderFilterBar(); render(); }
+        function clearFilters() { activeFilters = []; renderFilterBar(); render(); }
+
+        function renderFilterBar() {
+            var bar = document.getElementById('active-filters');
+            if (activeFilters.length === 0) { bar.className = 'hidden mb-3'; bar.innerHTML = ''; return; }
+            bar.className = 'mb-3 flex flex-wrap items-center gap-1.5';
+            var html = '<span class="text-xs text-slate-400 mr-1">Active filters:</span>';
+            activeFilters.forEach(function(f, i) {
+                var c = FILTER_COLORS[f.field] || 'bg-slate-200 text-slate-700';
+                html += '<span class="filter-pill ' + c + '" onclick="removeFilter(' + i + ')">' + esc(f.label) + ' <span class="x">&times;</span></span>';
+            });
+            html += '<span class="text-xs text-slate-400 ml-2 cursor-pointer hover:text-slate-600" onclick="clearFilters()">Clear all</span>';
+            bar.innerHTML = html;
+        }
+
+        /* ── Filter Builder: index all unique values per field ── */
+        function buildValueIndex() {
+            valueIndex = {};
+            var fields = ['role','company','archetype','stage','skill','based','group','tribe',
+                          'buying','seniority','tone','professionalism','verbosity','decision',
+                          'contact','lang','topic','tech','biz','value','pain','seeking',
+                          'event','platform','tag'];
+            fields.forEach(function(f) { valueIndex[f] = {}; });
+
+            users.forEach(function(u) {
+                var p = u.psycho;
+                if (!p) return;
+                function add(field, val) {
+                    if (!val) return;
+                    var v = String(val).trim();
+                    if (!v) return;
+                    valueIndex[field][v] = (valueIndex[field][v] || 0) + 1;
+                }
+                function addArr(field, arr) {
+                    if (arr) arr.forEach(function(v) {
+                        add(field, typeof v === 'string' ? v : (v.value || ''));
+                    });
+                }
+                add('role', p.primary_role);
+                add('company', p.primary_company);
+                add('archetype', p.commercial_archetype);
+                add('stage', p.career_stage);
+                add('based', p.based_in);
+                add('buying', p.buying_power);
+                add('seniority', p.seniority_signal);
+                add('tone', p.tone);
+                add('professionalism', p.professionalism);
+                add('verbosity', p.verbosity);
+                add('decision', p.decision_style);
+                add('contact', p.preferred_contact_style);
+                addArr('skill', p.deep_skills);
+                addArr('group', p.group_tags);
+                addArr('tribe', p.tribe_affiliations);
+                addArr('lang', p.languages);
+                addArr('topic', p.notable_topics);
+                addArr('tech', p.technical_specifics);
+                addArr('biz', p.business_focus);
+                addArr('value', p.driving_values);
+                addArr('pain', p.pain_points);
+                addArr('seeking', p.connection_requests);
+                addArr('event', p.attended_events);
+                addArr('platform', p.social_platforms);
+                addArr('tag', p.fingerprint_tags);
+            });
+        }
+
+        function addFilterFromBuilder() {
+            if (!selectedField || !selectedValue) return;
+            toggleFilter(selectedField, selectedValue);
+            document.getElementById('fb-value-input').value = '';
+            selectedValue = '';
+            document.getElementById('fb-add').disabled = true;
+        }
+
+        /* ── Filter matching ── */
+        function getFilterTarget(p, field) {
+            switch (field) {
+                case 'role': return (p.primary_role || '').toLowerCase();
+                case 'company': return (p.primary_company || '').toLowerCase();
+                case 'skill': return (p.deep_skills || []).map(function(s){return s.toLowerCase();});
+                case 'based': return (p.based_in || '').toLowerCase();
+                case 'tribe': return (p.tribe_affiliations || []).map(function(s){return s.toLowerCase();});
+                case 'tag': return (p.fingerprint_tags || []).map(function(s){return s.toLowerCase();});
+                case 'tone': return (p.tone || '').toLowerCase();
+                case 'professionalism': return (p.professionalism || '').toLowerCase();
+                case 'verbosity': return (p.verbosity || '').toLowerCase();
+                case 'decision': return (p.decision_style || '').toLowerCase();
+                case 'buying': return (p.buying_power || '').toLowerCase();
+                case 'seniority': return (p.seniority_signal || '').toLowerCase();
+                case 'archetype': return (p.commercial_archetype || '').toLowerCase();
+                case 'lang': return (p.languages || []).map(function(s){return s.toLowerCase();});
+                case 'event': return (p.attended_events || []).map(function(s){return s.toLowerCase();});
+                case 'platform': return (p.social_platforms || []).map(function(s){return s.toLowerCase();});
+                case 'topic': return (p.notable_topics || []).map(function(t){return (typeof t==='string'?t:t.value).toLowerCase();});
+                case 'group': return (p.group_tags || []).map(function(s){return s.toLowerCase();});
+                case 'tech': return (p.technical_specifics || []).map(function(s){return s.toLowerCase();});
+                case 'biz': return (p.business_focus || []).map(function(s){return s.toLowerCase();});
+                case 'value': return (p.driving_values || []).map(function(s){return s.toLowerCase();});
+                case 'pain': return (p.pain_points || []).map(function(t){return (typeof t==='string'?t:t.value).toLowerCase();});
+                case 'seeking': return (p.connection_requests || []).map(function(t){return (typeof t==='string'?t:t.value).toLowerCase();});
+                case 'contact': return (p.preferred_contact_style || '').toLowerCase();
+                case 'stage': return (p.career_stage || '').toLowerCase();
+                default: return '';
+            }
+        }
+
+        function matchesFilter(target, value) {
+            if (Array.isArray(target)) return target.some(function(t){ return t.indexOf(value) !== -1; });
+            return String(target).indexOf(value) !== -1;
+        }
+
+        /* ── Helpers ── */
+        function getUser(id, name, bio) {
+            if (!users.has(id)) users.set(id, { id: id, display_name: name, bio: bio, claims: [], psycho: null });
+            return users.get(id);
+        }
+
+        function esc(s) {
+            if (!s) return '';
+            return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+        }
+
+        function fclick(field, val) {
+            var safe = esc(String(val)).replace(/&#39;/g, "\\&#39;");
+            return ' onclick="toggleFilter(\'' + field + '\',\'' + safe + '\')"';
+        }
+
+        function clickList(items, field) {
+            if (!items || items.length === 0) return '';
+            return items.map(function(item) {
+                var val = typeof item === 'string' ? item : (item.value || '');
+                return '<span class="clickable"' + fclick(field, val) + '>' + esc(val) + '</span>';
+            }).join(', ');
+        }
+
+        function clickPills(items, field, bg, text) {
+            if (!items || items.length === 0) return '';
+            return items.map(function(item) {
+                return '<span class="tag ' + bg + ' ' + text + ' clickable"' + fclick(field, item) + '>' + esc(item) + '</span>';
+            }).join('');
+        }
+
+        /* ── Init ── */
+        document.addEventListener('DOMContentLoaded', function() {
+            if (!data) return;
+
+            data.claims.forEach(function(c) {
+                var u = getUser(c.subject_user_id, c.display_name, c.bio);
+                u.claims.push(c);
+            });
+
+            if (data.psychographics) {
+                data.psychographics.forEach(function(p) {
+                    if (!users.has(p.user_id)) getUser(p.user_id, null, null);
+                    var u = users.get(p.user_id);
+                    if (u) u.psycho = p;
+                });
+            }
+
+            var allGroups = new Set();
+            var allArchetypes = new Set();
+            users.forEach(function(u) {
+                if (u.psycho && u.psycho.group_tags) u.psycho.group_tags.forEach(function(g) { allGroups.add(g); });
+                if (u.psycho && u.psycho.commercial_archetype) allArchetypes.add(u.psycho.commercial_archetype);
+            });
+            var gs = document.getElementById('group-filter');
+            Array.from(allGroups).sort().forEach(function(g) { var o = document.createElement('option'); o.value = g; o.textContent = g; gs.appendChild(o); });
+            var as = document.getElementById('archetype-filter');
+            Array.from(allArchetypes).sort().forEach(function(a) { var o = document.createElement('option'); o.value = a; o.textContent = a.replace(/_/g, ' '); as.appendChild(o); });
+
+            document.getElementById('stats-header').innerText =
+                users.size + ' profiles \u2022 ' + data.stats.psycho_count + ' enriched \u2022 Generated ' + data.stats.generated_at.split('T')[0];
+
+            buildValueIndex();
+            setupFieldCombo();
+            setupValueCombo();
+            render();
+        });
+
+        /* ── Render ── */
+        function render() {
+            var feed = document.getElementById('feed');
+            feed.innerHTML = '';
+            var search = document.getElementById('search').value.toLowerCase().trim();
+            var sortBy = document.getElementById('sort-select').value;
+            var groupFilter = document.getElementById('group-filter').value;
+            var archFilter = document.getElementById('archetype-filter').value;
+
+            var list = Array.from(users.values()).filter(function(u) { return u.psycho; });
+
+            if (search) {
+                list = list.filter(function(u) {
+                    var p = u.psycho || {};
+                    var haystack = [
+                        u.display_name, u.bio, p.generated_bio_professional, p.generated_bio_personal,
+                        p.primary_role, p.primary_company, p.based_in, p.commercial_archetype
+                    ].concat(p.deep_skills || []).concat(p.fingerprint_tags || [])
+                     .concat(p.tribe_affiliations || []).concat(p.group_tags || [])
+                     .concat((p.notable_topics || []).map(function(t) { return typeof t === 'string' ? t : t.value; }))
+                     .filter(Boolean).join(' ').toLowerCase();
+                    return haystack.indexOf(search) !== -1;
+                });
+            }
+
+            if (groupFilter) list = list.filter(function(u) { return u.psycho && u.psycho.group_tags && u.psycho.group_tags.indexOf(groupFilter) !== -1; });
+            if (archFilter) list = list.filter(function(u) { return u.psycho && u.psycho.commercial_archetype === archFilter; });
+
+            if (activeFilters.length > 0) {
+                list = list.filter(function(u) {
+                    var p = u.psycho || {};
+                    for (var i = 0; i < activeFilters.length; i++) {
+                        if (!matchesFilter(getFilterTarget(p, activeFilters[i].field), activeFilters[i].value)) return false;
+                    }
+                    return true;
+                });
+            }
+
+            // Update heatmap with filtered users
+            var filteredIds = list.map(function(u) { return u.id; });
+            renderHeatmap(filteredIds);
+
+            list.sort(function(a, b) {
+                var pa = a.psycho || {}, pb = b.psycho || {};
+                switch (sortBy) {
+                    case 'msgs': return (pb.total_messages || 0) - (pa.total_messages || 0);
+                    case 'reactions': return (pb.total_reactions || 0) - (pa.total_reactions || 0);
+                    case 'engagement': return (Number(pb.engagement_rate) || 0) - (Number(pa.engagement_rate) || 0);
+                    case 'recent': return (pa.last_active_days == null ? 9999 : pa.last_active_days) - (pb.last_active_days == null ? 9999 : pb.last_active_days);
+                    case 'scam': return (pb.scam_risk_score || 0) - (pa.scam_risk_score || 0);
+                    case 'name': return (a.display_name || '').localeCompare(b.display_name || '');
+                    default: return 0;
+                }
+            });
+
+            document.getElementById('stats-count').innerText = 'Showing ' + list.length + ' profiles';
+
+            var max = Math.min(list.length, 200);
+            for (var idx = 0; idx < max; idx++) {
+                var u = list[idx];
+                var p = u.psycho;
+                var card = document.createElement('div');
+                var scamBorder = (p.scam_risk_score || 0) >= 60 ? 'border-l-red-500' :
+                                 (p.scam_risk_score || 0) >= 30 ? 'border-l-yellow-400' : 'border-l-emerald-400';
+                card.className = 'bg-white rounded-lg shadow-sm border border-slate-200 border-l-4 ' + scamBorder + ' overflow-hidden';
+
+                var partnersHtml = '';
+                if (p.top_conversation_partners && p.top_conversation_partners.length > 0) {
+                    var pList = p.top_conversation_partners.map(function(pr) {
+                        return '<span class="text-xs">' + esc(pr.display_name) + ' <span class="text-slate-400">(' + pr.replies_sent + '\u2191 ' + pr.replies_received + '\u2193)</span></span>';
+                    }).join(' \u00b7 ');
+                    partnersHtml = '<div class="kv mt-1"><strong>Conversation partners:</strong> ' + pList + '</div>';
+                }
+
+                var socialsHtml = '';
+                if (p.social_urls && p.social_urls.length > 0) {
+                    var links = p.social_urls.map(function(url) {
+                        var href = url.indexOf('http') === 0 ? url : 'https://' + url;
+                        return '<a href="' + esc(href) + '" target="_blank" class="text-blue-600 hover:underline text-xs">' + esc(url) + '</a>';
+                    }).join(', ');
+                    socialsHtml = '<div class="kv"><strong>Links:</strong> ' + links + '</div>';
+                }
+
+                var traitPairs = [
+                    ['tone', p.tone], ['professionalism', p.professionalism], ['verbosity', p.verbosity],
+                    ['decision', p.decision_style], ['seniority', p.seniority_signal]
+                ].filter(function(pair) { return pair[1]; });
+                var traitsHtml = traitPairs.map(function(pair) {
+                    return '<span class="tag bg-slate-100 text-slate-600 border-slate-200 clickable"' + fclick(pair[0], pair[1]) + '>' + esc(pair[1]) + '</span>';
+                }).join('');
+                if (p.approachability != null) traitsHtml += '<span class="tag bg-emerald-50 text-emerald-700 border-emerald-200">' + (p.approachability * 10).toFixed(0) + '/10 open</span>';
+
+                var stats = [];
+                if (p.total_messages) stats.push('<strong>' + p.total_messages + '</strong> msgs');
+                if (p.total_reactions) stats.push('<strong>' + p.total_reactions + '</strong> reactions');
+                if (p.total_replies_received) stats.push('<strong>' + p.total_replies_received + '</strong> replies');
+                if (p.engagement_rate) stats.push('<strong>' + Number(p.engagement_rate).toFixed(1) + '%</strong> engagement');
+                if (p.avg_msg_length) stats.push('avg <strong>' + p.avg_msg_length + '</strong> chars');
+                if (p.buying_power) stats.push('<span class="clickable"' + fclick('buying', p.buying_power) + '>' + esc(p.buying_power) + '</span>');
+                if ((p.scam_risk_score || 0) >= 30) stats.push('<span class="text-red-600 font-bold">Scam: ' + p.scam_risk_score + '/100</span>');
+                var statsHtml = stats.join(' &middot; ');
+
+                card.innerHTML =
+                    '<div class="p-4">' +
+                        '<div class="flex justify-between items-start mb-2">' +
+                            '<div class="flex-1 min-w-0">' +
+                                '<div class="flex items-center gap-2 flex-wrap">' +
+                                    '<h3 class="text-base font-bold text-slate-900 truncate">' + esc(u.display_name || 'Unknown') + '</h3>' +
+                                    (p.primary_role ? '<span class="text-xs text-slate-500 clickable"' + fclick('role', p.primary_role) + '>' + esc(p.primary_role) + '</span>' : '') +
+                                    (p.primary_company ? '<span class="text-xs text-slate-400 clickable"' + fclick('company', p.primary_company) + '>@ ' + esc(p.primary_company) + '</span>' : '') +
+                                    (p.commercial_archetype ? '<span class="tag bg-indigo-100 text-indigo-700 border-indigo-200 clickable"' + fclick('archetype', p.commercial_archetype) + '>' + esc(p.commercial_archetype.replace(/_/g, ' ')) + '</span>' : '') +
+                                    (p.career_stage ? '<span class="text-[10px] text-slate-400 clickable"' + fclick('stage', p.career_stage) + '>' + esc(p.career_stage) + '</span>' : '') +
+                                '</div>' +
+                                (p.generated_bio_professional ? '<p class="text-xs text-slate-600 mt-1">' + esc(p.generated_bio_professional) + '</p>' : '') +
+                            '</div>' +
+                            '<div class="flex flex-col items-end ml-3 shrink-0 text-right">' +
+                                '<div class="text-xs font-mono text-slate-400">#' + u.id + '</div>' +
+                                (p.last_active_days != null ? '<div class="text-[10px] ' + (p.last_active_days < 30 ? 'text-emerald-600' : p.last_active_days < 180 ? 'text-slate-500' : 'text-slate-300') + '">' + p.last_active_days + 'd ago</div>' : '') +
+                                (p.confidence_score ? '<div class="text-[10px] text-slate-400">' + (p.confidence_score * 100).toFixed(0) + '% conf</div>' : '') +
+                            '</div>' +
+                        '</div>' +
+
+                        '<div class="flex gap-4 text-[11px] text-slate-500 mb-2 border-b border-slate-100 pb-2 flex-wrap">' + statsHtml + '</div>' +
+
+                        '<div class="mb-2 flex flex-wrap gap-1">' + traitsHtml + '</div>' +
+
+                        '<div class="space-y-0.5">' +
+                            (p.based_in ? '<div class="kv"><strong>Based in:</strong> <span class="clickable"' + fclick('based', p.based_in) + '>' + esc(p.based_in) + '</span></div>' : '') +
+                            (p.languages && p.languages.length > 0 ? '<div class="kv"><strong>Languages:</strong> ' + clickList(p.languages, 'lang') + '</div>' : '') +
+                            (p.deep_skills && p.deep_skills.length > 0 ? '<div class="kv"><strong>Skills:</strong> ' + clickList(p.deep_skills, 'skill') + '</div>' : '') +
+                            (p.fifo ? '<div class="kv"><strong>Active:</strong> ' + esc(p.fifo) + '</div>' : '') +
+                            (p.peak_hours && p.peak_hours.length > 0 ? '<div class="kv"><strong>Peak hours:</strong> ' + p.peak_hours.map(esc).join(', ') + ' UTC</div>' : '') +
+                            (p.most_active_days && p.most_active_days.length > 0 ? '<div class="kv"><strong>Most active:</strong> ' + p.most_active_days.map(esc).join(', ') + '</div>' : '') +
+                            socialsHtml +
+                            partnersHtml +
+                        '</div>' +
+
+                        (p.group_tags && p.group_tags.length > 0 ? '<div class="mt-2">' + clickPills(p.group_tags, 'group', 'bg-violet-50', 'text-violet-700 border-violet-200') + '</div>' : '') +
+
+                        '<details class="mt-2">' +
+                            '<summary class="text-xs text-blue-600 font-medium hover:text-blue-800">Show details</summary>' +
+                            '<div class="mt-2 space-y-1.5 border-t border-slate-100 pt-2">' +
+                                (p.generated_bio_personal ? '<div class="kv"><strong>Personal bio:</strong> <em>' + esc(p.generated_bio_personal) + '</em></div>' : '') +
+                                (p.preferred_contact_style ? '<div class="kv"><strong>Contact style:</strong> <span class="clickable"' + fclick('contact', p.preferred_contact_style) + '>' + esc(p.preferred_contact_style) + '</span></div>' : '') +
+                                (p.notable_topics && p.notable_topics.length > 0 ? '<div class="kv"><strong>Topics:</strong> ' + clickList(p.notable_topics, 'topic') + '</div>' : '') +
+                                (p.pain_points && p.pain_points.length > 0 ? '<div class="kv"><strong>Pain points:</strong> ' + clickList(p.pain_points, 'pain') + '</div>' : '') +
+                                (p.crypto_values && p.crypto_values.length > 0 ? '<div class="kv"><strong>Values:</strong> ' + clickList(p.crypto_values, 'value') + '</div>' : '') +
+                                (p.connection_requests && p.connection_requests.length > 0 ? '<div class="kv"><strong>Seeking:</strong> ' + clickList(p.connection_requests, 'seeking') + '</div>' : '') +
+                                (p.quirks && p.quirks.length > 0 ? '<div class="kv"><strong>Quirks:</strong> ' + clickList(p.quirks, 'tag') + '</div>' : '') +
+                                (p.driving_values && p.driving_values.length > 0 ? '<div class="kv"><strong>Driving values:</strong> ' + clickList(p.driving_values, 'value') + '</div>' : '') +
+                                (p.technical_specifics && p.technical_specifics.length > 0 ? '<div class="kv"><strong>Tech:</strong> ' + clickList(p.technical_specifics, 'tech') + '</div>' : '') +
+                                (p.business_focus && p.business_focus.length > 0 ? '<div class="kv"><strong>Biz focus:</strong> ' + clickList(p.business_focus, 'biz') + '</div>' : '') +
+                                (p.tribe_affiliations && p.tribe_affiliations.length > 0 ? '<div class="kv"><strong>Tribes:</strong> ' + clickList(p.tribe_affiliations, 'tribe') + '</div>' : '') +
+                                (p.attended_events && p.attended_events.length > 0 ? '<div class="kv"><strong>Events:</strong> ' + clickList(p.attended_events, 'event') + '</div>' : '') +
+                                (p.affiliations && p.affiliations.length > 0 ? '<div class="kv"><strong>Affiliations:</strong> ' + p.affiliations.map(esc).join(', ') + '</div>' : '') +
+                                (p.social_platforms && p.social_platforms.length > 0 ? '<div class="kv"><strong>Platforms:</strong> ' + clickList(p.social_platforms, 'platform') + '</div>' : '') +
+                                (p.reasoning ? '<div class="kv mt-1 text-slate-400 italic border-l-2 border-slate-200 pl-2">' + esc(p.reasoning) + '</div>' : '') +
+                                (p.fingerprint_tags && p.fingerprint_tags.length > 0 ? '<div class="mt-1.5">' + clickPills(p.fingerprint_tags, 'tag', 'bg-slate-100', 'text-slate-500 border-slate-200') + '</div>' : '') +
+                            '</div>' +
+                        '</details>' +
+                    '</div>';
+                feed.appendChild(card);
+            }
+
+            if (list.length === 0) {
+                feed.innerHTML = '<div class="text-center text-slate-400 py-10">No profiles match your filters.</div>';
+            }
+            if (list.length > 200) {
+                var note = document.createElement('div');
+                note.className = 'text-center text-xs text-slate-400 py-4';
+                note.textContent = 'Showing 200 of ' + list.length + '. Narrow your search to see more.';
+                feed.appendChild(note);
+            }
+        }
+    </script>
+</body>
+</html>

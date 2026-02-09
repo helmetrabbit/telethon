@@ -269,6 +269,38 @@ def _format_eta(seconds: float) -> str:
         return f"{seconds / 3600:.1f}h"
 
 
+def _serialize_reactions(msg) -> dict | None:
+    """Helper to serialize message reactions (Telethon MessageReactions object)."""
+    if not hasattr(msg, "reactions") or not msg.reactions:
+        return None
+
+    # msg.reactions -> MessageReactions(results=[ReactionCount(...), ...], ...)
+    out_results = []
+    
+    # Use 'results' if present
+    results = getattr(msg.reactions, "results", [])
+    for r in results:
+        count = getattr(r, "count", 0)
+        
+        # Extract the reaction symbol
+        emoji = None
+        # r.reaction is usually ReactionEmoji(emoticon='👍') or ReactionCustomEmoji(document_id=123)
+        rxn = getattr(r, "reaction", None)
+        if rxn:
+            if hasattr(rxn, "emoticon"):
+                emoji = rxn.emoticon
+            elif hasattr(rxn, "document_id"):
+                emoji = f"custom_emoji_id:{rxn.document_id}"
+            else:
+                emoji = str(rxn)
+        
+        out_results.append({"count": count, "emoji": emoji})
+
+    return {
+        "results": out_results
+    }
+
+
 _CHECKPOINT_INTERVAL = 1000  # Save to disk every N messages
 
 
@@ -318,6 +350,10 @@ async def collect_messages(
             "from_id": from_id,
             "text": text,
             "reply_to_message_id": msg.reply_to.reply_to_msg_id if msg.reply_to else None,
+            "views": getattr(msg, "views", 0) or 0,
+            "forwards": getattr(msg, "forwards", 0) or 0,
+            "reply_count": getattr(msg.replies, "replies", 0) if hasattr(msg, "replies") and msg.replies else 0,
+            "reactions": _serialize_reactions(msg),
         }
         messages.append(msg_obj)
         count += 1
@@ -376,6 +412,7 @@ def _participant_obj(user: User) -> dict:
         "fake": getattr(user, "fake", None),
         "verified": getattr(user, "verified", None),
         "premium": getattr(user, "premium", None),
+        "lang_code": getattr(user, "lang_code", None),
     }
 
 

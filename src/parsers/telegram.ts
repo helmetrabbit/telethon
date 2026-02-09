@@ -45,6 +45,15 @@ const TelegramTextField = z.union([
 
 // ── Message schema ──────────────────────────────────────
 
+const ReactionResultSchema = z.object({
+  count: z.number(),
+  emoji: z.string().nullable(),
+});
+
+const ReactionsSchema = z.object({
+  results: z.array(ReactionResultSchema),
+});
+
 export const TelegramMessageSchema = z.object({
   id: z.number(),
   type: z.string().default('message'),
@@ -59,6 +68,14 @@ export const TelegramMessageSchema = z.object({
   photo: z.string().nullable().optional(),
   file: z.string().nullable().optional(),
   media_type: z.string().nullable().optional(),
+
+  // Omni-Capture fields
+  views: z.number().nullable().optional().default(0),
+  forwards: z.number().nullable().optional().default(0),
+  reply_count: z.number().nullable().optional().default(0),
+  grouped_id: z.number().nullable().optional(),
+  reactions: ReactionsSchema.nullable().optional(),
+  reaction_count_total: z.number().nullable().optional().default(0),
 });
 
 export type TelegramMessage = z.infer<typeof TelegramMessageSchema>;
@@ -71,12 +88,15 @@ export const TelethonParticipantSchema = z.object({
   first_name: z.string().nullable().optional(),
   last_name: z.string().nullable().optional(),
   display_name: z.string().nullable().optional(),
+  about: z.string().nullable().optional(),
+  bio: z.string().nullable().optional(),
   bot: z.boolean().optional().default(false),
   deleted: z.boolean().optional().default(false),
   scam: z.boolean().nullable().optional(),
   fake: z.boolean().nullable().optional(),
   verified: z.boolean().nullable().optional(),
   premium: z.boolean().nullable().optional(),
+  lang_code: z.string().nullable().optional(),
 });
 
 export type TelethonParticipant = z.infer<typeof TelethonParticipantSchema>;

@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Telethon Inference Viewer v3</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="data.js?v=3"></script>
+</head>
+<body class="bg-slate-100 text-slate-800 font-sans p-6">
+
+    <div class="max-w-7xl mx-auto">
+        <!-- Header -->
+        <div class="flex justify-between items-center mb-6">
+            <div>
+                <h1 class="text-3xl font-bold text-slate-900">Telethon Inference Auditor <span class="bg-blue-600 text-white text-xs px-2 py-1 rounded align-middle ml-2">V3.0</span></h1>
+                <div class="text-sm text-slate-500 mt-1" id="stats-header">Loading...</div>
+            </div>
+            <div class="flex gap-2">
+                 <button onclick="toggleNearMissesOnly()" id="btn-near-miss" class="px-4 py-2 bg-orange-100 text-orange-800 rounded font-medium border border-orange-200 hover:bg-orange-200">
+                    Show Near Misses
+                </button>
+            </div>
+        </div>
+
+        <!-- Search -->
+        <div class="mb-6">
+            <input type="text" id="search" placeholder="Search display name, bio, or claims..." 
+                   class="w-full text-lg px-4 py-3 rounded shadow-sm border border-slate-300 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
+                   onkeyup="render()">
+        </div>
+
+        <!-- Main Feed -->
+        <div id="feed" class="space-y-4">
+            <!-- JS Injected -->
+        </div>
+    </div>
+
+    <script>
+        const data = window.TELETHON_DATA;
+        let showNearMissesOnly = false;
+
+        // Pre-process: Group by User
+        const users = new Map();
+
+        function getUser(id, name, bio) {
+            if (!users.has(id)) {
+                users.set(id, { 
+                    id, 
+                    display_name: name, 
+                    bio: bio, 
+                    claims: [], 
+                    abstentions: [],
+                    ai: null
+                });
+            }
+            return users.get(id);
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+             if(!data) return;
+             
+             // Index Data
+             data.claims.forEach(c => {
+                 const u = getUser(c.subject_user_id, c.display_name, c.bio);
+                 u.claims.push(c);
+             });
+             
+             data.abstentions.forEach(a => {
+                 const u = getUser(a.subject_user_id, a.display_name, a.bio);
+                 u.abstentions.push(a);
+             });
+
+             if (data.enrichments) {
+                 data.enrichments.forEach(e => {
+                     const u = users.get(e.user_id);
+                     if (u) u.ai = e.parsed_json;
+                 });
+             }
+
+             if (data.psychographics) {
+                 data.psychographics.forEach(p => {
+                     const u = users.get(p.user_id);
+                     if (u) u.psycho = p;
+                 });
+             }
+
+             document.getElementById('stats-header').innerText = 
+                `Version ${data.stats.generated_at.split('T')[0]} • ${users.size} unique users processed`;
+
+             render();
+        });
+
+        function toggleNearMissesOnly() {
+            showNearMissesOnly = !showNearMissesOnly;
+            const btn = document.getElementById('btn-near-miss');
+            if(showNearMissesOnly) {
+                btn.classList.add('ring-2', 'ring-orange-500');
+                btn.innerText = "Showing: Near Misses Only";
+            } else {
+                btn.classList.remove('ring-2', 'ring-orange-500');
+                btn.innerText = "Show Near Misses";
+            }
+            render();
+        }
+
+        function render() {
+            const feed = document.getElementById('feed');
+            feed.innerHTML = '';
+            const search = document.getElementById('search').value.toLowerCase();
+
+            const userList = Array.from(users.values());
+            
+            // Filter
+            const filtered = userList.filter(u => {
+                // Search Filter
+                const textMatch = 
+                    (u.display_name || '').toLowerCase().includes(search) ||
+                    (u.bio || '').toLowerCase().includes(search) ||
+                    u.claims.some(c => c.object_value.toLowerCase().includes(search));
+                
+                if (!textMatch) return false;
+
+                // Near Miss Filter
+                if (showNearMissesOnly) {
+                    const hasNearMiss = u.abstentions.some(a => a.reason_code === 'low_confidence');
+                    if (!hasNearMiss) return false;
+                }
+
+                return true;
+            });
+            
+            // Show count
+            let statsHeader = document.getElementById('stats-count');
+            if (!statsHeader) {
+                statsHeader = document.createElement('div');
+                statsHeader.id = 'stats-count';
+                statsHeader.className = 'mb-4 text-sm text-gray-500 font-bold';
+                feed.parentNode.insertBefore(statsHeader, feed);
+            }
+            statsHeader.innerText = `Showing ${filtered.length} users`;
+
+            // No Limit (render all ~1200)
+            filtered.forEach(u => {
+                const card = document.createElement('div');
+                card.className = "bg-white p-6 rounded shadow border-l-4 " + getBorderColor(u);
+                
+                // Claims HTML
+                const claimsHtml = u.claims.map(c => `
+                    <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 border border-green-200 mr-2 mb-2">
+                        ${c.predicate === 'has_role' ? 'R:' : c.predicate === 'has_intent' ? 'I:' : 'Aff:'}
+                        ${c.object_value} 
+                        <span class="ml-1 text-green-600 opacity-75 text-[10px]">${(c.confidence*100).toFixed(0)}%</span>
+                    </span>
+                `).join('');
+
+                // Near Misses HTML
+                const nearMisses = u.abstentions.filter(a => a.reason_code === 'low_confidence');
+                const nearMissHtml = nearMisses.map(a => `
+                     <div class="mt-1 text-xs text-orange-700 bg-orange-50 p-2 rounded border border-orange-100">
+                        <strong>NEAR MISS:</strong> ${a.details}
+                     </div>
+                `).join('');
+                
+                // Noise (Insufficient Evidence)
+                const noiseCount = u.abstentions.filter(a => a.reason_code === 'insufficient_evidence').length;
+                const noiseHtml = noiseCount > 0 ? `<div class="text-xs text-gray-400 mt-2">${noiseCount} checks skipped (insufficient evidence)</div>` : '';
+
+                // AI Section
+                let aiHtml = '';
+                if (u.ai) {
+                    aiHtml = `
+                        <div class="mt-3 p-3 bg-indigo-50 rounded border border-indigo-100 text-sm relative group">
+                            <div class="flex justify-between items-start mb-1">
+                                <div class="font-bold text-indigo-900">🤖 AI Analysis</div>
+                                <div class="text-[10px] text-indigo-400 opacity-50 select-none" title="Generated Date">
+                                    ${u.ai_date ? new Date(u.ai_date).toLocaleDateString() : 'N/A'}
+                                </div>
+                            </div>
+                            <p class="text-indigo-800 italic mb-2">"${esc(u.ai.synthetic_bio || '')}"</p>
+                            ${u.ai.role_reasoning ? `<div class="text-xs text-indigo-700 border-l-2 border-indigo-300 pl-2 mb-2">${esc(u.ai.role_reasoning)}</div>` : ''}
+                            ${u.ai.org_affiliation ? `<div class="text-xs font-semibold text-indigo-700">🏢 ${esc(u.ai.org_affiliation)} (${esc(u.ai.org_type || 'Unknown')})</div>` : ''}
+                        </div>
+                    `;
+                }
+
+                // Psycho Section
+                let psychoHtml = '';
+                if (u.psycho) {
+                    const p = u.psycho;
+                    const tags = [
+                        p.tone, p.professionalism, p.verbosity, p.decision_style
+                    ].filter(Boolean).map(t => `<span class="px-1.5 py-0.5 rounded bg-purple-100 text-purple-700 text-xs border border-purple-200 mr-1">${esc(t)}</span>`).join('');
+                    
+                    const renderList = (list) => {
+                        if (!list || list.length === 0) return '';
+                        return list.map(item => {
+                            if (typeof item === 'string') return esc(item);
+                            const val = esc(item.value);
+                            const quote = esc(item.quote || '');
+                            const date = esc(item.date || '');
+
+                            let title = '';
+                            if (date) title += `Date: ${date}\n`;
+                            if (quote) title += `Context: "${quote}"`;
+
+                            if (!title) return val;
+                            return `<span class="cursor-help underline decoration-dotted decoration-purple-400" title="${title}">${val}</span>${date ? ` <span class="text-[10px] text-purple-400">${date}</span>` : ''}`;
+                        }).join(', ');
+                    };
+                    
+                    const renderTags = (tags) => {
+                        if (!tags || tags.length === 0) return '';
+                        return tags.map(t => `<span class="inline-block px-1.5 py-0.5 rounded-full bg-slate-200 text-slate-600 text-[10px] mr-1 mb-1 border border-slate-300 font-mono">${esc(t)}</span>`).join('');
+                    };
+
+                    psychoHtml = `
+                        <div class="mt-2 p-3 bg-purple-50 rounded border border-purple-100 text-sm relative border-l-4 ${p.commercial_archetype ? 'border-l-purple-600' : 'border-l-purple-200'}">
+                             <div class="flex justify-between items-center mb-2">
+                                <div class="flex items-center gap-2">
+                                    <div class="font-bold text-purple-900">🧠 Psychographics</div>
+                                    ${p.commercial_archetype ? `<div class="px-2 py-0.5 bg-purple-600 text-white rounded text-xs font-bold uppercase tracking-wide shadow-sm" title="Commercial Archetype">${esc(p.commercial_archetype.replace('_', ' '))}</div>` : ''}
+                                </div>
+                                <div class="flex flex-col items-end">
+                                    <div class="text-[10px] text-purple-600">${(p.approachability * 10).toFixed(1)}/10 Openness</div>
+                                    <div class="text-[9px] text-purple-400 opacity-60">${u.psycho_date ? new Date(u.psycho_date).toLocaleDateString() : ''}</div>
+                                </div>
+                            </div>
+                            <div class="mb-2 flex flex-wrap gap-1">${tags}</div>
+
+                            ${p.based_in ? `<div class="text-xs text-purple-800 mb-1">📍 <strong>Based in:</strong> ${esc(p.based_in)}</div>` : ''}
+                            ${p.preferred_contact_style ? `<div class="text-xs italic text-purple-700 mb-2 border-l-2 border-purple-300 pl-2">💡 ${esc(p.preferred_contact_style)}</div>` : ''}
+
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-x-4 gap-y-1 mt-2">
+                                ${p.social_presence && p.social_presence.length > 0 ? `<div class="text-xs text-blue-600 mb-2 col-span-2">🌐 <strong>Socials:</strong> ${p.social_presence.map(esc).join(', ')}</div>` : ''}
+
+                                ${p.pain_points && p.pain_points.length > 0 ? `<div class="text-xs text-red-800">🤬 <strong>Pains:</strong> ${renderList(p.pain_points)}</div>` : ''}
+                                ${p.crypto_values && p.crypto_values.length > 0 ? `<div class="text-xs text-blue-800">🏛️ <strong>Values:</strong> ${renderList(p.crypto_values)}</div>` : ''}
+                                ${p.connection_requests && p.connection_requests.length > 0 ? `<div class="text-xs text-green-800">🤝 <strong>Seeking:</strong> ${renderList(p.connection_requests)}</div>` : ''}
+                                ${p.notable_topics && p.notable_topics.length > 0 ? `<div class="text-xs text-purple-700">🗣️ <strong>Topics:</strong> ${renderList(p.notable_topics)}</div>` : ''}
+                                ${p.quirks && p.quirks.length > 0 ? `<div class="text-xs text-purple-700">✨ <strong>Quirks:</strong> ${renderList(p.quirks)}</div>` : ''}
+                            </div>
+                            
+                            ${p.fingerprint_tags && p.fingerprint_tags.length > 0 ? `<div class="mt-2 pt-2 border-t border-purple-100">${renderTags(p.fingerprint_tags)}</div>` : ''}
+                        </div>
+                    `;
+                }
+
+                card.innerHTML = `
+                    <div class="flex justify-between items-start">
+                        <div class="w-full">
+                            <h3 class="text-lg font-bold text-slate-800">${esc(u.display_name || 'Unknown User')} <span class="text-slate-400 text-xs font-normal">#${u.id}</span></h3>
+                            <p class="text-slate-600 text-sm italic mt-1 mb-3">"${esc(u.bio || 'No Bio')}"</p>
+                            
+                            <div class="mb-1">${claimsHtml}</div>
+                            ${aiHtml}
+                            ${psychoHtml}
+                            ${nearMissHtml}
+                            ${noiseHtml}
+                        </div>
+                    </div>
+                `;
+                feed.appendChild(card);
+            });
+
+            if(filtered.length === 0) {
+                feed.innerHTML = '<div class="text-center text-gray-500 py-10">No users found matching filters.</div>';
+            }
+        }
+
+        function getBorderColor(u) {
+            if (u.claims.some(c => c.status === 'supported')) return 'border-green-500';
+            if (u.claims.some(c => c.status === 'tentative')) return 'border-yellow-400';
+            if (u.abstentions.some(a => a.reason_code === 'low_confidence')) return 'border-orange-400';
+            return 'border-gray-200';
+        }
+
+        function esc(s) {
+            if(!s) return '';
+            return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        }
+    </script>
+</body>
+</html>
