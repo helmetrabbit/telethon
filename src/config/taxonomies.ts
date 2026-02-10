@@ -44,7 +44,7 @@ export const INTENTS = [
 ] as const;
 export type Intent = (typeof INTENTS)[number];
 
-export const EVIDENCE_TYPES = ['bio', 'message', 'feature', 'membership', 'display_name'] as const;
+export const EVIDENCE_TYPES = ['bio', 'message', 'feature', 'membership', 'display_name', 'llm'] as const;
 export type EvidenceType = (typeof EVIDENCE_TYPES)[number];
 
 export const CLAIM_STATUSES = ['tentative', 'supported'] as const;

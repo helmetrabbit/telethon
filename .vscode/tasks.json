@@ -1,0 +1,15 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "export-viewer",
+			"type": "shell",
+			"command": "npx tsx src/cli/export-viewer.ts",
+			"args": [
+				"export-viewer"
+			],
+			"isBackground": false,
+			"group": "build"
+		}
+	]
+}

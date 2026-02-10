@@ -1,0 +1,22 @@
+{
+  "version": "v0.5.9",
+  "description": "v0.5.9 — Precision tuning: increased gating threshold to 0.3 to reduce single-message FPs.",
+  "gating": {
+    "minNonMembershipEvidence": 1,
+    "minClaimConfidence": 0.3
+  },
+
+  "rolePriors": {
+    "bd": {},
+    "work": {},
+    "general_chat": {},
+    "unknown": {}
+  },
+
+  "intentPriors": {
+    "bd": {},
+    "work": {},
+    "general_chat": {},
+    "unknown": {}
+  }
+}

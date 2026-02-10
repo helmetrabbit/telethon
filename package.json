@@ -5,20 +5,18 @@
   "description": "Local Telegram chat analysis: ontology-lite knowledge graph with evidence-gated inference.",
   "scripts": {
     "build": "tsc",
-    "ingest": "node dist/cli/ingest.js",
+    "bulk-ingest": "node dist/cli/bulk-ingest.js",
     "compute-features": "node dist/cli/compute-features.js",
-    "infer-claims": "node dist/cli/infer-claims.js",
-    "export-profiles": "node dist/cli/export-profiles.js",
-    "export-diagnostics": "node dist/cli/export-diagnostics.js",
-    "export-sample": "node dist/cli/export-sample.js",
-    "regress": "node dist/cli/regress.js",
-    "golden": "node dist/cli/golden.js",
+    "scrape-bios": "node dist/cli/scrape-bios.js",
+    "enrich-psycho": "node dist/cli/enrich-psycho.js",
+    "export-viewer": "node dist/cli/export-viewer.js",
     "db:up": "docker compose up -d postgres",
     "db:down": "docker compose down",
     "db:migrate": "docker compose run --rm dbmate up",
     "db:rollback": "docker compose run --rm dbmate down",
     "db:reset": "docker compose down -v && docker compose up -d postgres && sleep 2 && docker compose run --rm dbmate up",
-    "pipeline": "npm run build && npm run ingest && npm run compute-features && npm run infer-claims && npm run export-profiles"
+    "run-sql": "docker compose exec -e PGPASSWORD=tgprofile postgres psql -U tgprofile -d tgprofile -c",
+    "pipeline": "npm run build && npm run bulk-ingest && npm run compute-features && npm run enrich-psycho && npm run export-viewer"
   },
   "engines": {
     "node": ">=18"
@@ -26,11 +24,14 @@
   "dependencies": {
     "dotenv": "^17.2.4",
     "pg": "^8.18.0",
+    "pg-copy-streams": "^7.0.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@types/minimist": "^1.2.5",
     "@types/node": "^25.2.1",
     "@types/pg": "^8.16.0",
+    "@types/pg-copy-streams": "^1.2.5",
     "typescript": "^5.9.3"
   }
 }

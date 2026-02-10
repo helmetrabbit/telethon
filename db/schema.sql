@@ -33,7 +33,9 @@ CREATE TYPE public.evidence_type AS ENUM (
     'bio',
     'message',
     'feature',
-    'membership'
+    'membership',
+    'display_name',
+    'llm'
 );
 
 
@@ -73,7 +75,8 @@ CREATE TYPE public.predicate_label AS ENUM (
     'has_role',
     'has_intent',
     'has_topic_affinity',
-    'affiliated_with'
+    'affiliated_with',
+    'has_org_type'
 );
 
 
@@ -89,7 +92,9 @@ CREATE TYPE public.role_label AS ENUM (
     'recruiter',
     'vendor_agency',
     'community',
-    'unknown'
+    'unknown',
+    'media_kol',
+    'market_maker'
 );
 
 
@@ -242,6 +247,22 @@ END;
 $$;
 
 
+--
+-- Name: trg_flag_user_for_enrichment(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.trg_flag_user_for_enrichment() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    UPDATE users
+    SET needs_enrichment = true, last_msg_at = NEW.sent_at
+    WHERE id = NEW.user_id;
+    RETURN NEW;
+END;
+$$;
+
+
 SET default_tablespace = '';
 
 SET default_table_access_method = heap;
@@ -259,20 +280,6 @@ CREATE TABLE public.abstention_log (
     model_version text NOT NULL,
     generated_at timestamp with time zone DEFAULT now() NOT NULL
 );
-
-
---
--- Name: TABLE abstention_log; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON TABLE public.abstention_log IS 'Records why a claim was NOT emitted for a user — evidence gating, low confidence, or insufficient data. Enables audit of "unknown" assignments.';
-
-
---
--- Name: COLUMN abstention_log.reason_code; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.abstention_log.reason_code IS 'Machine-readable code: insufficient_evidence, low_confidence, no_data';
 
 
 --
@@ -353,8 +360,17 @@ CREATE TABLE public.groups (
     title text,
     kind public.group_kind DEFAULT 'unknown'::public.group_kind NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    importance_weight real DEFAULT 5.0 NOT NULL,
+    group_description text
 );
+
+
+--
+-- Name: COLUMN groups.importance_weight; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.groups.importance_weight IS 'Weight for proportional message sampling during enrichment (1-10 scale)';
 
 
 --
@@ -418,7 +434,14 @@ CREATE TABLE public.messages (
     has_mentions boolean DEFAULT false NOT NULL,
     raw_ref_row_id bigint,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    views integer DEFAULT 0,
+    forwards integer DEFAULT 0,
+    media_type text,
+    topic_id bigint,
+    reply_count integer DEFAULT 0,
+    reaction_count integer DEFAULT 0,
+    reactions jsonb DEFAULT '[]'::jsonb
 );
 
 
@@ -531,6 +554,134 @@ CREATE TABLE public.user_features_daily (
 
 
 --
+-- Name: user_psychographics; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.user_psychographics (
+    id bigint NOT NULL,
+    user_id bigint NOT NULL,
+    model_name text NOT NULL,
+    prompt_hash text NOT NULL,
+    tone text,
+    professionalism text,
+    verbosity text,
+    responsiveness text,
+    decision_style text,
+    seniority_signal text,
+    approachability real,
+    quirks jsonb DEFAULT '[]'::jsonb,
+    notable_topics jsonb DEFAULT '[]'::jsonb,
+    based_in text,
+    attended_events jsonb DEFAULT '[]'::jsonb,
+    preferred_contact_style text,
+    reasoning text,
+    raw_response text,
+    latency_ms integer,
+    created_at timestamp with time zone DEFAULT now(),
+    commercial_archetype text,
+    pain_points jsonb DEFAULT '[]'::jsonb,
+    crypto_values jsonb DEFAULT '[]'::jsonb,
+    connection_requests jsonb DEFAULT '[]'::jsonb,
+    fingerprint_tags text[] DEFAULT '{}'::text[],
+    generated_bio_professional text,
+    generated_bio_personal text,
+    affiliations text[],
+    deep_skills text[],
+    social_platforms text[],
+    buying_power text,
+    languages text[],
+    scam_risk_score integer,
+    confidence_score real,
+    career_stage text,
+    tribe_affiliations text[],
+    reputation_score integer,
+    driving_values text[],
+    primary_role text,
+    primary_company text,
+    technical_specifics text[],
+    business_focus text[],
+    social_urls text[] DEFAULT '{}'::text[],
+    fifo text,
+    group_tags text[] DEFAULT '{}'::text[],
+    reputation_summary text,
+    last_active_days integer,
+    top_conversation_partners jsonb DEFAULT '[]'::jsonb,
+    total_msgs integer,
+    avg_msg_length integer,
+    peak_hours integer[],
+    active_days text[]
+);
+
+
+--
+-- Name: COLUMN user_psychographics.social_platforms; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.user_psychographics.social_platforms IS 'Platform names only (e.g. Twitter, LinkedIn, Farcaster)';
+
+
+--
+-- Name: COLUMN user_psychographics.social_urls; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.user_psychographics.social_urls IS 'Full social URLs or handles (e.g. twitter.com/user, linkedin.com/in/user)';
+
+
+--
+-- Name: COLUMN user_psychographics.fifo; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.user_psychographics.fifo IS 'First In First Out: MM/YY - MM/YY of first and last message';
+
+
+--
+-- Name: COLUMN user_psychographics.group_tags; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.user_psychographics.group_tags IS 'List of group names the user is a member of';
+
+
+--
+-- Name: COLUMN user_psychographics.reputation_summary; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.user_psychographics.reputation_summary IS 'Human-readable summary of reputation stats';
+
+
+--
+-- Name: COLUMN user_psychographics.last_active_days; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.user_psychographics.last_active_days IS 'Days since last message (integer for sorting)';
+
+
+--
+-- Name: COLUMN user_psychographics.top_conversation_partners; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.user_psychographics.top_conversation_partners IS 'Top people this user interacts with via replies';
+
+
+--
+-- Name: user_psychographics_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.user_psychographics_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: user_psychographics_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.user_psychographics_id_seq OWNED BY public.user_psychographics.id;
+
+
+--
 -- Name: users; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -542,7 +693,15 @@ CREATE TABLE public.users (
     display_name text,
     bio text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    needs_enrichment boolean DEFAULT false,
+    last_msg_at timestamp with time zone,
+    last_enriched_at timestamp with time zone,
+    is_verified boolean DEFAULT false,
+    is_scam boolean DEFAULT false,
+    is_fake boolean DEFAULT false,
+    is_premium boolean DEFAULT false,
+    lang_code text
 );
 
 
@@ -605,6 +764,13 @@ ALTER TABLE ONLY public.raw_import_rows ALTER COLUMN id SET DEFAULT nextval('pub
 --
 
 ALTER TABLE ONLY public.raw_imports ALTER COLUMN id SET DEFAULT nextval('public.raw_imports_id_seq'::regclass);
+
+
+--
+-- Name: user_psychographics id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_psychographics ALTER COLUMN id SET DEFAULT nextval('public.user_psychographics_id_seq'::regclass);
 
 
 --
@@ -711,6 +877,22 @@ ALTER TABLE ONLY public.user_features_daily
 
 
 --
+-- Name: user_psychographics user_psychographics_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_psychographics
+    ADD CONSTRAINT user_psychographics_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: user_psychographics user_psychographics_user_id_model_name_prompt_hash_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_psychographics
+    ADD CONSTRAINT user_psychographics_user_id_model_name_prompt_hash_key UNIQUE (user_id, model_name, prompt_hash);
+
+
+--
 -- Name: users users_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -776,6 +958,13 @@ CREATE INDEX idx_claims_user ON public.claims USING btree (subject_user_id);
 
 
 --
+-- Name: idx_messages_dedup; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX idx_messages_dedup ON public.messages USING btree (group_id, external_message_id);
+
+
+--
 -- Name: idx_messages_ext_id; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -801,6 +990,20 @@ CREATE INDEX idx_messages_sent_at ON public.messages USING btree (sent_at);
 --
 
 CREATE INDEX idx_messages_user ON public.messages USING btree (user_id);
+
+
+--
+-- Name: idx_psychographics_model; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_psychographics_model ON public.user_psychographics USING btree (model_name);
+
+
+--
+-- Name: idx_psychographics_user; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_psychographics_user ON public.user_psychographics USING btree (user_id);
 
 
 --
@@ -857,6 +1060,13 @@ CREATE CONSTRAINT TRIGGER claim_validate_object_value AFTER INSERT OR UPDATE ON 
 --
 
 CREATE CONSTRAINT TRIGGER evidence_change_revalidate_claim AFTER DELETE OR UPDATE ON public.claim_evidence DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.trg_evidence_change_revalidate_claim();
+
+
+--
+-- Name: messages flag_user_dirty; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER flag_user_dirty AFTER INSERT ON public.messages FOR EACH ROW EXECUTE FUNCTION public.trg_flag_user_for_enrichment();
 
 
 --
@@ -956,6 +1166,14 @@ ALTER TABLE ONLY public.user_features_daily
 
 
 --
+-- Name: user_psychographics user_psychographics_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_psychographics
+    ADD CONSTRAINT user_psychographics_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id);
+
+
+--
 -- PostgreSQL database dump complete
 --
 
@@ -972,4 +1190,19 @@ INSERT INTO public.schema_migrations (version) VALUES
     ('20260206130000'),
     ('20260206140000'),
     ('20260206150000'),
-    ('20260206160000');
+    ('20260206160000'),
+    ('20260207100000'),
+    ('20260208100000'),
+    ('20260208140000'),
+    ('20260208160000'),
+    ('20260208180000'),
+    ('20260208190000'),
+    ('20260208200000'),
+    ('20260208220000'),
+    ('20260208230000'),
+    ('20260209100000'),
+    ('20260209110000'),
+    ('20260209120000'),
+    ('20260209130000'),
+    ('20260209140000'),
+    ('20260209150000');
