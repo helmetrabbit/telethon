@@ -690,6 +690,7 @@
                                     (p.commercial_archetype ? '<span class="tag bg-indigo-100 text-indigo-700 border-indigo-200 clickable"' + fclick('archetype', p.commercial_archetype) + '>' + esc(p.commercial_archetype.replace(/_/g, ' ')) + '</span>' : '') +
                                     (p.career_stage ? '<span class="text-[10px] text-slate-400 clickable"' + fclick('stage', p.career_stage) + '>' + esc(p.career_stage) + '</span>' : '') +
                                 '</div>' +
+                                (u.bio ? '<p class="text-xs text-slate-500 mt-1">' + esc(u.bio) + '</p>' : '') +
                                 (p.generated_bio_professional ? '<p class="text-xs text-slate-600 mt-1">' + esc(p.generated_bio_professional) + '</p>' : '') +
                             '</div>' +
                             '<div class="flex flex-col items-end ml-3 shrink-0 text-right">' +

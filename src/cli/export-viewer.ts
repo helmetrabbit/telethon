@@ -48,21 +48,23 @@ async function main() {
   // 4. Get Psychographics
   console.log('Fetching Psychographics...');
   const psychoRes = await db.query(`
-    SELECT DISTINCT ON (user_id)
-      user_id, tone, professionalism, verbosity, responsiveness, decision_style, 
-      seniority_signal, commercial_archetype, approachability, 
-      quirks, notable_topics, pain_points, crypto_values, connection_requests, fingerprint_tags,
-      based_in, attended_events, preferred_contact_style, reasoning, created_at,
-      generated_bio_professional, generated_bio_personal, primary_role, primary_company,
-      deep_skills, affiliations, social_platforms, social_urls, buying_power, languages,
-      scam_risk_score, confidence_score, career_stage, tribe_affiliations,
-      reputation_score, driving_values, technical_specifics, business_focus,
-      fifo, group_tags, reputation_summary,
-      total_messages, avg_msg_length, peak_hours, most_active_days,
-      total_reactions, avg_reactions_per_msg, total_replies_received, avg_replies_per_msg, engagement_rate,
-      last_active_days, top_conversation_partners
-    FROM user_psychographics
-    ORDER BY user_id, created_at DESC
+    SELECT DISTINCT ON (p.user_id)
+      p.user_id, u.display_name, u.bio,
+      p.tone, p.professionalism, p.verbosity, p.responsiveness, p.decision_style, 
+      p.seniority_signal, p.commercial_archetype, p.approachability, 
+      p.quirks, p.notable_topics, p.pain_points, p.crypto_values, p.connection_requests, p.fingerprint_tags,
+      p.based_in, p.attended_events, p.preferred_contact_style, p.reasoning, p.created_at,
+      p.generated_bio_professional, p.generated_bio_personal, p.primary_role, p.primary_company,
+      p.deep_skills, p.affiliations, p.social_platforms, p.social_urls, p.buying_power, p.languages,
+      p.scam_risk_score, p.confidence_score, p.career_stage, p.tribe_affiliations,
+      p.reputation_score, p.driving_values, p.technical_specifics, p.business_focus,
+      p.fifo, p.group_tags, p.reputation_summary,
+      p.total_messages, p.avg_msg_length, p.peak_hours, p.most_active_days,
+      p.total_reactions, p.avg_reactions_per_msg, p.total_replies_received, p.avg_replies_per_msg, p.engagement_rate,
+      p.last_active_days, p.top_conversation_partners
+    FROM user_psychographics p
+    JOIN users u ON u.id = p.user_id
+    ORDER BY p.user_id, p.created_at DESC
   `);
 
   // 5. Activity heatmap: day-of-week × hour-of-day from raw messages (enriched users only)
