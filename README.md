@@ -261,6 +261,7 @@ For 24/7 unattended enrichment, use the long-running supervisor:
 
 ```bash
 # Start once (runs listener, resumable ingestion, and optional reconcile)
+# Includes a preflight check for venv/session/DB wiring before launch.
 make tg-live-start
 
 # Check health

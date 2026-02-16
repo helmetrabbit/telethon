@@ -118,6 +118,7 @@ tg-live-start:
 	INTERVAL=$${INTERVAL:-30}; \
 	STATE_FILE=$${STATE_FILE:-data/.state/dm-live.state.json}; \
 	SESSION_PATH=$${SESSION_PATH:-$${TG_SESSION_PATH:-tools/telethon_collector/telethon_openclaw.session}}; \
+	bash tools/telethon_collector/preflight-dm-live.sh "$${SESSION_PATH}"; \
 	bash tools/telethon_collector/run-dm-live.sh "$${FILE}" "$${INTERVAL}" profile "$${STATE_FILE}" "$${SESSION_PATH}"
 
 
@@ -127,6 +128,7 @@ tg-live-start-ingest:
 	INTERVAL=$${INTERVAL:-30}; \
 	STATE_FILE=$${STATE_FILE:-data/.state/dm-live.state.json}; \
 	SESSION_PATH=$${SESSION_PATH:-$${TG_SESSION_PATH:-tools/telethon_collector/telethon_openclaw.session}}; \
+	bash tools/telethon_collector/preflight-dm-live.sh "$${SESSION_PATH}"; \
 	bash tools/telethon_collector/run-dm-live.sh "$${FILE}" "$${INTERVAL}" ingest "$${STATE_FILE}" "$${SESSION_PATH}"
 
 # Show/stop helpers for the live pipeline
