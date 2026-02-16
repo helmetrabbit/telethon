@@ -88,6 +88,8 @@ make tg-live-start
 #   FILE=data/exports/telethon_dms_live.jsonl
 #   INTERVAL=10
 #   STATE_FILE=data/.state/dm-live.state.json
+#   DM_RESPONSE_MODE=conversational   # conversational|template
+#   DM_PERSONA_NAME="Lobster Llama"
 ```
 
 For ingest-only automation (no profile reconciliation):

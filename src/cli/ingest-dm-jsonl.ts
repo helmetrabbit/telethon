@@ -29,7 +29,7 @@ interface DmEvent {
 }
 
 interface ProfileFact {
-  field: 'primary_company' | 'primary_role';
+  field: 'primary_company' | 'primary_role' | 'preferred_contact_style' | 'notable_topics';
   old_value: string | null;
   new_value: string | null;
   confidence: number;
@@ -145,9 +145,42 @@ function cleanupCompanyName(raw: string): string {
     .trim();
 }
 
+function normalizeRole(raw: string): string {
+  return raw
+    .replace(/^[\s-]+/, '')
+    .replace(/[\s,.!?;:]+$/g, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+function normalizeContactStyle(raw: string): string {
+  const clean = sanitizeEntity(raw);
+  if (!clean) return '';
+  const lower = clean.toLowerCase();
+
+  if (lower.includes('email')) return 'email';
+  if (lower.includes('telegram') || lower.includes('dm')) return 'telegram dm';
+  if (lower.includes('text') || lower.includes('sms')) return 'text';
+  if (lower.includes('call') || lower.includes('phone')) return 'call';
+  if (lower.includes('voice')) return 'voice notes';
+  if (lower.includes('short') || lower.includes('concise')) return 'short messages';
+  if (lower.includes('detailed') || lower.includes('long')) return 'detailed messages';
+  return clean.toLowerCase();
+}
+
+function splitPriorityTopics(raw: string): string[] {
+  return raw
+    .split(/,|;|\band\b|\&/gi)
+    .map((value) => sanitizeEntity(value))
+    .filter((value): value is string => Boolean(value))
+    .map((value) => value.toLowerCase())
+    .filter((value) => value.length >= 2)
+    .slice(0, 6);
+}
+
 function extractProfileEventsFromText(text: string | null): ProfileEvent[] {
   if (!text) return [];
-  const lower = text.toLowerCase();
+  const source = text;
   const events: ProfileEvent[] = [];
 
   // Pattern: "I no longer work at X and now I'm at Y"
@@ -156,7 +189,7 @@ function extractProfileEventsFromText(text: string | null): ProfileEvent[] {
     `(?:i(?:'m| am)|i|just)?\s*(?:no longer|not|never|no|didn't)?\s*(?:work|worked|work(ed)?|work for|work at|work with|work there)?\s*(?:at|with|for)?\s*(${entityToken})(?:\.|,)?\s*(?:and|then|and now|now)\s+(?:i(?:'m| am))\s+(?:just\s+)?(?:left|moved|moving|joined|working|work|start(ed)?|switch(?:ed)?|shifted)\s+(?:at|with)?\s*(${entityToken})`,
     'giu',
   );
-  const mTwoStep = lower.matchAll(twoStep);
+  const mTwoStep = source.matchAll(twoStep);
   for (const m of mTwoStep) {
     const oldCompany = sanitizeEntity(m[1]);
     const newCompany = sanitizeEntity(m[2]);
@@ -185,7 +218,7 @@ function extractProfileEventsFromText(text: string | null): ProfileEvent[] {
 
   // Pattern: "now I'm working at X"
   const nowAt = /(?:^|[\s\n])(?:currently|now)\s+(?:i(?:'m| am)\s+)?working\s+at\s+([A-Za-z0-9 .,'-]{1,100})/giu;
-  for (const m of lower.matchAll(nowAt)) {
+  for (const m of source.matchAll(nowAt)) {
     const target = sanitizeEntity(m[1]);
     if (!target) continue;
     const cleaned = cleanupCompanyName(target);
@@ -210,7 +243,7 @@ function extractProfileEventsFromText(text: string | null): ProfileEvent[] {
 
   // Pattern: "I joined X"
   const joined = /(?:^|[\s\n])(?:i\s+just\s+|i\s+have\s+just\s+|i\s+recently\s+)?joined\s+([A-Za-z0-9 .,'-]{1,100})/giu;
-  for (const m of lower.matchAll(joined)) {
+  for (const m of source.matchAll(joined)) {
     const target = sanitizeEntity(m[1]);
     if (!target) continue;
     const cleaned = cleanupCompanyName(target);
@@ -233,12 +266,100 @@ function extractProfileEventsFromText(text: string | null): ProfileEvent[] {
     });
   }
 
-  // dedupe by event type + new_company + old_company
+  // Pattern: role/company declarations (e.g. "I'm a product manager at Acme")
+  const roleAndCompany = /(?:^|[\s\n])(?:i(?:'m| am)|my role(?:\s+is|['’]s)?|my title(?:\s+is|['’]s)?|i work as)\s+(?:a|an|the)?\s*([A-Za-z0-9/&+().,' -]{2,80})(?:\s+(?:at|with|for)\s+([A-Za-z0-9 .,'&-]{2,120}))?/giu;
+  for (const m of source.matchAll(roleAndCompany)) {
+    const role = normalizeRole(m[1] || '');
+    const maybeCompany = sanitizeEntity(m[2] || '');
+    const company = maybeCompany ? cleanupCompanyName(maybeCompany) : null;
+    const facts: ProfileFact[] = [];
+
+    if (role) {
+      facts.push({
+        field: 'primary_role',
+        old_value: null,
+        new_value: role,
+        confidence: 0.74,
+      });
+    }
+    if (company) {
+      facts.push({
+        field: 'primary_company',
+        old_value: null,
+        new_value: company,
+        confidence: 0.74,
+      });
+    }
+    if (facts.length === 0) continue;
+
+    events.push({
+      event_type: company ? 'profile.role_company_update' : 'profile.role_update',
+      confidence: 0.74,
+      event_payload: {
+        raw_text: text,
+        trigger: 'role_company_statement',
+        role: role || null,
+        company,
+      },
+      extracted_facts: facts,
+    });
+  }
+
+  // Pattern: explicit communication preference
+  const commPrefs = /(?:best way to (?:reach|contact) me(?:\s+is)?|i prefer(?:\s+to)? communicate(?:\s+via|\s+on)?|contact me(?:\s+via|\s+on)?|reach me(?:\s+via|\s+on)?|prefer(?:\s+short|\s+concise|\s+detailed)?(?:\s+messages)?)\s+([^.!?\n]{3,100})/giu;
+  for (const m of source.matchAll(commPrefs)) {
+    const style = normalizeContactStyle(m[1] || '');
+    if (!style) continue;
+    events.push({
+      event_type: 'profile.contact_style_update',
+      confidence: 0.69,
+      event_payload: {
+        raw_text: text,
+        trigger: 'contact_style_statement',
+        preferred_contact_style: style,
+      },
+      extracted_facts: [
+        {
+          field: 'preferred_contact_style',
+          old_value: null,
+          new_value: style,
+          confidence: 0.69,
+        },
+      ],
+    });
+  }
+
+  // Pattern: priority statements
+  const priorities = /(?:my priorities are|i(?:'m| am)\s+focused on|currently focused on|right now\s+i(?:'m| am)\s+focused on)\s+([^.!?\n]{3,180})/giu;
+  for (const m of source.matchAll(priorities)) {
+    const topics = splitPriorityTopics(m[1] || '');
+    if (topics.length === 0) continue;
+    events.push({
+      event_type: 'profile.priorities_update',
+      confidence: 0.66,
+      event_payload: {
+        raw_text: text,
+        trigger: 'priority_statement',
+        priorities: topics,
+      },
+      extracted_facts: topics.map((topic) => ({
+        field: 'notable_topics',
+        old_value: null,
+        new_value: topic,
+        confidence: 0.66,
+      })),
+    });
+  }
+
+  // dedupe by event type + fact values
   const keySet = new Set<string>();
   const deduped: ProfileEvent[] = [];
   for (const evt of events) {
-    const fact = evt.extracted_facts[0];
-    const k = `${evt.event_type}|${fact?.new_value || ''}|${fact?.old_value || ''}`;
+    const factKey = evt.extracted_facts
+      .map((fact) => `${fact.field}:${fact.new_value || ''}:${fact.old_value || ''}`)
+      .sort()
+      .join('|');
+    const k = `${evt.event_type}|${factKey}`;
     if (keySet.has(k)) continue;
     keySet.add(k);
     deduped.push(evt);

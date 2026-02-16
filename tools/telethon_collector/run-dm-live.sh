@@ -126,9 +126,10 @@ has_response_status_column() {
     return 1
   fi
 
-  if [ -n "$RESPONSE_STATUS_AVAILABLE" ]; then
-    [ "$RESPONSE_STATUS_AVAILABLE" = "1" ]
-    return "$?"
+  # Cache only the positive check. If DB is temporarily unreachable or the
+  # schema is mid-migration, re-check on the next cycle.
+  if [ "$RESPONSE_STATUS_AVAILABLE" = "1" ]; then
+    return 0
   fi
 
   local out
@@ -155,8 +156,7 @@ with connect(conn_url) as conn:
         print('1' if row else '0')
 PY
   ); then
-    log_err "Response-status schema check failed; responder will be skipped until DB is reachable"
-    RESPONSE_STATUS_AVAILABLE="0"
+    log_err "Response-status schema check failed; responder will be skipped for this cycle"
     return 1
   fi
 
@@ -164,7 +164,6 @@ PY
     RESPONSE_STATUS_AVAILABLE="1"
     return 0
   fi
-  RESPONSE_STATUS_AVAILABLE="0"
   return 1
 }
 
@@ -192,10 +191,13 @@ start_listener() {
 
   sleep 2
   if ! kill -0 "$listener_pid" 2>/dev/null; then
-    if ! wait "$listener_pid"; then :; fi
+    local listener_status=0
+    if wait "$listener_pid"; then
+      listener_status=0
+    else
+      listener_status=$?
+    fi
     rm -f "$LISTENER_PID_FILE"
-
-    local listener_status=$?
     local latest
     latest=$(tail -n 1 "$LOG_DIR/dm-listener.log" | sed -n '1,120p' || true)
     if echo "$latest" | grep -qi "Please enter your phone\|interactive login"; then
@@ -281,7 +283,13 @@ run_ingest_cycle() {
       if has_response_status_column; then
         (
           cd "$ROOT_DIR"
-          DM_SESSION_PATH="$SESSION_PATH"           DM_RESPONSE_LIMIT="${DM_RESPONSE_LIMIT:-20}"           DM_MAX_RETRIES="${DM_MAX_RETRIES:-3}"           DM_RESPONSE_TEMPLATE="${DM_RESPONSE_TEMPLATE:-Thanks for reaching out — I captured this and will use it to improve your profile dataset. To help it, share: your current role/company, 2-3 priorities, and how you prefer to communicate.}"           bash tools/telethon_collector/run-dm-response.sh
+          DM_SESSION_PATH="$SESSION_PATH" \
+          DM_RESPONSE_LIMIT="${DM_RESPONSE_LIMIT:-20}" \
+          DM_MAX_RETRIES="${DM_MAX_RETRIES:-3}" \
+          DM_RESPONSE_MODE="${DM_RESPONSE_MODE:-conversational}" \
+          DM_PERSONA_NAME="${DM_PERSONA_NAME:-Lobster Llama}" \
+          DM_RESPONSE_TEMPLATE="${DM_RESPONSE_TEMPLATE:-Thanks for reaching out — I captured this and will use it to improve your profile dataset. To help it, share: your current role/company, 2-3 priorities, and how you prefer to communicate.}" \
+          bash tools/telethon_collector/run-dm-response.sh
         ) >> "$LOG_DIR/dm-respond.log" 2>&1
         local respond_status=$?
         if [ "$respond_status" -ne 0 ]; then

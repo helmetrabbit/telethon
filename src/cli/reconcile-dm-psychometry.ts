@@ -10,6 +10,8 @@ interface PsychRow {
   generated_bio_professional: string | null;
   generated_bio_personal: string | null;
   primary_role: string | null;
+  preferred_contact_style: string | null;
+  notable_topics: unknown;
 }
 
 interface DbEvent {
@@ -18,7 +20,7 @@ interface DbEvent {
   event_type: string;
   event_payload: Record<string, unknown>;
   extracted_facts: Array<{
-    field: 'primary_company' | 'primary_role';
+    field: 'primary_company' | 'primary_role' | 'preferred_contact_style' | 'notable_topics';
     old_value: string | null;
     new_value: string | null;
     confidence: number;
@@ -29,6 +31,26 @@ interface DbEvent {
 
 function sanitizeCompany(value: string | null): string {
   return (value || '').replace(/[\t\n\r]+/g, ' ').replace(/[.]$/, '').trim();
+}
+
+function sanitizeRole(value: string | null): string {
+  return (value || '').replace(/[\t\n\r]+/g, ' ').replace(/[.]$/, '').trim();
+}
+
+function sanitizeContactStyle(value: string | null): string {
+  return (value || '').replace(/[\t\n\r]+/g, ' ').replace(/[.]$/, '').trim();
+}
+
+function normalizeTopics(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const out = new Set<string>();
+  for (const item of value) {
+    if (typeof item !== 'string') continue;
+    const clean = item.replace(/[\t\n\r]+/g, ' ').trim().toLowerCase();
+    if (!clean) continue;
+    out.add(clean);
+  }
+  return [...out];
 }
 
 function applyCompanyShift(base: string | null, value: string): string {
@@ -53,28 +75,61 @@ function replaceInReasoning(reasoning: string | null, oldCompany: string | null,
   return rew ? `${rew}\n${tail}` : tail;
 }
 
-function applyProfilePatch(base: PsychRow, events: DbEvent[]): { primary_company: string | null; reasoning: string; generated_bio_professional: string | null; generated_bio_personal: string | null; }
+function applyProfilePatch(base: PsychRow, events: DbEvent[]): {
+  primary_company: string | null;
+  primary_role: string | null;
+  preferred_contact_style: string | null;
+  notable_topics: string[];
+  reasoning: string;
+  generated_bio_professional: string | null;
+  generated_bio_personal: string | null;
+}
 {
   let nextCompany = base.primary_company;
+  let nextRole = base.primary_role;
+  let nextContactStyle = base.preferred_contact_style;
+  const nextTopics = new Set<string>(normalizeTopics(base.notable_topics));
   let reasoning = base.reasoning || '';
   let prof = base.generated_bio_professional;
   let personal = base.generated_bio_personal;
 
   for (const evt of events) {
     for (const fact of evt.extracted_facts || []) {
-      if (fact.field !== 'primary_company') continue;
-      const newCompany = sanitizeCompany(fact.new_value);
-      if (!newCompany) continue;
-      const oldCompany = nextCompany || fact.old_value;
+      if (fact.field === 'primary_company') {
+        const newCompany = sanitizeCompany(fact.new_value);
+        if (!newCompany) continue;
+        const oldCompany = nextCompany || fact.old_value;
 
-      if (nextCompany && nextCompany !== newCompany) {
+        if (nextCompany && nextCompany !== newCompany) {
+          reasoning = replaceInReasoning(reasoning, oldCompany, newCompany);
+          prof = rewriteBioText(prof, oldCompany, newCompany);
+          personal = rewriteBioText(personal, oldCompany, newCompany);
+        }
+
+        nextCompany = applyCompanyShift(nextCompany, newCompany);
         reasoning = replaceInReasoning(reasoning, oldCompany, newCompany);
-        prof = rewriteBioText(prof, oldCompany, newCompany);
-        personal = rewriteBioText(personal, oldCompany, newCompany);
+      } else if (fact.field === 'primary_role') {
+        const newRole = sanitizeRole(fact.new_value);
+        if (!newRole) continue;
+        if (nextRole !== newRole) {
+          reasoning += `\n[DM profile-correction ${new Date().toISOString()}] Updated role -> '${newRole}'.`;
+          nextRole = newRole;
+        }
+      } else if (fact.field === 'preferred_contact_style') {
+        const newContactStyle = sanitizeContactStyle(fact.new_value);
+        if (!newContactStyle) continue;
+        if (nextContactStyle !== newContactStyle) {
+          reasoning += `\n[DM profile-correction ${new Date().toISOString()}] Updated preferred_contact_style -> '${newContactStyle}'.`;
+          nextContactStyle = newContactStyle;
+        }
+      } else if (fact.field === 'notable_topics') {
+        const topic = (fact.new_value || '').trim().toLowerCase();
+        if (!topic) continue;
+        if (!nextTopics.has(topic)) {
+          nextTopics.add(topic);
+          reasoning += `\n[DM profile-correction ${new Date().toISOString()}] Added notable topic '${topic}'.`;
+        }
       }
-
-      nextCompany = applyCompanyShift(nextCompany, newCompany);
-      reasoning = replaceInReasoning(reasoning, oldCompany, newCompany);
       const confidence = evt.confidence;
       reasoning += `\n[DM event #${evt.id}] source_confidence=${confidence.toFixed(2)} payload=${JSON.stringify(evt.event_payload)}.`;
     }
@@ -82,6 +137,9 @@ function applyProfilePatch(base: PsychRow, events: DbEvent[]): { primary_company
 
   return {
     primary_company: nextCompany || base.primary_company,
+    primary_role: nextRole || base.primary_role,
+    preferred_contact_style: nextContactStyle || base.preferred_contact_style,
+    notable_topics: [...nextTopics],
     reasoning,
     generated_bio_professional: prof || base.generated_bio_professional,
     generated_bio_personal: personal || base.generated_bio_personal,
@@ -126,7 +184,7 @@ async function reconcileUsers(targetUserIds: string[] = [], limit = 0): Promise<
     if (!eventsRes.rows.length) continue;
 
     const latestProfileRes = await db.query<PsychRow>(
-      `SELECT primary_company, reasoning, generated_bio_professional, generated_bio_personal, primary_role
+      `SELECT primary_company, reasoning, generated_bio_professional, generated_bio_personal, primary_role, preferred_contact_style, notable_topics
        FROM user_psychographics
        WHERE user_id = $1
        ORDER BY created_at DESC
@@ -140,6 +198,8 @@ async function reconcileUsers(targetUserIds: string[] = [], limit = 0): Promise<
       generated_bio_professional: null,
       generated_bio_personal: null,
       primary_role: null,
+      preferred_contact_style: null,
+      notable_topics: [],
     };
 
     const patch = applyProfilePatch(latest, eventsRes.rows);
@@ -163,8 +223,8 @@ async function reconcileUsers(targetUserIds: string[] = [], limit = 0): Promise<
     const insertedProfile = await db.query<{ id: string }>(
       `INSERT INTO user_psychographics (
          user_id, model_name, prompt_hash, primary_company, reasoning,
-         generated_bio_professional, generated_bio_personal, primary_role, raw_response, latency_ms
-       ) VALUES ($1, 'dm-event-reconciler', $2, $3, $4, $5, $6, $7, $8, 0)
+         generated_bio_professional, generated_bio_personal, primary_role, preferred_contact_style, notable_topics, raw_response, latency_ms
+       ) VALUES ($1, 'dm-event-reconciler', $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, 0)
        RETURNING id`,
       [
         userId,
@@ -173,7 +233,9 @@ async function reconcileUsers(targetUserIds: string[] = [], limit = 0): Promise<
         reasoningText,
         patch.generated_bio_professional,
         patch.generated_bio_personal,
-        latest.primary_role,
+        patch.primary_role,
+        patch.preferred_contact_style,
+        JSON.stringify(patch.notable_topics),
         `Applied ${eventsRes.rows.length} DM-derived profile correction(s).`,
       ],
     );

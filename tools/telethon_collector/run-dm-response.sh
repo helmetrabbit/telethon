@@ -10,6 +10,8 @@ if [[ "${SESSION_PATH}" != /* ]] && [ "${SESSION_PATH}" != "" ]; then
 fi
 LIMIT="${DM_RESPONSE_LIMIT:-20}"
 MAX_RETRIES="${DM_MAX_RETRIES:-3}"
+MODE="${DM_RESPONSE_MODE:-conversational}"
+PERSONA_NAME="${DM_PERSONA_NAME:-Lobster Llama}"
 TEMPLATE="${DM_RESPONSE_TEMPLATE:-"Thanks for reaching out — I captured this and will use it to improve your profile dataset. To help it, share: your current role/company, 2-3 priorities, and how you prefer to communicate."}"
 DRY_RUN="${DM_RESPONSE_DRY_RUN:-0}"
 
@@ -32,6 +34,8 @@ fi
       --session-path "$SESSION_PATH" \
       --limit "$LIMIT" \
       --max-retries "$MAX_RETRIES" \
+      --mode "$MODE" \
+      --persona-name "$PERSONA_NAME" \
       --template "$TEMPLATE" \
       --dry-run
   else
@@ -39,6 +43,8 @@ fi
       --session-path "$SESSION_PATH" \
       --limit "$LIMIT" \
       --max-retries "$MAX_RETRIES" \
+      --mode "$MODE" \
+      --persona-name "$PERSONA_NAME" \
       --template "$TEMPLATE"
   fi
 )

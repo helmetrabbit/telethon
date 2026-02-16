@@ -16,7 +16,7 @@ import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from dotenv import load_dotenv
 from psycopg import connect, OperationalError
@@ -41,6 +41,17 @@ def parse_args() -> argparse.Namespace:
     p.add_argument('--limit', type=int, default=20, help='Maximum pending messages to process (default: 20)')
     p.add_argument('--max-retries', type=int, default=3, help='Maximum delivery retries (default: 3)')
     p.add_argument('--session-path', default=_default_session, help='Telethon session path to use')
+    p.add_argument(
+        '--mode',
+        choices=['template', 'conversational'],
+        default=os.getenv('DM_RESPONSE_MODE', 'conversational'),
+        help='Reply generation mode (default: conversational)',
+    )
+    p.add_argument(
+        '--persona-name',
+        default=os.getenv('DM_PERSONA_NAME', 'Lobster Llama'),
+        help='Visible persona name used in conversational responses',
+    )
     p.add_argument(
         '--template',
         default=(
@@ -81,19 +92,213 @@ def render_template(template: str, row: Dict[str, Any]) -> str:
     )
 
 
+def _clean_text(value: Optional[str]) -> str:
+    return re.sub(r"\s+", " ", (value or "")).strip()
+
+
+def infer_slots_from_text(text: Optional[str]) -> Set[str]:
+    source = (text or '').lower()
+    found: Set[str] = set()
+    if not source:
+        return found
+
+    role_markers = (
+        "i'm a ",
+        "i am a ",
+        "i'm an ",
+        "i am an ",
+        "my role is ",
+        "i work as ",
+        "my title is ",
+    )
+    company_markers = (
+        "work at ",
+        "working at ",
+        "joined ",
+        "company is ",
+    )
+    contact_markers = (
+        "prefer",
+        "best way to reach me",
+        "contact me",
+        "dm me",
+        "telegram",
+        "email",
+        "text me",
+        "call me",
+    )
+    priority_markers = (
+        "priority",
+        "priorities",
+        "focused on",
+        "focus is",
+        "right now i'm focused",
+    )
+
+    if any(marker in source for marker in role_markers):
+        found.add('primary_role')
+    if any(marker in source for marker in company_markers):
+        found.add('primary_company')
+    if any(marker in source for marker in contact_markers):
+        found.add('preferred_contact_style')
+    if any(marker in source for marker in priority_markers):
+        found.add('notable_topics')
+    return found
+
+
+def fetch_latest_profile(conn, sender_db_id: Optional[int]) -> Dict[str, Any]:
+    if not sender_db_id:
+        return {
+            'primary_role': None,
+            'primary_company': None,
+            'preferred_contact_style': None,
+            'notable_topics': [],
+        }
+
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """
+            SELECT primary_role, primary_company, preferred_contact_style, notable_topics
+            FROM user_psychographics
+            WHERE user_id = %s
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            [sender_db_id],
+        )
+        row = cur.fetchone()
+
+    if not row:
+        return {
+            'primary_role': None,
+            'primary_company': None,
+            'preferred_contact_style': None,
+            'notable_topics': [],
+        }
+
+    topics_raw = row.get('notable_topics')
+    topics: List[str] = []
+    if isinstance(topics_raw, list):
+        for item in topics_raw:
+            if isinstance(item, str):
+                clean = _clean_text(item)
+                if clean:
+                    topics.append(clean)
+
+    return {
+        'primary_role': _clean_text(row.get('primary_role')) or None,
+        'primary_company': _clean_text(row.get('primary_company')) or None,
+        'preferred_contact_style': _clean_text(row.get('preferred_contact_style')) or None,
+        'notable_topics': topics,
+    }
+
+
+def _pick(options: List[str], seed: int) -> str:
+    if not options:
+        return ''
+    return options[seed % len(options)]
+
+
+def render_conversational_reply(row: Dict[str, Any], profile: Dict[str, Any], persona_name: str) -> str:
+    msg_id = int(row.get('id') or 0)
+    observed_slots = infer_slots_from_text(row.get('text'))
+
+    ack_options = [
+        "Love the context, thanks for sharing that.",
+        "Super helpful, thanks for the update.",
+        "Nice, that gives me a much clearer signal.",
+    ]
+    ack_line = _pick(ack_options, msg_id)
+
+    missing_order = ['primary_role', 'primary_company', 'notable_topics', 'preferred_contact_style']
+    missing = []
+    for slot in missing_order:
+        value = profile.get(slot)
+        if slot == 'notable_topics':
+            has_value = isinstance(value, list) and len(value) > 0
+        else:
+            has_value = bool(value)
+        if not has_value and slot not in observed_slots:
+            missing.append(slot)
+
+    role_questions = [
+        "What title best matches what you do day to day right now?",
+        "Quick one: what role should I pin you as right now?",
+    ]
+    company_questions = [
+        "What company or project are you currently spending most of your time on?",
+        "Which company/project should I map you to at the moment?",
+    ]
+    priority_questions = [
+        "What are your top 2 priorities this month?",
+        "What are the main things you want to push forward right now?",
+    ]
+    contact_questions = [
+        "What communication style do you prefer from me: short bullets, detailed notes, or quick back-and-forth?",
+        "How do you want me to communicate with you: concise, detailed, or somewhere in between?",
+    ]
+
+    if missing:
+        slot = missing[0]
+        question_map = {
+            'primary_role': role_questions,
+            'primary_company': company_questions,
+            'notable_topics': priority_questions,
+            'preferred_contact_style': contact_questions,
+        }
+        next_question = _pick(question_map[slot], msg_id + 1)
+    else:
+        next_question = _pick(
+            [
+                "If anything changed in your role, company, or priorities, send it and I’ll keep your profile fresh.",
+                "If you have a new update, drop it here and I’ll keep your profile in sync.",
+            ],
+            msg_id + 2,
+        )
+
+    if row.get('response_attempts') == 1:
+        intro = f"I'm {persona_name}."
+        return f"{ack_line} {intro} {next_question}"
+    return f"{ack_line} {next_question}"
+
+
+def render_response(args: argparse.Namespace, conn, row: Dict[str, Any]) -> str:
+    if args.mode == 'template':
+        return render_template(args.template, row)
+
+    profile = fetch_latest_profile(conn, row.get('sender_db_id'))
+    return render_conversational_reply(row, profile, args.persona_name)
+
+
 def mark_auto_responded(conn) -> int:
     with conn.cursor() as cur:
         cur.execute(
             """
-            UPDATE dm_messages
+            WITH matched AS (
+              SELECT
+                m.id AS inbound_id,
+                o.external_message_id AS outbound_external_id,
+                o.sent_at AS outbound_sent_at
+              FROM dm_messages m
+              JOIN LATERAL (
+                SELECT o.external_message_id, o.sent_at
+                FROM dm_messages o
+                WHERE o.conversation_id = m.conversation_id
+                  AND o.direction = 'outbound'
+                  AND o.sent_at >= m.sent_at
+                ORDER BY o.sent_at ASC, o.id ASC
+                LIMIT 1
+              ) o ON TRUE
+              WHERE m.direction = 'inbound'
+                AND m.response_status IN ('pending', 'failed', 'sending')
+            )
+            UPDATE dm_messages m
             SET response_status = 'responded',
-                responded_at = GREATEST(dm_messages.responded_at, o.sent_at)
-            FROM dm_messages o
-            WHERE dm_messages.direction = 'inbound'
-              AND dm_messages.response_status IN ('pending', 'failed', 'sending')
-              AND o.conversation_id = dm_messages.conversation_id
-              AND o.direction = 'outbound'
-              AND o.sent_at >= dm_messages.sent_at
+                response_message_external_id = COALESCE(m.response_message_external_id, matched.outbound_external_id),
+                responded_at = COALESCE(m.responded_at, matched.outbound_sent_at),
+                response_last_error = NULL
+            FROM matched
+            WHERE m.id = matched.inbound_id
             """,
         )
         return cur.rowcount or 0
@@ -116,11 +321,12 @@ def recover_stale_sending(conn, stale_minutes: int = 10) -> int:
 
 
 def claim_pending(conn, limit: int, max_retries: int) -> List[Dict[str, Any]]:
+    candidate_limit = max(limit * 10, limit)
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
             """
-            WITH pending AS (
-              SELECT m.id
+            WITH candidates AS (
+              SELECT m.id, m.conversation_id, m.sent_at
               FROM dm_messages m
               WHERE m.direction = 'inbound'
                 AND m.response_status IN ('pending', 'failed')
@@ -136,6 +342,22 @@ def claim_pending(conn, limit: int, max_retries: int) -> List[Dict[str, Any]]:
               LIMIT %s
               FOR UPDATE SKIP LOCKED
             ),
+            pending AS (
+              SELECT ranked.id
+              FROM (
+                SELECT
+                  c.id,
+                  c.sent_at,
+                  ROW_NUMBER() OVER (
+                    PARTITION BY c.conversation_id
+                    ORDER BY c.sent_at ASC, c.id ASC
+                  ) AS conversation_rank
+                FROM candidates c
+              ) ranked
+              WHERE ranked.conversation_rank = 1
+              ORDER BY ranked.sent_at ASC, ranked.id ASC
+              LIMIT %s
+            ),
             claimed AS (
               UPDATE dm_messages
               SET response_status = 'sending',
@@ -148,6 +370,7 @@ def claim_pending(conn, limit: int, max_retries: int) -> List[Dict[str, Any]]:
             SELECT
               c.id,
               c.conversation_id,
+              c.sender_id AS sender_db_id,
               c.external_message_id,
               c.text,
               c.response_attempts,
@@ -159,7 +382,7 @@ def claim_pending(conn, limit: int, max_retries: int) -> List[Dict[str, Any]]:
             FROM claimed c
             JOIN users u ON u.id = (SELECT sender_id FROM dm_messages WHERE id = c.id)
             """,
-            [max_retries, limit],
+            [max_retries, candidate_limit, limit],
         )
         rows = list(cur.fetchall())
 
@@ -195,6 +418,55 @@ def mark_failed(conn, msg_id: int, reason: str) -> None:
             """,
             [reason[:2048], msg_id],
         )
+
+
+def mark_not_applicable(conn, msg_id: int, reason: str) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE dm_messages
+            SET response_status = 'not_applicable',
+                response_last_error = %s,
+                response_attempted_at = now()
+            WHERE id = %s
+            """,
+            [reason[:2048], msg_id],
+        )
+
+
+def mark_responded_from_existing_outbound(conn, msg_id: int) -> bool:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            WITH matched AS (
+              SELECT
+                m.id AS inbound_id,
+                o.external_message_id AS outbound_external_id,
+                o.sent_at AS outbound_sent_at
+              FROM dm_messages m
+              JOIN LATERAL (
+                SELECT o.external_message_id, o.sent_at
+                FROM dm_messages o
+                WHERE o.conversation_id = m.conversation_id
+                  AND o.direction = 'outbound'
+                  AND o.sent_at >= m.sent_at
+                ORDER BY o.sent_at ASC, o.id ASC
+                LIMIT 1
+              ) o ON TRUE
+              WHERE m.id = %s
+            )
+            UPDATE dm_messages m
+            SET response_status = 'responded',
+                response_message_external_id = COALESCE(m.response_message_external_id, matched.outbound_external_id),
+                responded_at = COALESCE(m.responded_at, matched.outbound_sent_at),
+                response_last_error = NULL
+            FROM matched
+            WHERE m.id = matched.inbound_id
+            RETURNING m.id
+            """,
+            [msg_id],
+        )
+        return cur.fetchone() is not None
 
 
 async def main() -> None:
@@ -254,21 +526,18 @@ async def main() -> None:
                         [row['conversation_id'], row['id']],
                     )
                     if cur.fetchone():
-                        conn.commit()
                         skipped += 1
-                        mark_failed(conn, row['id'], 'already_responded_externally')
+                        if not mark_responded_from_existing_outbound(conn, row['id']):
+                            mark_not_applicable(conn, row['id'], 'already_responded_externally')
+                        conn.commit()
                         continue
 
-                text = render_template(args.template, {
-                    'sender_handle': row['sender_handle'],
-                    'display_name': row['display_name'],
-                    'text': row['text'] or '',
-                })
+                text = render_response(args, conn, row)
                 batch_key = (row['conversation_id'], row['sender_external_id'], row['sent_at'], text)
                 if batch_key in dispatched_signatures:
-                    conn.commit()
                     skipped += 1
-                    mark_failed(conn, row['id'], 'duplicate_text_in_same_batch')
+                    mark_not_applicable(conn, row['id'], 'duplicate_text_in_same_batch')
+                    conn.commit()
                     continue
 
                 # Optional idempotence guard: avoid re-sending exact same outgoing text.
@@ -286,9 +555,9 @@ async def main() -> None:
                         [row['conversation_id'], row['id'], text],
                     )
                     if cur.fetchone():
-                        conn.commit()
                         skipped += 1
-                        mark_failed(conn, row['id'], 'duplicate_text_already_sent')
+                        mark_not_applicable(conn, row['id'], 'duplicate_text_already_sent')
+                        conn.commit()
                         continue
 
                 if args.dry_run:
