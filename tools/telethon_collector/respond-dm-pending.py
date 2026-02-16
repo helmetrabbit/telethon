@@ -93,9 +93,24 @@ def mark_auto_responded(conn) -> int:
               AND dm_messages.response_status IN ('pending', 'failed', 'sending')
               AND o.conversation_id = dm_messages.conversation_id
               AND o.direction = 'outbound'
-              AND o.sender_id <> dm_messages.sender_id
               AND o.sent_at >= dm_messages.sent_at
             """,
+        )
+        return cur.rowcount or 0
+
+
+def recover_stale_sending(conn, stale_minutes: int = 10) -> int:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE dm_messages
+            SET response_status = 'failed',
+                response_last_error = 'recovered from stale sending state',
+                response_attempted_at = now()
+            WHERE response_status = 'sending'
+              AND response_attempted_at < now() - (%s * interval '1 minute')
+            """,
+            [stale_minutes],
         )
         return cur.rowcount or 0
 
@@ -108,7 +123,7 @@ def claim_pending(conn, limit: int, max_retries: int) -> List[Dict[str, Any]]:
               SELECT id
               FROM dm_messages
               WHERE direction = 'inbound'
-                AND response_status = 'pending'
+                AND response_status IN ('pending', 'failed')
                 AND response_attempts < %s
               ORDER BY sent_at ASC
               LIMIT %s
@@ -188,6 +203,7 @@ async def main() -> None:
     conn = connect(DATABASE_URL)
     try:
         auto_responded = 0 if args.skip_answered_check else mark_auto_responded(conn)
+        stale_recovered = 0 if args.skip_answered_check else recover_stale_sending(conn, stale_minutes=10)
         pending = claim_pending(conn, args.limit, args.max_retries)
     except Exception:
         conn.close()
@@ -223,11 +239,10 @@ async def main() -> None:
                         FROM dm_messages o
                         WHERE o.conversation_id = %s
                           AND o.direction = 'outbound'
-                          AND o.sender_id <> (SELECT sender_id FROM dm_messages WHERE id = %s)
                           AND o.sent_at >= (SELECT sent_at FROM dm_messages WHERE id = %s)
                         LIMIT 1
                         """,
-                        [row['conversation_id'], row['id'], row['id']],
+                        [row['conversation_id'], row['id']],
                     )
                     if cur.fetchone():
                         conn.commit()
@@ -263,7 +278,7 @@ async def main() -> None:
 
     conn.close()
 
-    print(f"dm responder: responded={sent}, skipped={skipped}, failed={failed}, auto-responded={auto_responded}")
+    print(f"dm responder: responded={sent}, skipped={skipped}, failed={failed}, auto-responded={auto_responded}, recovered={stale_recovered}")
 
 
 if __name__ == '__main__':

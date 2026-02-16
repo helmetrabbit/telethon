@@ -172,8 +172,8 @@ start_listener() {
 
   (
     cd "$ROOT_DIR"
-    DM_AUTO_ACK="1" \
-    DM_AUTO_ACK_TEXT="Got it — I captured this message and will process it now." \
+    DM_AUTO_ACK="${DM_AUTO_ACK:-0}" \
+    DM_AUTO_ACK_TEXT="${DM_AUTO_ACK_TEXT:-Got it — I captured this message and will process it now.}" \
     TG_SESSION_PATH="$SESSION_PATH" \
     make tg-listen-dm out="$JSONL_PATH" session_path="$SESSION_PATH"
   ) >> "$LOG_DIR/dm-listener.log" 2>&1 &
