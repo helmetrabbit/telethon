@@ -52,6 +52,7 @@ load_dotenv(_SCRIPT_DIR / ".env")
 
 API_ID = os.getenv("TG_API_ID")
 API_HASH = os.getenv("TG_API_HASH")
+INTERACTIVE_AUTH = (os.getenv("TG_ALLOW_INTERACTIVE", "").strip().lower() in ("1", "true", "yes", "on", "y"))
 
 LINK_RE = re.compile(r"https?://\S+")
 MENTION_RE = re.compile(r"@[A-Za-z0-9_]+")
@@ -146,22 +147,28 @@ def parse_bool(value: Optional[str], default: bool = False) -> bool:
 
 
 async def start_with_retry(client: TelegramClient, attempts: int = 3) -> None:
-    last_err = None
     for attempt in range(1, attempts + 1):
         try:
-            await client.start()
-            return
+            if INTERACTIVE_AUTH:
+                await client.start()
+                return
+
+            await client.connect()
+            if await client.is_user_authorized():
+                return
+
+            raise RuntimeError(
+                "Session is not authorized. Run once in a terminal with interactive login "
+                "(TG_SESSION_PATH=<path> python3 listen-dms.py --out <path>)"
+            )
         except sqlite3.OperationalError as e:
             if "locked" not in str(e).lower():
                 raise
-            last_err = e
             if attempt >= attempts:
                 raise
             wait = attempt * 2
             print(f"SQLite session lock on startup, retrying in {wait}s (attempt {attempt}/{attempts})")
             await asyncio.sleep(wait)
-    if last_err:
-        raise last_err
 
 
 async def main() -> None:
