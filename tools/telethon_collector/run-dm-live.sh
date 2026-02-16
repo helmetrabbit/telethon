@@ -10,8 +10,9 @@ LOCK_FILE="$PID_DIR/tg-live-supervisor.lock"
 JSONL_FILE="${1:-data/exports/telethon_dms_live.jsonl}"
 INTERVAL="${2:-30}"
 MODE="${3:-profile}"  # profile|ingest
+RESPONSE_ENABLED="${RESPONSE_ENABLED:-1}"
 STATE_FILE="${4:-$ROOT_DIR/data/.state/dm-live.state.json}"
-SESSION_PATH="${5:-$ROOT_DIR/tools/telethon_collector/telethon.session}"
+SESSION_PATH="${5:-$ROOT_DIR/data/.state/telethon-dm-live.session}"
 
 if [[ "$JSONL_FILE" = /* ]]; then
   JSONL_PATH="$JSONL_FILE"
@@ -128,6 +129,21 @@ run_ingest_cycle() {
     if [ "$reconcile_status" -ne 0 ]; then
       echo "[$(date -Is)] reconcile failed (status $reconcile_status)" >> "$LOG_DIR/dm-ingest.log"
       return 1
+    fi
+
+    if [ "$RESPONSE_ENABLED" = "1" ] || [ "$RESPONSE_ENABLED" = "true" ]; then
+      (
+        cd "$ROOT_DIR"
+        DM_SESSION_PATH="$SESSION_PATH" \
+        DM_RESPONSE_LIMIT="${DM_RESPONSE_LIMIT:-20}" \
+        DM_MAX_RETRIES="${DM_MAX_RETRIES:-3}" \
+        DM_RESPONSE_TEMPLATE="${DM_RESPONSE_TEMPLATE:-Got it — I captured this message and will reply shortly.}" \
+        bash tools/telethon_collector/run-dm-response.sh
+      ) >> "$LOG_DIR/dm-respond.log" 2>&1
+      local respond_status=$?
+      if [ "$respond_status" -ne 0 ]; then
+        echo "[$(date -Is)] response cycle failed (status $respond_status)" >> "$LOG_DIR/dm-respond.log"
+      fi
     fi
   else
     echo "[$(date -Is)] ingesting $JSONL_FILE + state=$STATE_FILE"

@@ -387,8 +387,9 @@ async function ingestBatch(client: any, events: string[]): Promise<{
       `INSERT INTO dm_messages (
          conversation_id, external_message_id, sender_id, direction, text,
          text_len, sent_at, reply_to_external_message_id,
-         views, forwards, has_links, has_mentions, raw_payload
-       ) VALUES ($1, $2, $3, $4::text, $5, $6, $7::timestamptz, $8, $9, $10, $11, $12, $13::jsonb)
+         views, forwards, has_links, has_mentions, response_status,
+         raw_payload
+       ) VALUES ($1, $2, $3, $4::text, $5, $6, $7::timestamptz, $8, $9, $10, $11, $12, $13::text, $14::jsonb)
        ON CONFLICT (conversation_id, external_message_id) DO NOTHING`,
       [
         convId,
@@ -403,6 +404,7 @@ async function ingestBatch(client: any, events: string[]): Promise<{
         Number(row.forwards || 0),
         Boolean(row.has_links),
         Boolean(row.has_mentions),
+        row.direction === 'inbound' ? 'pending' : 'not_applicable',
         JSON.stringify(row),
       ],
     );

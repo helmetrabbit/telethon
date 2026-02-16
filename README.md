@@ -270,12 +270,23 @@ Supervisor semantics:
 - uses exponential-ish backoff after failures
 
 Important behavior:
-- This pipeline is **capture + ingest + reconcile only**. It does not
-  perform conversational reply generation.
-- The supervisor now sends a lightweight inbound acknowledgement message (`DM_AUTO_ACK`) by default
-  when `listen-dms.py` is running. That message is not full context; it is only a receipt.
+- This pipeline handles capture, ingest, profile reconciliation, and **automated pending-response handling**.
+- Inbound messages are queued as `pending` when first ingested.
+- Outbound workers can send a lightweight response template and mark messages as `responded`.
+- `DM_AUTO_ACK` is still enabled for immediate receipt at capture time.
 - If you stop getting listener output and see `EOFError: EOF when reading a line` or repeated
   "Please enter your phone", the Telegram session needs interactive re-auth once.
+
+Optional one-shot responder:
+
+```bash
+make tg-respond-dm [limit=20] [max_retries=3]
+```
+
+Responder variables:
+- `DM_RESPONSE_TEMPLATE`: custom response message template.
+- `DM_MAX_RETRIES`: max retry count per inbound message.
+- `DM_RESPONSE_DRY_RUN=1`: dry-run mode without sending.
 
 To run under systemd, call `make tg-live-start` from a service that stays running; logs are written to `data/logs/` and state is persisted in `data/.state/`.
 

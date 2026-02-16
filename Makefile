@@ -1,7 +1,7 @@
 # ── Makefile — convenience commands ──────────────────────
 .PHONY: db-up db-down db-migrate db-rollback db-reset db-status \
         env-remote env-remote-ip env-local db-smoke serve-viewer \
-        tg-listen-dm tg-ingest-dm-jsonl tg-listen-ingest-dm tg-listen-ingest-dm-profile tg-reconcile-dm-psych tg-live-start tg-live-start-ingest tg-live-stop tg-live-status tg-live-state-reset build pipeline
+        tg-listen-dm tg-ingest-dm-jsonl tg-listen-ingest-dm tg-listen-ingest-dm-profile tg-respond-dm tg-reconcile-dm-psych tg-live-start tg-live-start-ingest tg-live-stop tg-live-status tg-live-state-reset build pipeline
 
 # ── Environment helpers ──────────────────────────────────
 env-remote:
@@ -76,7 +76,7 @@ tg-listen-ingest-dm:
 		sleep $$INTERVAL; \
 	done
 
-# ── Continuous DM live loop + automatic profile correction merge ───
+# ── Continuous DM live loop + automatic profile correction merge and response worker ───
 tg-listen-ingest-dm-profile:
 	@FILE=$${file:-data/exports/telethon_dms_live.jsonl}; \
 	STATE_FILE=$${state_file:-$${FILE}.checkpoint.json}; \
@@ -85,8 +85,18 @@ tg-listen-ingest-dm-profile:
 		echo "[$$(date -Is)] ingesting $$FILE + reconciliation"; \
 		npm run ingest-dm-jsonl -- --file "$$FILE" --state-file "$$STATE_FILE" || true; \
 		npm run reconcile-dm-psych || true; \
+		bash tools/telethon_collector/run-dm-response.sh || true; \
 		sleep $$INTERVAL; \
 	done
+
+# Send outbound replies for pending inbound DM messages
+# Usage: make tg-respond-dm [limit=20] [max_retries=3] [dry_run=1]
+tg-respond-dm:
+	@LIMIT=$${limit:-20}; \
+	MAX_RETRIES=$${max_retries:-3}; \
+	DRY_RUN=$${dry_run:-0}; \
+	DM_RESPONSE_LIMIT="$$LIMIT" DM_MAX_RETRIES="$$MAX_RETRIES" DM_RESPONSE_DRY_RUN="$$DRY_RUN" DM_SESSION_PATH="$${DM_SESSION_PATH:-}" bash tools/telethon_collector/run-dm-response.sh
+
 
 # One-shot reconcile for pending DM updates
 # Usage: make tg-reconcile-dm-psych [limit=250] [userIds=1,2]
@@ -99,11 +109,10 @@ tg-reconcile-dm-psych:
 		npm run reconcile-dm-psych -- --limit $$LIMIT; \
 	fi
 
-# One-shot always-running DM pipeline (listener + periodic ingest + reconcile) ──
+# One-shot always-running DM pipeline (listener + periodic ingest + reconcile + responder) ──
 # Usage:
 #   make tg-live-start FILE=data/exports/telethon_dms_live.jsonl INTERVAL=30
 #   make tg-live-start [STATE_FILE=data/.state/dm-live.state.json]
-
 tg-live-start:
 	@FILE=$${FILE:-data/exports/telethon_dms_live.jsonl}; \
 	INTERVAL=$${INTERVAL:-30}; \
@@ -111,7 +120,6 @@ tg-live-start:
 	bash tools/telethon_collector/run-dm-live.sh "$$FILE" "$$INTERVAL" profile "$$STATE_FILE"
 
 # Keep legacy naming for old behavior: full ingest loop only
-
 tg-live-start-ingest:
 	@FILE=$${FILE:-data/exports/telethon_dms_live.jsonl}; \
 	INTERVAL=$${INTERVAL:-30}; \
