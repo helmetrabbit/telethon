@@ -82,6 +82,15 @@ make tg-live-start
 #   INTERVAL=10
 ```
 
+For automatic *DM profile correction reconciliation* (company/role corrections from inbound chat):
+
+```bash
+make tg-listen-ingest-dm-profile FILE=data/exports/telethon_dms_live.jsonl INTERVAL=10
+# or one-off reconcile run:
+make tg-reconcile-dm-psych
+# optionally: make tg-reconcile-dm-psych userIds=1,2011 limit=5
+```
+
 Check and stop:
 
 ```bash
@@ -131,6 +140,7 @@ npm run backfill-telethon-names # Telethon-based display-name backfill
 npm run compute-features # Per-user daily aggregates
 npm run scrape-bios      # Scrape public bios from t.me
 npm run ingest-dm-jsonl # Ingest DM JSONL from live/private collector
+npm run reconcile-dm-psych # Reconcile profile updates from DM correction events
 npm run enrich-psycho    # LLM psychographic profiling
 npm run export-viewer    # Export viewer/data.js
 ```

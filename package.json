@@ -26,7 +26,8 @@
     "env:remote:ip": "bash tools/use-remote-db.sh --ip",
     "env:local": "bash tools/use-local-db.sh",
     "db:smoke": "npm run build && node dist/db/smoke-test.js",
-    "ingest-dm-jsonl": "node dist/cli/ingest-dm-jsonl.js"
+    "ingest-dm-jsonl": "node dist/cli/ingest-dm-jsonl.js",
+    "reconcile-dm-psych": "node dist/cli/reconcile-dm-psychometry.js"
   },
   "engines": {
     "node": ">=18"
