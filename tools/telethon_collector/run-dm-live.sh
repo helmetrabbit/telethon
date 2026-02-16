@@ -7,6 +7,7 @@ LISTENER_PID_FILE="$PID_DIR/tg-listen-dm.pid"
 SUPERVISOR_PID_FILE="$PID_DIR/tg-live-supervisor.pid"
 LOG_DIR="$ROOT_DIR/data/logs"
 LOCK_FILE="$PID_DIR/tg-live-supervisor.lock"
+TELEGRAM_SESSION_LOCK="$PID_DIR/telethon-session.lock"
 JSONL_FILE="${1:-data/exports/telethon_dms_live.jsonl}"
 INTERVAL="${2:-30}"
 MODE="${3:-profile}"  # profile|ingest
@@ -171,6 +172,8 @@ start_listener() {
   fi
 
   (
+    exec 11>>"$TELEGRAM_SESSION_LOCK"
+    flock -n 11 || { echo "[$(date -Is)] listener failed to acquire telethon session lock" >> "$LOG_DIR/dm-listener.log"; exit 1; }
     cd "$ROOT_DIR"
     DM_AUTO_ACK="${DM_AUTO_ACK:-0}" \
     DM_AUTO_ACK_TEXT="${DM_AUTO_ACK_TEXT:-Got it — I captured this message and will process it now.}" \

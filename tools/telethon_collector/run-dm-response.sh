@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 LOCK_FILE="$ROOT_DIR/data/.pids/dm-response.lock"
+TELEGRAM_SESSION_LOCK="$ROOT_DIR/data/.pids/telethon-session.lock"
 mkdir -p "$ROOT_DIR/data/.pids"
 SESSION_PATH="${DM_SESSION_PATH:-${TG_SESSION_PATH:-$ROOT_DIR/tools/telethon_collector/telethon.session}}"
 if [[ "${SESSION_PATH}" != /* ]] && [ "${SESSION_PATH}" != "" ]; then
@@ -14,6 +15,12 @@ TEMPLATE="${DM_RESPONSE_TEMPLATE:-"Got it — I captured this message and will r
 DRY_RUN="${DM_RESPONSE_DRY_RUN:-0}"
 
 
+
+exec 10>"$TELEGRAM_SESSION_LOCK"
+if ! flock -n 10; then
+  echo "Responder skipped: telethon session lock in use (likely listener running)."
+  exit 0
+fi
 exec 9>"$LOCK_FILE"
 if ! flock -n 9; then
   echo "Responder already running; skipping this run."
