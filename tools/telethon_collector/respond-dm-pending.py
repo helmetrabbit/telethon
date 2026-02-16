@@ -12,11 +12,14 @@ This keeps a small state machine in dm_messages:
 
 import argparse
 import asyncio
+import json
 import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 from dotenv import load_dotenv
 from psycopg import connect, OperationalError
@@ -32,8 +35,39 @@ DATABASE_URL = os.getenv('DATABASE_URL') or os.getenv('PG_DSN')
 API_ID = os.getenv('TG_API_ID')
 API_HASH = os.getenv('TG_API_HASH')
 _default_session = os.getenv('TG_SESSION_PATH', str(_SCRIPT_DIR / 'telethon.session'))
+OPENROUTER_API_KEY = (os.getenv('OPENROUTER_API_KEY') or '').strip()
+DM_RESPONSE_MODEL = os.getenv('DM_RESPONSE_MODEL', 'deepseek/deepseek-chat').strip() or 'deepseek/deepseek-chat'
+DM_RESPONSE_LLM_ENABLED = (os.getenv('DM_RESPONSE_LLM_ENABLED', '1').strip().lower() not in ('0', 'false', 'no', 'off'))
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = (os.getenv(name) or '').strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = (os.getenv(name) or '').strip()
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+DM_RESPONSE_MAX_TOKENS = _env_int('DM_RESPONSE_MAX_TOKENS', 300)
+DM_RESPONSE_TEMPERATURE = _env_float('DM_RESPONSE_TEMPERATURE', 0.2)
 
 _PLACEHOLDER_RE = re.compile(r"\{([^{}]+)\}")
+_INDECISION_RE = re.compile(
+    r"\b(?:idk|i\s+don'?t\s+know|not\s+sure|what\s+should\s+i(?:\s+do)?|any\s+advice|help\s+me\s+choose)\b",
+    re.IGNORECASE,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -96,6 +130,129 @@ def _clean_text(value: Optional[str]) -> str:
     return re.sub(r"\s+", " ", (value or "")).strip()
 
 
+def _to_string_list(value: Any, max_items: int = 8) -> List[str]:
+    out: List[str] = []
+    if value is None:
+        return out
+
+    if isinstance(value, str):
+        clean = _clean_text(value)
+        if not clean:
+            return out
+        if clean.startswith('[') or clean.startswith('{'):
+            try:
+                parsed = json.loads(clean)
+                return _to_string_list(parsed, max_items=max_items)
+            except Exception:
+                pass
+        return [clean]
+
+    if isinstance(value, dict):
+        for key in ('value', 'topic', 'name', 'label', 'text'):
+            if key in value:
+                return _to_string_list(value.get(key), max_items=max_items)
+        return out
+
+    if isinstance(value, (list, tuple, set)):
+        for item in value:
+            for cleaned in _to_string_list(item, max_items=max_items):
+                if cleaned and cleaned not in out:
+                    out.append(cleaned)
+                if len(out) >= max_items:
+                    return out
+    return out
+
+
+def _as_text(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        clean = _clean_text(value)
+        return clean or None
+    if isinstance(value, dict):
+        for key in ('value', 'name', 'label', 'text'):
+            candidate = value.get(key)
+            if isinstance(candidate, str):
+                clean = _clean_text(candidate)
+                if clean:
+                    return clean
+    return None
+
+
+PROFILE_QUERY_CANDIDATE_COLUMNS = [
+    'primary_role',
+    'primary_company',
+    'preferred_contact_style',
+    'notable_topics',
+    'generated_bio_professional',
+    'generated_bio_personal',
+    'tone',
+    'professionalism',
+    'verbosity',
+    'decision_style',
+    'seniority_signal',
+    'based_in',
+    'attended_events',
+    'driving_values',
+    'pain_points',
+    'connection_requests',
+    'deep_skills',
+    'technical_specifics',
+    'affiliations',
+    'commercial_archetype',
+    'role_company_timeline',
+]
+_PROFILE_QUERY_COLUMNS_CACHE: Optional[List[str]] = None
+
+
+def _fetch_profile_query_columns(conn) -> List[str]:
+    global _PROFILE_QUERY_COLUMNS_CACHE
+    if _PROFILE_QUERY_COLUMNS_CACHE is not None:
+        return _PROFILE_QUERY_COLUMNS_CACHE
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'user_psychographics'
+            """,
+        )
+        available = {row[0] for row in cur.fetchall()}
+
+    _PROFILE_QUERY_COLUMNS_CACHE = [
+        col for col in PROFILE_QUERY_CANDIDATE_COLUMNS if col in available
+    ]
+    return _PROFILE_QUERY_COLUMNS_CACHE
+
+
+def _empty_profile() -> Dict[str, Any]:
+    return {
+        'primary_role': None,
+        'primary_company': None,
+        'preferred_contact_style': None,
+        'notable_topics': [],
+        'generated_bio_professional': None,
+        'generated_bio_personal': None,
+        'tone': None,
+        'professionalism': None,
+        'verbosity': None,
+        'decision_style': None,
+        'seniority_signal': None,
+        'based_in': None,
+        'attended_events': [],
+        'driving_values': [],
+        'pain_points': [],
+        'connection_requests': [],
+        'deep_skills': [],
+        'technical_specifics': [],
+        'affiliations': [],
+        'commercial_archetype': None,
+        'role_company_timeline': [],
+    }
+
+
 def infer_slots_from_text(text: Optional[str]) -> Set[str]:
     source = (text or '').lower()
     found: Set[str] = set()
@@ -116,6 +273,9 @@ def infer_slots_from_text(text: Optional[str]) -> Set[str]:
         "working at ",
         "joined ",
         "company is ",
+        "no longer at ",
+        "left ",
+        "unemployed",
     )
     contact_markers = (
         "prefer",
@@ -148,49 +308,183 @@ def infer_slots_from_text(text: Optional[str]) -> Set[str]:
 
 def fetch_latest_profile(conn, sender_db_id: Optional[int]) -> Dict[str, Any]:
     if not sender_db_id:
-        return {
-            'primary_role': None,
-            'primary_company': None,
-            'preferred_contact_style': None,
-            'notable_topics': [],
-        }
+        return _empty_profile()
+
+    columns = _fetch_profile_query_columns(conn)
+    if not columns:
+        return _empty_profile()
+
+    select_sql = ", ".join(columns)
+    query = f"""
+        SELECT {select_sql}
+        FROM user_psychographics
+        WHERE user_id = %s
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+    """
+
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(query, [sender_db_id])
+        row = cur.fetchone()
+
+    if not row:
+        return _empty_profile()
+
+    profile = _empty_profile()
+    profile['primary_role'] = _as_text(row.get('primary_role'))
+    profile['primary_company'] = _as_text(row.get('primary_company'))
+    profile['preferred_contact_style'] = _as_text(row.get('preferred_contact_style'))
+    profile['generated_bio_professional'] = _as_text(row.get('generated_bio_professional'))
+    profile['generated_bio_personal'] = _as_text(row.get('generated_bio_personal'))
+    profile['tone'] = _as_text(row.get('tone'))
+    profile['professionalism'] = _as_text(row.get('professionalism'))
+    profile['verbosity'] = _as_text(row.get('verbosity'))
+    profile['decision_style'] = _as_text(row.get('decision_style'))
+    profile['seniority_signal'] = _as_text(row.get('seniority_signal'))
+    profile['based_in'] = _as_text(row.get('based_in'))
+    profile['commercial_archetype'] = _as_text(row.get('commercial_archetype'))
+    profile['notable_topics'] = _to_string_list(row.get('notable_topics'), max_items=10)
+    profile['attended_events'] = _to_string_list(row.get('attended_events'), max_items=6)
+    profile['driving_values'] = _to_string_list(row.get('driving_values'), max_items=6)
+    profile['pain_points'] = _to_string_list(row.get('pain_points'), max_items=6)
+    profile['connection_requests'] = _to_string_list(row.get('connection_requests'), max_items=6)
+    profile['deep_skills'] = _to_string_list(row.get('deep_skills'), max_items=8)
+    profile['technical_specifics'] = _to_string_list(row.get('technical_specifics'), max_items=8)
+    profile['affiliations'] = _to_string_list(row.get('affiliations'), max_items=8)
+    profile['role_company_timeline'] = row.get('role_company_timeline') if isinstance(row.get('role_company_timeline'), list) else []
+    return profile
+
+
+def fetch_pending_profile_events(conn, sender_db_id: Optional[int], limit: int = 20) -> List[Dict[str, Any]]:
+    if not sender_db_id:
+        return []
 
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
             """
-            SELECT primary_role, primary_company, preferred_contact_style, notable_topics
-            FROM user_psychographics
+            SELECT id, event_type, event_payload, extracted_facts, confidence, created_at
+            FROM dm_profile_update_events
             WHERE user_id = %s
-            ORDER BY created_at DESC, id DESC
-            LIMIT 1
+              AND processed = false
+            ORDER BY id ASC
+            LIMIT %s
             """,
-            [sender_db_id],
+            [sender_db_id, limit],
         )
-        row = cur.fetchone()
+        return list(cur.fetchall())
 
-    if not row:
-        return {
-            'primary_role': None,
-            'primary_company': None,
-            'preferred_contact_style': None,
-            'notable_topics': [],
-        }
 
-    topics_raw = row.get('notable_topics')
-    topics: List[str] = []
-    if isinstance(topics_raw, list):
-        for item in topics_raw:
-            if isinstance(item, str):
-                clean = _clean_text(item)
-                if clean:
-                    topics.append(clean)
+def apply_pending_profile_events(profile: Dict[str, Any], events: List[Dict[str, Any]]) -> Dict[str, Any]:
+    if not events:
+        return profile
 
+    merged = dict(profile)
+    topics = list(merged.get('notable_topics') or [])
+    topic_set = {item.lower() for item in topics if isinstance(item, str)}
+
+    for evt in events:
+        facts = evt.get('extracted_facts')
+        if not isinstance(facts, list):
+            continue
+        for fact in facts:
+            if not isinstance(fact, dict):
+                continue
+            field = str(fact.get('field') or '').strip()
+            new_value = _as_text(fact.get('new_value'))
+            if not new_value:
+                continue
+            if field == 'primary_company':
+                merged['primary_company'] = new_value
+            elif field == 'primary_role':
+                merged['primary_role'] = new_value
+            elif field == 'preferred_contact_style':
+                merged['preferred_contact_style'] = new_value
+            elif field == 'notable_topics':
+                key = new_value.lower()
+                if key not in topic_set:
+                    topics.append(new_value)
+                    topic_set.add(key)
+
+    merged['notable_topics'] = topics[:10]
+    return merged
+
+
+def fetch_recent_conversation_messages(conn, conversation_id: Optional[int], limit: int = 8) -> List[Dict[str, str]]:
+    if not conversation_id:
+        return []
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """
+            SELECT direction, text
+            FROM dm_messages
+            WHERE conversation_id = %s
+            ORDER BY sent_at DESC, id DESC
+            LIMIT %s
+            """,
+            [conversation_id, limit],
+        )
+        rows = list(cur.fetchall())
+
+    out: List[Dict[str, str]] = []
+    for raw in reversed(rows):
+        text = _clean_text(raw.get('text'))
+        if not text:
+            continue
+        direction = raw.get('direction') or 'inbound'
+        out.append({'direction': direction, 'text': text[:280]})
+    return out
+
+
+def summarize_profile_for_prompt(profile: Dict[str, Any]) -> Dict[str, Any]:
     return {
-        'primary_role': _clean_text(row.get('primary_role')) or None,
-        'primary_company': _clean_text(row.get('primary_company')) or None,
-        'preferred_contact_style': _clean_text(row.get('preferred_contact_style')) or None,
-        'notable_topics': topics,
+        'primary_role': profile.get('primary_role'),
+        'primary_company': profile.get('primary_company'),
+        'preferred_contact_style': profile.get('preferred_contact_style'),
+        'notable_topics': (profile.get('notable_topics') or [])[:6],
+        'generated_bio_professional': profile.get('generated_bio_professional'),
+        'generated_bio_personal': profile.get('generated_bio_personal'),
+        'tone': profile.get('tone'),
+        'professionalism': profile.get('professionalism'),
+        'verbosity': profile.get('verbosity'),
+        'decision_style': profile.get('decision_style'),
+        'seniority_signal': profile.get('seniority_signal'),
+        'based_in': profile.get('based_in'),
+        'attended_events': (profile.get('attended_events') or [])[:4],
+        'driving_values': (profile.get('driving_values') or [])[:4],
+        'pain_points': (profile.get('pain_points') or [])[:4],
+        'deep_skills': (profile.get('deep_skills') or [])[:6],
+        'technical_specifics': (profile.get('technical_specifics') or [])[:6],
+        'affiliations': (profile.get('affiliations') or [])[:5],
+        'connection_requests': (profile.get('connection_requests') or [])[:4],
+        'commercial_archetype': profile.get('commercial_archetype'),
     }
+
+
+def summarize_pending_events_for_prompt(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for evt in events[-8:]:
+        payload = evt.get('event_payload')
+        if not isinstance(payload, dict):
+            payload = {}
+        facts = evt.get('extracted_facts')
+        summarized_facts: List[Dict[str, Any]] = []
+        if isinstance(facts, list):
+            for fact in facts:
+                if not isinstance(fact, dict):
+                    continue
+                field = fact.get('field')
+                new_value = fact.get('new_value')
+                if field and new_value:
+                    summarized_facts.append({'field': field, 'new_value': new_value})
+        out.append(
+            {
+                'event_type': evt.get('event_type'),
+                'confidence': evt.get('confidence'),
+                'facts': summarized_facts[:6],
+                'payload': payload,
+            }
+        )
+    return out
 
 
 def _pick(options: List[str], seed: int) -> str:
@@ -215,46 +509,219 @@ def is_full_profile_request(text: Optional[str]) -> bool:
     return any(marker in source for marker in FULL_PROFILE_MARKERS)
 
 
-def format_profile_snapshot(profile: Dict[str, Any]) -> str:
-    parts = []
-    role = profile.get('primary_role')
-    if role:
-        parts.append(f"Role: {role}")
+def is_indecision_request(text: Optional[str]) -> bool:
+    return bool(_INDECISION_RE.search(text or ''))
 
+
+def _truncate(value: Optional[str], limit: int = 180) -> Optional[str]:
+    clean = _clean_text(value)
+    if not clean:
+        return None
+    if len(clean) <= limit:
+        return clean
+    return clean[: max(0, limit - 3)].rstrip() + "..."
+
+
+def format_profile_snapshot_lines(profile: Dict[str, Any]) -> List[str]:
+    lines: List[str] = []
+
+    role = profile.get('primary_role')
     company = profile.get('primary_company')
-    if company:
-        parts.append(f"Company/Project: {company}")
+    if role and company:
+        lines.append(f"Current role/company: {role} at {company}")
+    elif role:
+        lines.append(f"Current role: {role}")
+    elif company:
+        lines.append(f"Current company/project: {company}")
+
+    based_in = profile.get('based_in')
+    if based_in:
+        lines.append(f"Location base: {based_in}")
 
     contact = profile.get('preferred_contact_style')
     if contact:
-        parts.append(f"Preferred communication: {contact}")
+        tone_bits = [value for value in [profile.get('tone'), profile.get('verbosity')] if value]
+        if tone_bits:
+            lines.append(f"Preferred communication: {contact} ({', '.join(tone_bits)})")
+        else:
+            lines.append(f"Preferred communication: {contact}")
 
     topics = profile.get('notable_topics') or []
     if isinstance(topics, list) and topics:
-        top_topics = topics[:4]
-        if top_topics:
-            parts.append(f"Recent priorities: {'; '.join(top_topics)}")
+        lines.append(f"Priorities/topics: {', '.join(topics[:5])}")
 
-    if not parts:
+    skills = profile.get('deep_skills') or []
+    if isinstance(skills, list) and skills:
+        lines.append(f"Deep skills: {', '.join(skills[:5])}")
+
+    values = profile.get('driving_values') or []
+    if isinstance(values, list) and values:
+        lines.append(f"Driving values: {', '.join(values[:4])}")
+
+    pain_points = profile.get('pain_points') or []
+    if isinstance(pain_points, list) and pain_points:
+        lines.append(f"Pain points: {', '.join(pain_points[:4])}")
+
+    affiliations = profile.get('affiliations') or []
+    if isinstance(affiliations, list) and affiliations:
+        lines.append(f"Affiliations: {', '.join(affiliations[:4])}")
+
+    events = profile.get('attended_events') or []
+    if isinstance(events, list) and events:
+        lines.append(f"Events: {', '.join(events[:4])}")
+
+    bio = _truncate(profile.get('generated_bio_professional'), limit=200)
+    if bio:
+        lines.append(f"Professional bio signal: {bio}")
+
+    return lines
+
+
+def format_profile_snapshot(profile: Dict[str, Any]) -> str:
+    lines = format_profile_snapshot_lines(profile)
+    if not lines:
         return ''
-
-    return ' | '.join(parts)
+    return " | ".join(lines)
 
 
 def render_profile_request_reply(row: Dict[str, Any], profile: Dict[str, Any], persona_name: str) -> str:
     sender = row['display_name'] or row['sender_handle'] or 'you'
-    snapshot = format_profile_snapshot(profile)
-    if not snapshot:
+    lines = format_profile_snapshot_lines(profile)
+    if not lines:
         return (
             f"I can give a fuller profile, but I only have minimal signal on {sender} so far. "
             f"Please send your role, current company/project, 2–3 priorities, and preferred communication style, "
             "and I’ll keep this updated."
         )
 
+    bullets = "\n".join(f"- {line}" for line in lines[:8])
     return (
-        f"Sure — quick profile snapshot for {sender}: {snapshot}. "
-        f"If anything changed (role/company/priorities/communication), send the update and I'll keep it current."
+        f"Current profile context for {sender}:\n{bullets}\n"
+        "If anything changed (role/company/priorities/communication), send the correction and I'll keep this in sync."
     )
+
+
+def render_indecision_reply(profile: Dict[str, Any]) -> str:
+    company = (profile.get('primary_company') or '').lower()
+    role = profile.get('primary_role') or 'your strongest role'
+    topics = profile.get('notable_topics') or []
+    top_topic = topics[0] if isinstance(topics, list) and topics else None
+
+    if company == 'unemployed':
+        options = [
+            f"1) Positioning sprint: write a 5-line pitch around your {role} experience and post it to 5 targeted contacts today.",
+            "2) Pipeline sprint: shortlist 10 roles, send 3 tailored outreach messages, and ask for 1 warm intro.",
+            "3) Skill sprint: pick one in-demand workflow, build a small proof-of-work, and share it publicly this week.",
+        ]
+    else:
+        options = [
+            f"1) Pipeline: pick one clear objective tied to {top_topic or 'your current priorities'} and set a 7-day target.",
+            "2) Network: send 3 concrete asks (intro, feedback, or collab) to people most likely to unlock momentum.",
+            "3) Output: publish one useful update/case-study this week so opportunities come inbound.",
+        ]
+    return "Let's make it concrete. Pick one path:\n" + "\n".join(options) + "\nReply with 1, 2, or 3 and I'll draft the exact next steps."
+
+
+def call_openrouter_chat(system_prompt: str, user_prompt: str) -> Optional[str]:
+    if not DM_RESPONSE_LLM_ENABLED or not OPENROUTER_API_KEY:
+        return None
+
+    payload = {
+        'model': DM_RESPONSE_MODEL,
+        'messages': [
+            {'role': 'system', 'content': system_prompt},
+            {'role': 'user', 'content': user_prompt},
+        ],
+        'temperature': DM_RESPONSE_TEMPERATURE,
+        'max_tokens': DM_RESPONSE_MAX_TOKENS,
+    }
+    data = json.dumps(payload).encode('utf-8')
+    req = Request(
+        'https://openrouter.ai/api/v1/chat/completions',
+        data=data,
+        method='POST',
+        headers={
+            'Authorization': f'Bearer {OPENROUTER_API_KEY}',
+            'Content-Type': 'application/json',
+            'HTTP-Referer': 'https://github.com/helmetrabbit/telethon',
+            'X-Title': 'Telethon DM Responder',
+        },
+    )
+
+    try:
+        with urlopen(req, timeout=35) as resp:
+            raw = resp.read().decode('utf-8', errors='replace')
+            body = json.loads(raw)
+    except HTTPError as exc:
+        detail = exc.read().decode('utf-8', errors='replace')[:400]
+        print(f"⚠️  OpenRouter HTTPError {exc.code}; falling back to deterministic reply. detail={detail}")
+        return None
+    except (URLError, TimeoutError, json.JSONDecodeError) as exc:
+        print(f"⚠️  OpenRouter request failed; falling back to deterministic reply. error={exc}")
+        return None
+    except Exception as exc:
+        print(f"⚠️  OpenRouter unexpected failure; falling back to deterministic reply. error={exc}")
+        return None
+
+    choices = body.get('choices')
+    if not isinstance(choices, list) or not choices:
+        return None
+    message = choices[0].get('message') if isinstance(choices[0], dict) else None
+    content = message.get('content') if isinstance(message, dict) else None
+
+    if isinstance(content, list):
+        chunks: List[str] = []
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            text = item.get('text')
+            if isinstance(text, str):
+                chunks.append(text)
+        content = "\n".join(chunks)
+
+    if not isinstance(content, str):
+        return None
+    clean = _clean_text(content)
+    return clean or None
+
+
+def render_llm_conversational_reply(
+    row: Dict[str, Any],
+    profile: Dict[str, Any],
+    persona_name: str,
+    recent_messages: List[Dict[str, str]],
+    pending_events: List[Dict[str, Any]],
+) -> Optional[str]:
+    latest_text = _clean_text(row.get('text'))
+    if not latest_text:
+        return None
+
+    context = {
+        'sender_name': row.get('display_name') or row.get('sender_handle') or 'user',
+        'latest_inbound_message': latest_text,
+        'is_profile_request': is_full_profile_request(latest_text),
+        'is_indecision': is_indecision_request(latest_text),
+        'profile_context': summarize_profile_for_prompt(profile),
+        'recent_conversation': recent_messages[-8:],
+        'pending_profile_updates': summarize_pending_events_for_prompt(pending_events),
+    }
+
+    system_prompt = (
+        f"You are {persona_name}, a high-signal Telegram assistant.\n"
+        "Your priorities:\n"
+        "1) Give context-rich, practical replies.\n"
+        "2) If asked for profile knowledge, provide a comprehensive snapshot from known data.\n"
+        "3) If user gives profile updates (job/company/unemployed/role/priorities/style), acknowledge exactly what changed and what was captured.\n"
+        "4) If user says they are unsure what to do, provide 3 concrete next-step options tailored to their context.\n"
+        "5) Avoid repetitive intros, avoid generic filler, avoid asking the same question twice.\n"
+        "Output constraints:\n"
+        "- Plain text only.\n"
+        "- Keep it concise but substantial.\n"
+        "- If profile request: use short bullet lines.\n"
+        "- If unsure data: say what is missing and ask one precise follow-up."
+    )
+    user_prompt = "Conversation context JSON:\n" + json.dumps(context, ensure_ascii=True)
+    return call_openrouter_chat(system_prompt, user_prompt)
 
 
 def render_conversational_reply(row: Dict[str, Any], profile: Dict[str, Any], persona_name: str) -> str:
@@ -269,10 +736,10 @@ def render_conversational_reply(row: Dict[str, Any], profile: Dict[str, Any], pe
     ack_line = _pick(ack_options, msg_id)
 
     if is_full_profile_request(row.get('text')):
-        if msg_id == 0:
-            intro = f"I'm {persona_name}. "
-            return intro + render_profile_request_reply(row, profile, persona_name)
         return render_profile_request_reply(row, profile, persona_name)
+
+    if is_indecision_request(row.get('text')):
+        return render_indecision_reply(profile)
 
     missing_order = ['primary_role', 'primary_company', 'notable_topics', 'preferred_contact_style']
     missing = []
@@ -321,8 +788,7 @@ def render_conversational_reply(row: Dict[str, Any], profile: Dict[str, Any], pe
         )
 
     if row.get('response_attempts') == 1:
-        intro = f"I'm {persona_name}."
-        return f"{ack_line} {intro} {next_question}"
+        return f"{ack_line} {next_question}"
     return f"{ack_line} {next_question}"
 
 
@@ -331,6 +797,13 @@ def render_response(args: argparse.Namespace, conn, row: Dict[str, Any]) -> str:
         return render_template(args.template, row)
 
     profile = fetch_latest_profile(conn, row.get('sender_db_id'))
+    pending_events = fetch_pending_profile_events(conn, row.get('sender_db_id'))
+    profile = apply_pending_profile_events(profile, pending_events)
+    recent_messages = fetch_recent_conversation_messages(conn, row.get('conversation_id'))
+
+    llm_reply = render_llm_conversational_reply(row, profile, args.persona_name, recent_messages, pending_events)
+    if llm_reply:
+        return llm_reply
     return render_conversational_reply(row, profile, args.persona_name)
 
 

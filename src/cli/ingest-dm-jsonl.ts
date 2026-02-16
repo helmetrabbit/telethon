@@ -53,14 +53,19 @@ interface IngestState {
 }
 
 const HANDLE_RE = /@([A-Za-z0-9_]+)/g;
-const DM_PROFILE_LLM_ENABLED = (process.env.DM_PROFILE_LLM_EXTRACTION || '').toLowerCase() === '1' || (process.env.DM_PROFILE_LLM_EXTRACTION || '').toLowerCase() === 'true';
 const DM_PROFILE_LLM_MODEL = process.env.DM_PROFILE_LLM_MODEL || 'deepseek/deepseek-chat';
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '';
+const DM_PROFILE_LLM_FLAG = (process.env.DM_PROFILE_LLM_EXTRACTION || 'auto').trim().toLowerCase();
+const DM_PROFILE_LLM_ENABLED = (() => {
+  if (['1', 'true', 'yes', 'on'].includes(DM_PROFILE_LLM_FLAG)) return true;
+  if (['0', 'false', 'no', 'off'].includes(DM_PROFILE_LLM_FLAG)) return false;
+  return Boolean(OPENROUTER_API_KEY);
+})();
 
 const dmLlmClient = (() => {
-  const key = process.env.OPENROUTER_API_KEY;
-  if (!DM_PROFILE_LLM_ENABLED || !key) return null;
+  if (!DM_PROFILE_LLM_ENABLED || !OPENROUTER_API_KEY) return null;
   return createLLMClient({
-    apiKeys: [key],
+    apiKeys: [OPENROUTER_API_KEY],
     model: DM_PROFILE_LLM_MODEL,
     maxRetries: 3,
     retryDelayMs: 500,
@@ -169,6 +174,19 @@ function normalizeRole(raw: string): string {
     .trim();
 }
 
+function isLikelyRole(raw: string): boolean {
+  const value = normalizeRole(raw);
+  if (!value) return false;
+  const lower = value.toLowerCase();
+  if (/(?:^|\b)(?:unemployed|not working|between jobs|job hunting|looking for work)(?:\b|$)/iu.test(lower)) {
+    return false;
+  }
+  if (/(?:^|\b)(?:currently|now|last job|previously)(?:\b|$)/iu.test(lower) && value.length < 20) {
+    return false;
+  }
+  return value.length >= 2;
+}
+
 function normalizeContactStyle(raw: string): string {
   const clean = sanitizeEntity(raw);
   if (!clean) return '';
@@ -193,7 +211,7 @@ function parseUnemployedStatement(source: string): ProfileEvent[] {
   ];
   for (const pattern of leftNowPatterns) {
     for (const m of source.matchAll(pattern)) {
-      const oldCompany = sanitizeEntity(m[1]);
+      const oldCompany = sanitizeEntity((m[1] || '').split(/[.!?\n]/)[0]);
       if (!oldCompany) continue;
       const cleaned = cleanupCompanyName(oldCompany);
       if (!cleaned) continue;
@@ -395,14 +413,14 @@ async function extractProfileEventsFromText(text: string | null): Promise<Profil
   }
 
   // Pattern: role/company declarations
-  const roleAndCompany = /(?:^|[\s\n])(?:i(?:'m|’m| am)|my role(?:\s+is|[’']s)?|my title(?:\s+is|[’']s)?|i work as)\s+(?:a|an|the)?\s*([A-Za-z0-9/&+().,' -]{2,80}?)(?:\s+(?:at|with|for)\s+([A-Za-z0-9 .,'&-]{2,120}?))?(?:[.;!?]|$)/giu;
+  const roleAndCompany = /(?:^|[\s\n])(?:i(?:'m|’m| am)|my role(?:\s+is|[’']s)?|my title(?:\s+is|[’']s)?|i work as)\s+(?:an|a|the)?\s*([A-Za-z0-9/&+().,' -]{2,80}?)(?:\s+(?:at|with|for)\s+([A-Za-z0-9 .,'&-]{2,120}?))?(?:[.;!?]|$)/giu;
   for (const m of source.matchAll(roleAndCompany)) {
     const role = normalizeRole(m[1] || '');
     const maybeCompany = sanitizeEntity(m[2] || '');
     const company = maybeCompany ? cleanupCompanyName(maybeCompany) : null;
     const facts: ProfileFact[] = [];
 
-    if (role) {
+    if (role && isLikelyRole(role)) {
       facts.push({
         field: 'primary_role',
         old_value: null,
@@ -428,6 +446,53 @@ async function extractProfileEventsFromText(text: string | null): Promise<Profil
         trigger: 'role_company_statement',
         role: role || null,
         company,
+      },
+      extracted_facts: facts,
+    });
+  }
+
+  // Pattern: "last job I had was as <role> at <company> ... now unemployed"
+  const historicalRoleNowUnemployed =
+    /(?:^|[\s\n])(?:last\s+job\s+i\s+had\s+was\s+as|last\s+role(?:\s+i\s+had)?\s+was|previously\s+i\s+worked\s+as)\s+([^.!?\n]{2,200}?)\s+(?:and\s+now|now|and)\s+(?:i\s+(?:am|'m)\s+)?(?:unemployed|not\s+working)\b/giu;
+  for (const m of source.matchAll(historicalRoleNowUnemployed)) {
+    const roleClause = sanitizeEntity((m[1] || '').replace(/\b(?:and|now)\s*$/iu, ''));
+    if (!roleClause) continue;
+    const roleMatch =
+      roleClause.match(/^(?:an|a|the)?\s*([A-Za-z0-9/&+().,' -]{2,90}?)(?:\s+(?:at|with|for)\s+([A-Za-z0-9 .,'&()/-]{2,120}))?$/iu);
+    const role = normalizeRole(roleMatch?.[1] || roleClause);
+    const previousCompany = sanitizeEntity(
+      (roleMatch?.[2] || '')
+        .replace(/\b(?:and|now)\s*$/iu, '')
+        .split(/[.!?\n]/)[0],
+    );
+    const cleanedPrevCompany = previousCompany ? cleanupCompanyName(previousCompany) : null;
+    const facts: ProfileFact[] = [
+      {
+        field: 'primary_company',
+        old_value: cleanedPrevCompany,
+        new_value: 'unemployed',
+        confidence: 0.84,
+      },
+    ];
+
+    if (role && isLikelyRole(role)) {
+      facts.push({
+        field: 'primary_role',
+        old_value: null,
+        new_value: role,
+        confidence: 0.84,
+      });
+    }
+
+    events.push({
+      event_type: 'profile.role_company_update',
+      confidence: 0.84,
+      event_payload: {
+        raw_text: text,
+        trigger: 'historical_role_now_unemployed',
+        role: role || null,
+        previous_company: cleanedPrevCompany,
+        new_company: 'unemployed',
       },
       extracted_facts: facts,
     });

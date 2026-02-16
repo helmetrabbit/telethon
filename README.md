@@ -73,6 +73,11 @@ make tg-ingest-dm-jsonl file=data/exports/telethon_dms_live.jsonl
 # or: npm run ingest-dm-jsonl -- --file data/exports/telethon_dms_live.jsonl
 ```
 
+Optional (recommended) profile fact extraction via OpenRouter during DM ingest:
+- `OPENROUTER_API_KEY=<key>`
+- `DM_PROFILE_LLM_EXTRACTION=auto` (default behavior: auto-enable when key exists)
+- `DM_PROFILE_LLM_MODEL=deepseek/deepseek-chat`
+
 The live ingest supports resumable checkpoints so repeated runs only process new rows:
 
 ```bash
@@ -289,6 +294,10 @@ Responder variables:
 - `DM_RESPONSE_TEMPLATE`: custom response message template.
 - `DM_MAX_RETRIES`: max retry count per inbound message.
 - `DM_RESPONSE_DRY_RUN=1`: dry-run mode without sending.
+- `DM_RESPONSE_LLM_ENABLED=1`: enable OpenRouter conversational replies (fallbacks to deterministic replies on error).
+- `DM_RESPONSE_MODEL=deepseek/deepseek-chat`
+- `DM_RESPONSE_MAX_TOKENS=300`
+- `DM_RESPONSE_TEMPERATURE=0.2`
 
 To run under systemd, call `make tg-live-start` from a service that stays running; logs are written to `data/logs/` and state is persisted in `data/.state/`.
 
