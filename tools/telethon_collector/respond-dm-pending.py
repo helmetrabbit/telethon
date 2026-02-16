@@ -199,6 +199,64 @@ def _pick(options: List[str], seed: int) -> str:
     return options[seed % len(options)]
 
 
+FULL_PROFILE_MARKERS = (
+    'full profile',
+    'full context',
+    'give me my full',
+    'share my profile',
+    'profile snapshot',
+    'what do you know about me',
+    'tell me about me',
+)
+
+
+def is_full_profile_request(text: Optional[str]) -> bool:
+    source = (text or '').lower()
+    return any(marker in source for marker in FULL_PROFILE_MARKERS)
+
+
+def format_profile_snapshot(profile: Dict[str, Any]) -> str:
+    parts = []
+    role = profile.get('primary_role')
+    if role:
+        parts.append(f"Role: {role}")
+
+    company = profile.get('primary_company')
+    if company:
+        parts.append(f"Company/Project: {company}")
+
+    contact = profile.get('preferred_contact_style')
+    if contact:
+        parts.append(f"Preferred communication: {contact}")
+
+    topics = profile.get('notable_topics') or []
+    if isinstance(topics, list) and topics:
+        top_topics = topics[:4]
+        if top_topics:
+            parts.append(f"Recent priorities: {'; '.join(top_topics)}")
+
+    if not parts:
+        return ''
+
+    return ' | '.join(parts)
+
+
+def render_profile_request_reply(row: Dict[str, Any], profile: Dict[str, Any], persona_name: str) -> str:
+    sender = row['display_name'] or row['sender_handle'] or 'you'
+    snapshot = format_profile_snapshot(profile)
+    if not snapshot:
+        return (
+            f"I can give a fuller profile, but I only have minimal signal on {sender} so far. "
+            f"Please send your role, current company/project, 2–3 priorities, and preferred communication style, "
+            "and I’ll keep this updated."
+        )
+
+    return (
+        f"Sure — quick profile snapshot for {sender}: {snapshot}. "
+        f"If anything changed (role/company/priorities/communication), send the update and I'll keep it current."
+    )
+
+
 def render_conversational_reply(row: Dict[str, Any], profile: Dict[str, Any], persona_name: str) -> str:
     msg_id = int(row.get('id') or 0)
     observed_slots = infer_slots_from_text(row.get('text'))
@@ -209,6 +267,12 @@ def render_conversational_reply(row: Dict[str, Any], profile: Dict[str, Any], pe
         "Nice, that gives me a much clearer signal.",
     ]
     ack_line = _pick(ack_options, msg_id)
+
+    if is_full_profile_request(row.get('text')):
+        if msg_id == 0:
+            intro = f"I'm {persona_name}. "
+            return intro + render_profile_request_reply(row, profile, persona_name)
+        return render_profile_request_reply(row, profile, persona_name)
 
     missing_order = ['primary_role', 'primary_company', 'notable_topics', 'preferred_contact_style']
     missing = []
