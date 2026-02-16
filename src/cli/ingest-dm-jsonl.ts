@@ -267,7 +267,7 @@ function extractProfileEventsFromText(text: string | null): ProfileEvent[] {
   }
 
   // Pattern: role/company declarations (e.g. "I'm a product manager at Acme")
-  const roleAndCompany = /(?:^|[\s\n])(?:i(?:'m| am)|my role(?:\s+is|['’]s)?|my title(?:\s+is|['’]s)?|i work as)\s+(?:a|an|the)?\s*([A-Za-z0-9/&+().,' -]{2,80})(?:\s+(?:at|with|for)\s+([A-Za-z0-9 .,'&-]{2,120}))?/giu;
+  const roleAndCompany = /(?:^|[\s\n])(?:i(?:'m|’m| am)|my role(?:\s+is|['’]s)?|my title(?:\s+is|['’]s)?|i work as)\s+(?:a|an|the)?\s*([A-Za-z0-9/&+().,' -]{2,80}?)(?:\s+(?:at|with|for)\s+([A-Za-z0-9 .,'&-]{2,120}?))?(?:[.;!?]|$)/giu;
   for (const m of source.matchAll(roleAndCompany)) {
     const role = normalizeRole(m[1] || '');
     const maybeCompany = sanitizeEntity(m[2] || '');
@@ -412,7 +412,7 @@ async function addProfileEvents(
          extracted_facts,
          confidence
        ) VALUES ($1, $2, $3, $4, $5, 'dm_listener', 'user', $6::jsonb, $7::jsonb, $8)
-       ON CONFLICT (source_message_id, event_type) DO UPDATE SET
+       ON CONFLICT (source_message_id, event_type) WHERE source_message_id IS NOT NULL DO UPDATE SET
          actor_role = EXCLUDED.actor_role,
          event_payload = EXCLUDED.event_payload,
          extracted_facts = EXCLUDED.extracted_facts,
