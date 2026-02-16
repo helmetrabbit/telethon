@@ -132,6 +132,41 @@ _ONBOARDING_ACK_RE = re.compile(
     r"^\s*(?:yes|yep|yeah|sure|ok|okay|start|go\s+ahead|lets\s+go|let's\s+go)\s*[.!?]*\s*$",
     re.IGNORECASE,
 )
+_PROFILE_UPDATE_MODE_RE = re.compile(
+    r"\b(?:i\s+was\s+giving\s+you\s+info\s+to\s+update\s+my\s+profile|focus\s+(?:only|solely)\s+on\s+profile\s+updates?|"
+    r"not\s+for\s+(?:advice|recommendations?)|no\s+advice\s+unless\s+i\s+ask|just\s+update\s+my\s+profile)\b",
+    re.IGNORECASE,
+)
+_PROFILE_DATA_PROVENANCE_RE = re.compile(
+    r"\b(?:where\s+does\s+(?:this|the)\s+data\s+come\s+from|data\s+source(?:s)?|how\s+did\s+you\s+get\s+this\s+data|"
+    r"what\s+(?:other\s+)?data\s+do\s+you\s+have(?:\s+on\s+me)?)\b",
+    re.IGNORECASE,
+)
+_ACTIVITY_ANALYTICS_RE = re.compile(
+    r"\b(?:how\s+many\s+messages\s+have\s+i\s+sent|message\s+count|total\s+messages?|most\s+active\s+(?:time|times|day|days)|"
+    r"peak\s+hours?|active\s+hours?|popular\s+times?|when\s+am\s+i\s+most\s+active|what\s+groups?\s+am\s+i\s+in|groups?\s+i'?m\s+in|"
+    r"group\s+chats?|top\s+conversation\s+partners?)\b",
+    re.IGNORECASE,
+)
+_PROFILE_CONFIRMATION_RE = re.compile(
+    r"\b(?:did\s+you\s+update|did\s+you\s+capture|did\s+you\s+save|was\s+that\s+updated)\b",
+    re.IGNORECASE,
+)
+_INLINE_PROFILE_UPDATE_RE = re.compile(
+    r"^\s*(?:role|title|position|company|project|priorit(?:y|ies)|topics?|communication|style)\s*:",
+    re.IGNORECASE,
+)
+_FREEFORM_PRIORITY_RE = re.compile(
+    r"\b(?:i(?:'m| am|’m)\s+looking\s+for|currently\s+looking\s+for|right\s+now\s+i(?:'m| am|’m)\s+looking\s+for|"
+    r"i(?:'m| am|’m)\s+focused\s+on|currently\s+focused\s+on|my\s+priorities?\s+(?:are|is))\s+([^.!?\n]{3,180})",
+    re.IGNORECASE,
+)
+_PROFILE_UPDATE_STATEMENT_RE = re.compile(
+    r"\b(?:no\s+longer\s+at|left\s+[A-Za-z0-9]|joined\s+[A-Za-z0-9]|my\s+role\s+is|my\s+title\s+is|"
+    r"i\s+work\s+as|i(?:'m| am|’m)\s+(?:an?\s+)?[A-Za-z][A-Za-z0-9/&+().,' -]{1,60}\s+(?:at|with|for)\s+[A-Za-z0-9]|"
+    r"unemployed|between\s+jobs|looking\s+for\s+work)\b",
+    re.IGNORECASE,
+)
 _LLM_FORBIDDEN_CLAIM_RE = re.compile(
     r"\b(?:system\s+prompt\s+updated|new\s+identity\s+confirmed|rebooting|executing\s+the\s+new\s+function|your\s+public\s+ip\s+is|"
     r"i(?:'ll| will)\s+(?:update|change|set)\s+my\s+(?:telegram\s+)?(?:profile\s+picture|avatar|pfp)|"
@@ -218,7 +253,7 @@ def _to_string_list(value: Any, max_items: int = 8) -> List[str]:
         return [clean]
 
     if isinstance(value, dict):
-        for key in ('value', 'topic', 'name', 'label', 'text'):
+        for key in ('value', 'topic', 'name', 'display_name', 'label', 'text', 'handle', 'username', 'user'):
             if key in value:
                 return _to_string_list(value.get(key), max_items=max_items)
         return out
@@ -240,13 +275,88 @@ def _as_text(value: Any) -> Optional[str]:
         clean = _clean_text(value)
         return clean or None
     if isinstance(value, dict):
-        for key in ('value', 'name', 'label', 'text'):
+        for key in ('value', 'name', 'display_name', 'label', 'text', 'handle', 'username', 'user'):
             candidate = value.get(key)
             if isinstance(candidate, str):
                 clean = _clean_text(candidate)
                 if clean:
                     return clean
     return None
+
+
+def _to_int(value: Any) -> Optional[int]:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        clean = value.strip()
+        if clean.isdigit():
+            try:
+                return int(clean)
+            except Exception:
+                return None
+    return None
+
+
+def _to_int_list(value: Any, max_items: int = 8) -> List[int]:
+    out: List[int] = []
+    if value is None:
+        return out
+    if isinstance(value, str):
+        clean = _clean_text(value)
+        if clean.startswith('['):
+            try:
+                parsed = json.loads(clean)
+                return _to_int_list(parsed, max_items=max_items)
+            except Exception:
+                return out
+        return out
+    if isinstance(value, (list, tuple, set)):
+        for item in value:
+            number = _to_int(item)
+            if number is None:
+                continue
+            if number not in out:
+                out.append(number)
+            if len(out) >= max_items:
+                break
+    return out
+
+
+def _to_partner_list(value: Any, max_items: int = 5) -> List[str]:
+    out: List[str] = []
+    if value is None:
+        return out
+    if isinstance(value, str):
+        clean = _clean_text(value)
+        if not clean:
+            return out
+        if clean.startswith('[') or clean.startswith('{'):
+            try:
+                parsed = json.loads(clean)
+                return _to_partner_list(parsed, max_items=max_items)
+            except Exception:
+                return [clean]
+        return [clean]
+
+    if isinstance(value, dict):
+        label = _as_text(value)
+        count = _to_int(value.get('count'))
+        if label:
+            out.append(f"{label} ({count})" if isinstance(count, int) and count > 0 else label)
+        return out[:max_items]
+
+    if isinstance(value, (list, tuple, set)):
+        for item in value:
+            for cleaned in _to_partner_list(item, max_items=max_items):
+                if cleaned and cleaned not in out:
+                    out.append(cleaned)
+                if len(out) >= max_items:
+                    return out
+    return out
 
 
 PROFILE_QUERY_CANDIDATE_COLUMNS = [
@@ -270,6 +380,16 @@ PROFILE_QUERY_CANDIDATE_COLUMNS = [
     'technical_specifics',
     'affiliations',
     'commercial_archetype',
+    'group_tags',
+    'peak_hours',
+    'active_days',
+    'most_active_days',
+    'total_messages',
+    'total_msgs',
+    'avg_msg_length',
+    'last_active_days',
+    'top_conversation_partners',
+    'fifo',
     'role_company_timeline',
 ]
 _PROFILE_QUERY_COLUMNS_CACHE: Optional[List[str]] = None
@@ -518,6 +638,15 @@ def _empty_profile() -> Dict[str, Any]:
         'technical_specifics': [],
         'affiliations': [],
         'commercial_archetype': None,
+        'group_tags': [],
+        'peak_hours': [],
+        'active_days': [],
+        'most_active_days': [],
+        'total_messages': None,
+        'avg_msg_length': None,
+        'last_active_days': None,
+        'top_conversation_partners': [],
+        'fifo': None,
         'role_company_timeline': [],
     }
 
@@ -562,6 +691,10 @@ def infer_slots_from_text(text: Optional[str]) -> Set[str]:
         "focused on",
         "focus is",
         "right now i'm focused",
+        "looking for",
+        "currently looking for",
+        "i'm looking for",
+        "i am looking for",
     )
 
     if any(marker in source for marker in role_markers):
@@ -573,6 +706,108 @@ def infer_slots_from_text(text: Optional[str]) -> Set[str]:
     if any(marker in source for marker in priority_markers):
         found.add('notable_topics')
     return found
+
+
+def _extract_inline_profile_updates(text: Optional[str]) -> Dict[str, str]:
+    source = text or ''
+    clean_source = _clean_text(source)
+    if not clean_source:
+        return {}
+    if is_third_party_profile_request(clean_source):
+        return {}
+
+    updates: Dict[str, str] = {}
+    lines = [line.strip() for line in source.splitlines() if line.strip()]
+
+    for line in lines:
+        match = re.match(r"^([A-Za-z][A-Za-z _-]{1,24})\s*:\s*(.+)$", line)
+        if not match:
+            continue
+        key = match.group(1).strip().lower().replace('_', ' ')
+        value = _clean_text(match.group(2))
+        if not value:
+            continue
+        if key in ('role', 'title', 'position', 'job'):
+            updates['primary_role'] = value
+        elif key in ('company', 'project', 'employer', 'organization', 'org'):
+            updates['primary_company'] = 'unemployed' if 'unemployed' in value.lower() else value
+        elif key in ('priorities', 'priority', 'focus', 'topics', 'topic'):
+            updates['notable_topics'] = value
+        elif key in ('communication', 'style', 'communication style', 'preferred communication', 'contact style'):
+            updates['preferred_contact_style'] = value
+
+    if re.search(r"\b(?:unemployed|between jobs|not working|job hunting)\b", clean_source, re.IGNORECASE):
+        updates['primary_company'] = 'unemployed'
+
+    freeform_priority = _extract_freeform_priority(clean_source)
+    if freeform_priority and 'notable_topics' not in updates:
+        updates['notable_topics'] = freeform_priority
+
+    return updates
+
+
+def _extract_freeform_priority(text: str) -> Optional[str]:
+    source = _clean_text(text)
+    if not source:
+        return None
+    if is_third_party_profile_request(source):
+        return None
+    if source.endswith('?') and not _INLINE_PROFILE_UPDATE_RE.search(source):
+        return None
+
+    match = _FREEFORM_PRIORITY_RE.search(source)
+    if not match:
+        return None
+    topic = _clean_text(match.group(1))
+    if not topic:
+        return None
+    topic = re.sub(r"\b(?:right now|currently)\b", "", topic, flags=re.IGNORECASE).strip(" .")
+    if not topic or len(topic) < 3:
+        return None
+    return topic[:160]
+
+
+def is_profile_update_mode_request(text: Optional[str]) -> bool:
+    source = _clean_text(text)
+    if not source:
+        return False
+    return bool(_PROFILE_UPDATE_MODE_RE.search(source))
+
+
+def is_profile_data_provenance_request(text: Optional[str]) -> bool:
+    source = _clean_text(text)
+    if not source:
+        return False
+    return bool(_PROFILE_DATA_PROVENANCE_RE.search(source))
+
+
+def is_activity_analytics_request(text: Optional[str]) -> bool:
+    source = _clean_text(text)
+    if not source:
+        return False
+    return bool(_ACTIVITY_ANALYTICS_RE.search(source))
+
+
+def is_profile_confirmation_request(text: Optional[str]) -> bool:
+    source = _clean_text(text)
+    if not source:
+        return False
+    return bool(_PROFILE_CONFIRMATION_RE.search(source))
+
+
+def is_likely_profile_update_message(text: Optional[str]) -> bool:
+    source = _clean_text(text)
+    if not source:
+        return False
+    if is_third_party_profile_request(source):
+        return False
+    if is_profile_update_mode_request(source):
+        return True
+    if _INLINE_PROFILE_UPDATE_RE.search(source):
+        return True
+    if _PROFILE_UPDATE_STATEMENT_RE.search(source):
+        return True
+    return bool(_extract_freeform_priority(source))
 
 
 def fetch_latest_profile(conn, sender_db_id: Optional[int]) -> Dict[str, Any]:
@@ -620,6 +855,18 @@ def fetch_latest_profile(conn, sender_db_id: Optional[int]) -> Dict[str, Any]:
     profile['deep_skills'] = _to_string_list(row.get('deep_skills'), max_items=8)
     profile['technical_specifics'] = _to_string_list(row.get('technical_specifics'), max_items=8)
     profile['affiliations'] = _to_string_list(row.get('affiliations'), max_items=8)
+    profile['group_tags'] = _to_string_list(row.get('group_tags'), max_items=12)
+    profile['peak_hours'] = _to_int_list(row.get('peak_hours'), max_items=8)
+    profile['active_days'] = _to_string_list(row.get('active_days'), max_items=7)
+    profile['most_active_days'] = _to_string_list(row.get('most_active_days'), max_items=7)
+    profile['top_conversation_partners'] = _to_partner_list(row.get('top_conversation_partners'), max_items=6)
+    total_messages = _to_int(row.get('total_messages'))
+    if total_messages is None:
+        total_messages = _to_int(row.get('total_msgs'))
+    profile['total_messages'] = total_messages
+    profile['avg_msg_length'] = _to_int(row.get('avg_msg_length'))
+    profile['last_active_days'] = _to_int(row.get('last_active_days'))
+    profile['fifo'] = _as_text(row.get('fifo'))
     profile['role_company_timeline'] = row.get('role_company_timeline') if isinstance(row.get('role_company_timeline'), list) else []
     return profile
 
@@ -726,6 +973,15 @@ def summarize_profile_for_prompt(profile: Dict[str, Any]) -> Dict[str, Any]:
         'affiliations': (profile.get('affiliations') or [])[:5],
         'connection_requests': (profile.get('connection_requests') or [])[:4],
         'commercial_archetype': profile.get('commercial_archetype'),
+        'group_tags': (profile.get('group_tags') or [])[:8],
+        'peak_hours': (profile.get('peak_hours') or [])[:6],
+        'active_days': (profile.get('active_days') or [])[:6],
+        'most_active_days': (profile.get('most_active_days') or [])[:6],
+        'total_messages': profile.get('total_messages'),
+        'avg_msg_length': profile.get('avg_msg_length'),
+        'last_active_days': profile.get('last_active_days'),
+        'top_conversation_partners': (profile.get('top_conversation_partners') or [])[:5],
+        'fifo': profile.get('fifo'),
     }
 
 
@@ -769,6 +1025,8 @@ FULL_PROFILE_MARKERS = (
     'share my profile',
     'profile snapshot',
     'what do you know about me',
+    'what information do you have about me',
+    'what info do you have on me',
     'tell me about me',
 )
 
@@ -975,23 +1233,28 @@ def _collect_current_message_updates(
     pending_events: List[Dict[str, Any]],
 ) -> Dict[str, str]:
     msg_id = row.get('id')
-    if not msg_id:
-        return {}
-
     updates: Dict[str, str] = {}
-    for evt in pending_events:
-        if evt.get('source_message_id') != msg_id:
-            continue
-        facts = evt.get('extracted_facts')
-        if not isinstance(facts, list):
-            continue
-        for fact in facts:
-            if not isinstance(fact, dict):
+
+    if msg_id:
+        for evt in pending_events:
+            if evt.get('source_message_id') != msg_id:
                 continue
-            field = str(fact.get('field') or '').strip()
-            value = _as_text(fact.get('new_value'))
-            if field and value:
-                updates[field] = value
+            facts = evt.get('extracted_facts')
+            if not isinstance(facts, list):
+                continue
+            for fact in facts:
+                if not isinstance(fact, dict):
+                    continue
+                field = str(fact.get('field') or '').strip()
+                value = _as_text(fact.get('new_value'))
+                if field and value:
+                    updates[field] = value
+
+    # Fallback inline parsing for immediate UX when event ingestion/reconcile lags.
+    inferred_updates = _extract_inline_profile_updates(row.get('text'))
+    for key, value in inferred_updates.items():
+        if key not in updates and value:
+            updates[key] = value
     return updates
 
 
@@ -1051,7 +1314,97 @@ def _truncate(value: Optional[str], limit: int = 180) -> Optional[str]:
     return clean[: max(0, limit - 3)].rstrip() + "..."
 
 
-def format_profile_snapshot_lines(profile: Dict[str, Any]) -> List[str]:
+def _format_hour_labels(hours: List[int]) -> Optional[str]:
+    valid = sorted({hour for hour in hours if isinstance(hour, int) and 0 <= hour <= 23})
+    if not valid:
+        return None
+    labels = [f"{hour:02d}:00" for hour in valid[:6]]
+    return ", ".join(labels) + " UTC"
+
+
+def _normalize_day_label(raw: str) -> Optional[str]:
+    clean = _clean_text(raw).lower()
+    if not clean:
+        return None
+    mapping = {
+        'mon': 'Monday',
+        'tue': 'Tuesday',
+        'wed': 'Wednesday',
+        'thu': 'Thursday',
+        'fri': 'Friday',
+        'sat': 'Saturday',
+        'sun': 'Sunday',
+    }
+    key = clean[:3]
+    if key in mapping:
+        return mapping[key]
+    if len(clean) > 12:
+        return None
+    return clean.title()
+
+
+def _format_day_labels(days: List[str], limit: int = 4) -> Optional[str]:
+    out: List[str] = []
+    for day in days:
+        label = _normalize_day_label(day)
+        if not label:
+            continue
+        if label not in out:
+            out.append(label)
+        if len(out) >= limit:
+            break
+    if not out:
+        return None
+    return ", ".join(out)
+
+
+def format_activity_snapshot_lines(profile: Dict[str, Any]) -> List[str]:
+    lines: List[str] = []
+    total_messages = _to_int(profile.get('total_messages'))
+    if isinstance(total_messages, int) and total_messages >= 0:
+        lines.append(f"Observed Telegram messages: {total_messages}")
+
+    peak_hours = profile.get('peak_hours') or []
+    if isinstance(peak_hours, list):
+        labels = _format_hour_labels(peak_hours)
+        if labels:
+            lines.append(f"Peak activity hours: {labels}")
+
+    most_active_days = profile.get('most_active_days') or []
+    active_days = profile.get('active_days') or []
+    day_labels = None
+    if isinstance(most_active_days, list) and most_active_days:
+        day_labels = _format_day_labels(most_active_days)
+    if not day_labels and isinstance(active_days, list) and active_days:
+        day_labels = _format_day_labels(active_days)
+    if day_labels:
+        lines.append(f"Most active days: {day_labels}")
+
+    group_tags = profile.get('group_tags') or []
+    if isinstance(group_tags, list) and group_tags:
+        lines.append(f"Known groups: {', '.join(group_tags[:6])}")
+
+    partners = profile.get('top_conversation_partners') or []
+    if isinstance(partners, list) and partners:
+        lines.append(f"Top conversation partners: {', '.join(partners[:4])}")
+
+    fifo = _as_text(profile.get('fifo'))
+    if fifo:
+        lines.append(f"Observed activity window: {fifo}")
+
+    days_since_active = _to_int(profile.get('last_active_days'))
+    if isinstance(days_since_active, int) and days_since_active >= 0:
+        if days_since_active == 0:
+            lines.append("Last active: today")
+        elif days_since_active == 1:
+            lines.append("Last active: 1 day ago")
+        else:
+            lines.append(f"Last active: {days_since_active} days ago")
+
+    return lines
+
+
+def format_profile_snapshot_lines(profile: Dict[str, Any], include_activity: bool = False) -> List[str]:
     lines: List[str] = []
 
     role = _as_text(profile.get('primary_role'))
@@ -1110,11 +1463,14 @@ def format_profile_snapshot_lines(profile: Dict[str, Any]) -> List[str]:
     if bio and company_l != 'unemployed' and ' at unemployed' not in bio.lower():
         lines.append(f"Professional bio signal: {bio}")
 
+    if include_activity:
+        lines.extend(format_activity_snapshot_lines(profile))
+
     return lines
 
 
 def format_profile_snapshot(profile: Dict[str, Any]) -> str:
-    lines = format_profile_snapshot_lines(profile)
+    lines = format_profile_snapshot_lines(profile, include_activity=False)
     if not lines:
         return ''
     return " | ".join(lines)
@@ -1122,18 +1478,115 @@ def format_profile_snapshot(profile: Dict[str, Any]) -> str:
 
 def render_profile_request_reply(row: Dict[str, Any], profile: Dict[str, Any], persona_name: str) -> str:
     sender = row['display_name'] or row['sender_handle'] or 'you'
-    lines = format_profile_snapshot_lines(profile)
+    lines = format_profile_snapshot_lines(profile, include_activity=True)
     if not lines:
         return (
-            f"I can give a fuller profile, but I only have minimal signal on {sender} so far. "
-            f"Please send your role, current company/project, 2–3 priorities, and preferred communication style, "
-            "and I’ll keep this updated."
+            f"I don’t have a usable profile for {sender} yet.\n"
+            "Send this quick format and I’ll save it immediately:\n"
+            "role: ...\ncompany: ...\npriorities: ...\ncommunication: ..."
         )
 
-    bullets = "\n".join(f"- {line}" for line in lines[:8])
+    bullets = "\n".join(f"- {line}" for line in lines[:10])
     return (
         f"Current profile context for {sender}:\n{bullets}\n"
-        "If anything changed (role/company/priorities/communication), send the correction and I'll keep this in sync."
+        "If anything changed, send the correction and I’ll keep this synced."
+    )
+
+
+def render_profile_update_mode_reply() -> str:
+    return (
+        "Understood. I’ll treat your next messages as profile updates unless you explicitly ask for advice.\n"
+        "Quick format (works best):\n"
+        "role: ...\ncompany: ...\npriorities: ...\ncommunication: ..."
+    )
+
+
+def render_profile_data_provenance_reply(profile: Dict[str, Any]) -> str:
+    lines = [
+        "Profile data source in this deployment:",
+        "- Direct updates you send in DM (role/company/priorities/communication).",
+        "- Structured extraction from your own inbound DM messages.",
+    ]
+
+    has_activity_signal = any(
+        [
+            isinstance(_to_int(profile.get('total_messages')), int),
+            bool(profile.get('group_tags')),
+            bool(profile.get('peak_hours')),
+            bool(profile.get('active_days')),
+            bool(profile.get('most_active_days')),
+        ]
+    )
+    if has_activity_signal:
+        lines.append("- Message analytics computed from your ingested Telegram history (counts/activity windows/groups).")
+
+    known_fields: List[str] = []
+    if _as_text(profile.get('primary_role')):
+        known_fields.append("role")
+    if _as_text(profile.get('primary_company')):
+        known_fields.append("company")
+    if profile.get('notable_topics'):
+        known_fields.append("priorities")
+    if _as_text(profile.get('preferred_contact_style')):
+        known_fields.append("communication style")
+    if isinstance(_to_int(profile.get('total_messages')), int):
+        known_fields.append("message analytics")
+
+    if known_fields:
+        lines.append(f"Current stored categories for you: {', '.join(known_fields)}.")
+
+    lines.append("If anything looks wrong, send corrections and I’ll prioritize those updates.")
+    return "\n".join(lines)
+
+
+def render_activity_analytics_reply(profile: Dict[str, Any]) -> str:
+    lines = format_activity_snapshot_lines(profile)
+    if not lines:
+        return (
+            "I don’t have activity analytics cached for you yet.\n"
+            "Once more DM/group history is ingested, I can report message totals, peak hours, and active-day patterns."
+        )
+    bullets = "\n".join(f"- {line}" for line in lines[:8])
+    return f"Here’s the activity data I currently have:\n{bullets}"
+
+
+def render_profile_confirmation_reply(
+    row: Dict[str, Any],
+    profile: Dict[str, Any],
+    pending_events: List[Dict[str, Any]],
+) -> str:
+    captured_updates = _collect_current_message_updates(row, pending_events)
+    if captured_updates:
+        summary = _format_captured_updates_summary(captured_updates)
+        return f"Yes. I captured: {summary}."
+
+    topic = _extract_freeform_priority(row.get('text') or '')
+    profile_topics = [str(item).lower() for item in (profile.get('notable_topics') or []) if isinstance(item, str)]
+    if topic and any(topic.lower() in known or known in topic.lower() for known in profile_topics):
+        return f"Yes. I have that priority noted as: {topic}."
+
+    source = _clean_text(row.get('text'))
+    requested = None
+    match = re.search(r"\b(?:did\s+you\s+(?:update|capture|save))(?:\s+that)?\s+(.+?)[?.!]*$", source, re.IGNORECASE)
+    if match:
+        requested = _clean_text(match.group(1))
+        if requested:
+            requested = re.sub(r"^(?:i(?:'m| am|’m)\s+)", "", requested, flags=re.IGNORECASE)
+            requested = re.sub(r"^(?:that|this)\s+", "", requested, flags=re.IGNORECASE)
+
+    if requested:
+        haystacks = [
+            _as_text(profile.get('primary_role')) or '',
+            _as_text(profile.get('primary_company')) or '',
+            ", ".join(profile_topics),
+        ]
+        lower_req = requested.lower()
+        if any(lower_req and lower_req in hay.lower() for hay in haystacks if hay):
+            return f"Yes. I already have this in your profile context: {requested}."
+
+    return (
+        "I don’t see that update applied yet.\n"
+        "Please resend it in `field: value` format and I’ll confirm right away."
     )
 
 
@@ -1177,6 +1630,26 @@ def render_onboarding_flow_reply(
         state['status'] = 'collecting'
         state['started_at'] = state.get('started_at') or now
         status = 'collecting'
+
+    if status == 'collecting' and is_indecision_request(latest_text):
+        total_fields = len(required_fields)
+        done_count = max(0, total_fields - len(missing_fields))
+        guidance = render_indecision_reply(profile)
+        if missing_fields:
+            next_slot = missing_fields[0]
+            prompt = _onboarding_slot_prompt(next_slot, msg_id + done_count + int(state.get('turns') or 0))
+            guidance = (
+                f"{guidance}\n"
+                f"When you're ready, send one profile update so I can keep onboarding moving ({done_count}/{total_fields} done).\n"
+                f"Next slot: {prompt}"
+            )
+            state['last_prompted_field'] = next_slot
+        state['status'] = 'collecting'
+        state['started_at'] = state.get('started_at') or now
+        state['completed_at'] = None
+        state['turns'] = int(state.get('turns') or 0) + 1
+        state['missing_fields'] = missing_fields
+        return guidance, state
 
     if not missing_fields:
         state['missing_fields'] = []
@@ -1320,6 +1793,8 @@ def render_capabilities_reply() -> str:
     return (
         "Capabilities in this chat:\n"
         "- Profile snapshot and update capture (role/company/priorities/communication style)\n"
+        "- First-contact onboarding flow for users with sparse profile data\n"
+        "- Activity analytics from stored psychometric fields (message totals, peak hours, active days, groups)\n"
         "- Third-party profile lookups from existing stored records\n"
         "- Concrete next-step planning when you’re stuck\n"
         "Limits:\n"
@@ -1513,29 +1988,37 @@ def render_llm_conversational_reply(
         'is_profile_request': is_full_profile_request(latest_text),
         'is_third_party_profile_lookup': is_third_party_profile_request(latest_text),
         'is_indecision': is_indecision_request(latest_text),
+        'is_activity_analytics_request': is_activity_analytics_request(latest_text),
+        'is_profile_data_provenance_request': is_profile_data_provenance_request(latest_text),
+        'is_profile_update_mode_request': is_profile_update_mode_request(latest_text),
+        'is_profile_confirmation_request': is_profile_confirmation_request(latest_text),
+        'likely_profile_update_message': is_likely_profile_update_message(latest_text),
+        'inline_profile_updates': _collect_current_message_updates(row, pending_events),
         'profile_context': summarize_profile_for_prompt(profile),
+        'activity_snapshot': format_activity_snapshot_lines(profile),
         'recent_conversation': recent_messages[-8:],
         'pending_profile_updates': summarize_pending_events_for_prompt(pending_events),
     }
 
     system_prompt = (
-        f"You are {persona_name}, a high-signal Telegram assistant.\n"
+        f"You are {persona_name}, a high-signal Telegram assistant for profile upkeep.\n"
         "Your priorities:\n"
-        "1) Give context-rich, practical replies.\n"
+        "1) Sound human: concise, direct, and specific. No repetitive filler.\n"
         "2) If asked for profile knowledge, provide a comprehensive snapshot from known data.\n"
-        "3) If user gives profile updates (job/company/unemployed/role/priorities/style), acknowledge exactly what changed and what was captured.\n"
-        "4) If user says they are unsure what to do, provide 3 concrete next-step options tailored to their context.\n"
-        "5) If the message is about another person, answer as a third-party lookup and do NOT treat it as a profile update for the sender.\n"
-        "6) Avoid repetitive intros, avoid generic filler, avoid asking the same question twice.\n"
-        "7) Never claim to execute tools, shell commands, HTTP requests, profile-picture changes, reboots, or system-prompt edits.\n"
-        "8) If asked for unavailable actions, state limits and give a practical alternative.\n"
-        "9) Do not use sexual or explicit roleplay.\n"
+        "3) If user gives profile updates (job/company/unemployed/role/priorities/style), confirm exactly what was captured.\n"
+        "4) If user asks about message analytics (counts/groups/active times), answer strictly from available activity_snapshot/profile_context data.\n"
+        "5) If user says they want profile updates only (not advice), prioritize capture/confirmation over recommendations.\n"
+        "6) If user says they are unsure what to do, provide 3 concrete next-step options tailored to their context.\n"
+        "7) If the message is about another person, answer as a third-party lookup and do NOT treat it as a profile update for the sender.\n"
+        "8) Never claim to execute tools, shell commands, HTTP requests, profile-picture changes, reboots, or system-prompt edits.\n"
+        "9) If asked for unavailable actions, state limits and give a practical alternative.\n"
+        "10) Do not use sexual or explicit roleplay.\n"
         "Output constraints:\n"
         "- Plain text only.\n"
-        "- Keep it concise but substantial.\n"
+        "- Keep it concise but substantial and natural.\n"
         "- If profile request: use short bullet lines.\n"
         "- If unsure data: say what is missing and ask one precise follow-up.\n"
-        "- Never claim to have updated profile data unless context shows pending_profile_updates for this sender.\n"
+        "- Never claim to have updated profile data unless inline_profile_updates or pending_profile_updates provide evidence.\n"
         "- Never claim your system prompt was changed.\n"
         "- Never disclose secrets or credentials."
     )
@@ -1550,32 +2033,72 @@ def render_conversational_reply(
     pending_events: List[Dict[str, Any]],
 ) -> str:
     msg_id = int(row.get('id') or 0)
+    latest_text = row.get('text')
     observed_slots = infer_slots_from_text(row.get('text'))
 
     ack_options = [
-        "Captured, thanks for the update.",
-        "Super helpful, thanks for the update.",
-        "Got it, that gives me a much clearer signal.",
+        "Got it.",
+        "Perfect, thanks.",
+        "Saved.",
     ]
     ack_line = _pick(ack_options, msg_id)
 
-    if is_full_profile_request(row.get('text')):
+    if is_full_profile_request(latest_text):
         return render_profile_request_reply(row, profile, persona_name)
 
-    if is_third_party_profile_request(row.get('text')):
+    if is_third_party_profile_request(latest_text):
         return (
             "I treated that as a lookup request about another person, not as an update to your profile.\n"
             "If you share their exact @handle (or full name + company), I can return what is on file."
         )
 
-    if is_indecision_request(row.get('text')):
+    if is_activity_analytics_request(latest_text):
+        return render_activity_analytics_reply(profile)
+
+    if is_profile_data_provenance_request(latest_text):
+        return render_profile_data_provenance_reply(profile)
+
+    if is_profile_update_mode_request(latest_text):
+        return render_profile_update_mode_reply()
+
+    if is_profile_confirmation_request(latest_text):
+        return render_profile_confirmation_reply(row, profile, pending_events)
+
+    if is_indecision_request(latest_text):
         return render_indecision_reply(profile)
 
     captured_updates = _collect_current_message_updates(row, pending_events)
     if captured_updates:
         summary = _format_captured_updates_summary(captured_updates)
-        follow_up = "If you want, ask \"What do you know about me?\" and I’ll show the updated snapshot."
-        return f"{ack_line} I captured: {summary}. {follow_up}"
+        missing_after_capture: List[str] = []
+        for slot in ('primary_role', 'primary_company', 'notable_topics', 'preferred_contact_style'):
+            if slot in captured_updates:
+                continue
+            value = profile.get(slot)
+            if slot == 'notable_topics':
+                has_value = isinstance(value, list) and len(value) > 0
+            else:
+                has_value = bool(value)
+            if not has_value:
+                missing_after_capture.append(slot)
+
+        if missing_after_capture:
+            field_map = {
+                'primary_role': "role",
+                'primary_company': "company/project",
+                'notable_topics': "top priorities",
+                'preferred_contact_style': "preferred communication style",
+            }
+            next_field = field_map[missing_after_capture[0]]
+            return f"{ack_line} Saved: {summary}. Quick follow-up: what should I store for your {next_field}?"
+
+        return f"{ack_line} Saved: {summary}. Ask \"What do you know about me?\" for a full snapshot."
+
+    if is_likely_profile_update_message(latest_text):
+        return (
+            "I read that as profile context, but I need one explicit field to store.\n"
+            "Send one line like `role: ...`, `company: ...`, `priorities: ...`, or `communication: ...`."
+        )
 
     missing_order = ['primary_role', 'primary_company', 'notable_topics', 'preferred_contact_style']
     missing = []
@@ -1614,16 +2137,17 @@ def render_conversational_reply(
             'preferred_contact_style': contact_questions,
         }
         next_question = _pick(question_map[slot], msg_id + 1)
+        return f"{next_question}"
     else:
         next_question = _pick(
             [
-                "If anything changed in your role, company, or priorities, send it and I’ll keep your profile fresh.",
-                "If you have a new update, drop it here and I’ll keep your profile in sync.",
+                "If anything changed in your role, company, priorities, or communication style, send it and I’ll sync it.",
+                "Want a full snapshot or a targeted update? I can do either in one message.",
             ],
             msg_id + 2,
         )
 
-    return f"{ack_line} {next_question}"
+    return next_question
 
 
 def render_response(args: argparse.Namespace, conn, row: Dict[str, Any]) -> str:
@@ -1654,6 +2178,14 @@ def render_response(args: argparse.Namespace, conn, row: Dict[str, Any]) -> str:
         return render_capabilities_reply()
     if is_unsupported_action_request(latest_text):
         return render_unsupported_action_reply()
+    if is_profile_update_mode_request(latest_text):
+        return render_profile_update_mode_reply()
+    if is_activity_analytics_request(latest_text):
+        return render_activity_analytics_reply(profile)
+    if is_profile_data_provenance_request(latest_text):
+        return render_profile_data_provenance_reply(profile)
+    if is_profile_confirmation_request(latest_text):
+        return render_profile_confirmation_reply(row, profile, pending_events)
 
     onboarding_reply, next_onboarding_state = render_onboarding_flow_reply(
         row,
@@ -1670,7 +2202,11 @@ def render_response(args: argparse.Namespace, conn, row: Dict[str, Any]) -> str:
     if selected_option:
         return render_option_selection_reply(selected_option, profile, recent_messages)
 
-    if is_full_profile_request(latest_text) or is_indecision_request(latest_text):
+    if (
+        is_full_profile_request(latest_text)
+        or is_indecision_request(latest_text)
+        or is_likely_profile_update_message(latest_text)
+    ):
         return render_conversational_reply(row, profile, args.persona_name, pending_events)
     if _collect_current_message_updates(row, pending_events):
         return render_conversational_reply(row, profile, args.persona_name, pending_events)

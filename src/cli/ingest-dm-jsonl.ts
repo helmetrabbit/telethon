@@ -216,7 +216,7 @@ function isThirdPartyProfileQuery(source: string): boolean {
 
 function hasExplicitSelfProfileUpdate(source: string): boolean {
   const s = source.toLowerCase();
-  return /(?:\bmy role\b|\bmy title\b|\bi work as\b|\bno longer at\b|\bleft\b|\bjoined\b|\bunemployed\b|\bmy priorities are\b|\bfocused on\b|\bprefer(?:\s+to)? communicate\b|\bbest way to reach me\b|\b(?:role|title|position|company|project|priorities|priority|communication|style)\s*:|\b(?:update|set|change)\s+(?:my\s+)?(?:job\s+title|title|role|position|company|project)\s+(?:to|as)\b)/iu.test(s);
+  return /(?:\bmy role\b|\bmy title\b|\bi work as\b|\bno longer at\b|\bleft\b|\bjoined\b|\bunemployed\b|\bmy priorities are\b|\bfocused on\b|\bi(?:'m| am)\s+looking for\b|\bcurrently\s+looking for\b|\bprefer(?:\s+to)? communicate\b|\bbest way to reach me\b|\b(?:role|title|position|company|project|priorities|priority|communication|style)\s*:|\b(?:update|set|change)\s+(?:my\s+)?(?:job\s+title|title|role|position|company|project)\s+(?:to|as)\b)/iu.test(s);
 }
 
 function normalizeContactStyle(raw: string): string {
@@ -740,10 +740,13 @@ async function extractProfileEventsFromText(text: string | null): Promise<Profil
   }
 
   // Pattern: priority statements
-  const priorities = /(?:my priorities are|i(?:'m| am)\s+focused on|currently focused on|right now\s+i(?:'m| am)\s+focused on)\s+([^.!?\n]{3,180})/giu;
+  const priorities = /(?:my priorities are|i(?:'m| am)\s+focused on|currently focused on|right now\s+i(?:'m| am)\s+focused on|i(?:'m| am)\s+looking for|currently\s+looking for|right now\s+i(?:'m| am)\s+looking for)\s+([^.!?\n]{3,180})/giu;
   for (const m of source.matchAll(priorities)) {
     const topics = splitPriorityTopics(m[1] || '');
     if (topics.length === 0) continue;
+    if (/\?/u.test(source) && !/(?:\bmy priorities are\b|\bi(?:'m| am)\s+focused on\b|\bi(?:'m| am)\s+looking for\b|\bcurrently\s+looking for\b)/iu.test(source)) {
+      continue;
+    }
     events.push({
       event_type: 'profile.priorities_update',
       confidence: 0.66,
