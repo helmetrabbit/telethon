@@ -54,7 +54,7 @@ serve-viewer:
 
 # ── DM-only live listener (private chats only) ───────────
 tg-listen-dm:
-	cd tools/telethon_collector && python3 listen-dms.py --out ../../data/exports/telethon_dms_live.jsonl
+	cd tools/telethon_collector && . .venv/bin/activate && python3 listen-dms.py --out ../../data/exports/telethon_dms_live.jsonl
 
 # ── DM JSONL to Postgres (requires dm tables migration) ───────────
 tg-ingest-dm-jsonl:

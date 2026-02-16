@@ -49,7 +49,23 @@ load_dotenv(_SCRIPT_DIR / ".env")
 
 API_ID = os.getenv("TG_API_ID")
 API_HASH = os.getenv("TG_API_HASH")
-SESSION_PATH = os.getenv("TG_SESSION_PATH", str(_SCRIPT_DIR / "telethon.session"))
+_session_env = os.getenv("TG_SESSION_PATH")
+ROOT_DIR = _SCRIPT_DIR.parent.parent
+if _session_env:
+    candidate = Path(_session_env)
+    if candidate.is_absolute():
+        SESSION_PATH = str(candidate)
+    else:
+        script_candidate = _SCRIPT_DIR / candidate
+        root_candidate = ROOT_DIR / candidate
+        if script_candidate.exists():
+            SESSION_PATH = str(script_candidate)
+        elif root_candidate.exists():
+            SESSION_PATH = str(root_candidate)
+        else:
+            SESSION_PATH = str(script_candidate)
+else:
+    SESSION_PATH = str(_SCRIPT_DIR / "telethon.session")
 
 LINK_RE = re.compile(r"https?://\S+")
 MENTION_RE = re.compile(r"@[A-Za-z0-9_]+")
