@@ -196,7 +196,7 @@ function isLikelyRole(raw: string): boolean {
   if (/[?]/u.test(value)) {
     return false;
   }
-  if (/(?:^|\b)(?:asking|wondering|curious|trying|looking|tell me|what do you know|do you know|who is|hello|hi)\b/iu.test(lower)) {
+  if (/(?:^|\b)(?:asking|wondering|curious|trying|looking|tell me|what(?: do)? you know|do you know|who is|hello|hi)\b/iu.test(lower)) {
     return false;
   }
   if (value.split(/\s+/u).length > 8 && !/(?:\b)(?:head|lead|director|manager|analyst|engineer|developer|founder|co-?founder|advisor|consultant|partnerships|growth|marketing|sales|operations|product|design|qa|cto|ceo|coo|cfo|vp|principal|owner|student|freelance)(?:\b)/iu.test(lower)) {
@@ -207,14 +207,14 @@ function isLikelyRole(raw: string): boolean {
 
 function isThirdPartyProfileQuery(source: string): boolean {
   const s = source.toLowerCase();
-  if (!/(what do you know about|tell me about|do you know(?: much)? about|who is)/iu.test(s)) return false;
+  if (!/(what(?: do)? you know about|tell me about|do you know(?: much)? about|who is)/iu.test(s)) return false;
   if (/(about me|my profile|about myself|tell me about me)/iu.test(s)) return false;
   return true;
 }
 
 function hasExplicitSelfProfileUpdate(source: string): boolean {
   const s = source.toLowerCase();
-  return /(?:\bmy role\b|\bmy title\b|\bi work as\b|\bi(?:'m| am)\b|\bno longer at\b|\bleft\b|\bjoined\b|\bunemployed\b|\bmy priorities are\b|\bfocused on\b|\bprefer(?:\s+to)? communicate\b|\bbest way to reach me\b|\b(?:role|title|position|company|project|priorities|priority|communication|style)\s*:)/iu.test(s);
+  return /(?:\bmy role\b|\bmy title\b|\bi work as\b|\bno longer at\b|\bleft\b|\bjoined\b|\bunemployed\b|\bmy priorities are\b|\bfocused on\b|\bprefer(?:\s+to)? communicate\b|\bbest way to reach me\b|\b(?:role|title|position|company|project|priorities|priority|communication|style)\s*:|\b(?:update|set|change)\s+(?:my\s+)?(?:job\s+title|title|role|position|company|project)\s+(?:to|as)\b)/iu.test(s);
 }
 
 function normalizeContactStyle(raw: string): string {
@@ -575,12 +575,13 @@ async function extractProfileEventsFromText(text: string | null): Promise<Profil
   }
 
   // Pattern: role/company declarations
-  const roleAndCompany = /(?:^|[\s\n])(?:i(?:'m|’m| am)|my role(?:\s+is|[’']s)?|my title(?:\s+is|[’']s)?|i work as)\s+(?:an|a|the)?\s*([A-Za-z0-9/&+().,' -]{2,80}?)(?:\s+(?:at|with|for)\s+([A-Za-z0-9 .,'&-]{2,120}?))?(?:[.;!?]|$)/giu;
+  const roleAndCompany = /(?:^|[\s\n])(?:i(?:'m|’m| am)|my role(?:\s+is|[’']s)?|my title(?:\s+is|[’']s)?|i work as)\s+(?:(?:an|a|the)\s+)?([A-Za-z0-9/&+().,' -]{2,80}?)(?:\s+(?:at|with|for)\s+([A-Za-z0-9 .,'&-]{2,120}?))?(?:[.;!?]|$)/giu;
   for (const m of source.matchAll(roleAndCompany)) {
     const role = normalizeRole(m[1] || '');
     const maybeCompany = sanitizeEntity(m[2] || '');
     const company = maybeCompany ? cleanupCompanyName(maybeCompany) : null;
     const facts: ProfileFact[] = [];
+    if (/^(?:asking|wondering|curious|trying|looking|tell(?:ing)?|what|who)\b/iu.test(role)) continue;
 
     if (!(role && isLikelyRole(role))) continue;
 
@@ -685,6 +686,56 @@ async function extractProfileEventsFromText(text: string | null): Promise<Profil
 
   // Parse explicit unemployment statements
   events.push(...parseUnemployedStatement(source));
+
+  // Pattern: "update job title/role to X"
+  const explicitRoleUpdate =
+    /(?:^|[\s\n])(?:update|set|change)\s+(?:my\s+)?(?:job\s+title|title|role|position)\s+(?:to|as)\s+([A-Za-z0-9/&+().,' -]{2,90}?)(?:[.;!?]|$)/giu;
+  for (const m of source.matchAll(explicitRoleUpdate)) {
+    const role = normalizeRole(m[1] || '');
+    if (!role || !isLikelyRole(role)) continue;
+    events.push({
+      event_type: 'profile.role_update',
+      confidence: 0.86,
+      event_payload: {
+        raw_text: text,
+        trigger: 'explicit_role_update_command',
+        role,
+      },
+      extracted_facts: [
+        {
+          field: 'primary_role',
+          old_value: null,
+          new_value: role,
+          confidence: 0.86,
+        },
+      ],
+    });
+  }
+
+  // Pattern: "update company/project to X"
+  const explicitCompanyUpdate =
+    /(?:^|[\s\n])(?:update|set|change)\s+(?:my\s+)?(?:company|project|employer)\s+(?:to|as)\s+([A-Za-z0-9 .,'&()/-]{2,120}?)(?:[.;!?]|$)/giu;
+  for (const m of source.matchAll(explicitCompanyUpdate)) {
+    const company = normalizeCompanyOrStatus(m[1] || '');
+    if (!company) continue;
+    events.push({
+      event_type: 'profile.company_update',
+      confidence: 0.86,
+      event_payload: {
+        raw_text: text,
+        trigger: 'explicit_company_update_command',
+        new_company: company,
+      },
+      extracted_facts: [
+        {
+          field: 'primary_company',
+          old_value: null,
+          new_value: company,
+          confidence: 0.86,
+        },
+      ],
+    });
+  }
 
   // Pattern: priority statements
   const priorities = /(?:my priorities are|i(?:'m| am)\s+focused on|currently focused on|right now\s+i(?:'m| am)\s+focused on)\s+([^.!?\n]{3,180})/giu;
