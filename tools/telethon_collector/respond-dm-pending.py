@@ -120,12 +120,19 @@ def claim_pending(conn, limit: int, max_retries: int) -> List[Dict[str, Any]]:
         cur.execute(
             """
             WITH pending AS (
-              SELECT id
-              FROM dm_messages
-              WHERE direction = 'inbound'
-                AND response_status IN ('pending', 'failed')
-                AND response_attempts < %s
-              ORDER BY sent_at ASC
+              SELECT m.id
+              FROM dm_messages m
+              WHERE m.direction = 'inbound'
+                AND m.response_status IN ('pending', 'failed')
+                AND m.response_attempts < %s
+                AND NOT EXISTS (
+                  SELECT 1
+                  FROM dm_messages o
+                  WHERE o.conversation_id = m.conversation_id
+                    AND o.direction = 'outbound'
+                    AND o.sent_at >= m.sent_at
+                )
+              ORDER BY m.sent_at ASC
               LIMIT %s
               FOR UPDATE SKIP LOCKED
             ),
@@ -255,6 +262,26 @@ async def main() -> None:
                     'display_name': row['display_name'],
                     'text': row['text'] or '',
                 })
+
+                # Optional idempotence guard: avoid re-sending exact same outgoing text.
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT 1
+                        FROM dm_messages o
+                        WHERE o.conversation_id = %s
+                          AND o.direction = 'outbound'
+                          AND o.sent_at >= (SELECT sent_at FROM dm_messages WHERE id = %s)
+                          AND o.text = %s
+                        LIMIT 1
+                        """,
+                        [row['conversation_id'], row['id'], text],
+                    )
+                    if cur.fetchone():
+                        conn.commit()
+                        skipped += 1
+                        mark_failed(conn, row['id'], 'duplicate_text_already_sent')
+                        continue
 
                 if args.dry_run:
                     print(f"DRY-RUN would reply to {row['sender_external_id']} with: {text[:160]}")
