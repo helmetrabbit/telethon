@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import crypto from 'node:crypto';
 import fs from 'fs';
 import readline from 'node:readline';
 import path from 'path';
@@ -25,10 +26,7 @@ interface DmEvent {
   has_mentions: boolean;
 }
 
-function toLowerHandle(input: string | null | undefined): string | null {
-  if (!input) return null;
-  return input.trim().toLowerCase();
-}
+const HANDLE_RE = /@([A-Za-z0-9_]+)/g;
 
 function parseLine(raw: string): DmEvent | null {
   try {
@@ -42,28 +40,56 @@ function validDmDirection(v: unknown): v is 'inbound' | 'outbound' {
   return v === 'inbound' || v === 'outbound';
 }
 
-async function upsertUser(client: any, platform: string, externalId: string, handle: string | null, displayName: string | null): Promise<number> {
+function toLowerHandle(input: string | null | undefined): string | null {
+  if (!input) return null;
+  return input.trim().toLowerCase();
+}
+
+function extractHandles(text: string | null): string[] {
+  if (!text) return [];
+  const out = new Set<string>();
+  for (const m of text.matchAll(HANDLE_RE)) {
+    const handle = m[1].toLowerCase();
+    if (handle) out.add(handle);
+  }
+  return [...out];
+}
+
+function textHash(text: string | null): string {
+  return crypto.createHash('sha256').update(text || '').digest('hex');
+}
+
+async function upsertUser(
+  client: any,
+  externalId: string,
+  handle: string | null,
+  displayName: string | null,
+): Promise<number> {
   const handleNormalized = toLowerHandle(handle);
   const display = displayName?.trim() || handleNormalized;
 
   const res = await client.query(
     `INSERT INTO users (platform, external_id, handle, display_name)
-     VALUES ($1, $2, $3::text, $4::text)
+     VALUES ('telegram', $1, $2::text, $3::text)
      ON CONFLICT (platform, external_id) DO UPDATE SET
        handle = COALESCE(NULLIF(EXCLUDED.handle, ''), users.handle),
        display_name = COALESCE(NULLIF(EXCLUDED.display_name, ''), users.display_name)
      RETURNING id`,
-    [platform, externalId, handleNormalized, display],
+    [externalId, handleNormalized, display],
   );
 
   return res.rows[0].id as number;
 }
 
-async function ingestBatch(client: any, events: string[]): Promise<{ inserted: number; skipped: number; malformed: number; userCount: number }> {
+async function ingestBatch(client: any, events: string[]): Promise<{
+  inserted: number;
+  skipped: number;
+  malformed: number;
+  users: number;
+}> {
   let inserted = 0;
   let skipped = 0;
   let malformed = 0;
-
   const userCache = new Map<string, number>();
 
   for (const line of events) {
@@ -80,16 +106,10 @@ async function ingestBatch(client: any, events: string[]): Promise<{ inserted: n
     const peerExt = row.peer_id;
 
     const getUserId = async (extId: string, handle: string | null, name: string | null): Promise<number> => {
-      const key = `${extId.toLowerCase()}`;
+      const key = extId.toLowerCase();
       const hit = userCache.get(key);
       if (hit) return hit;
-      const id = await upsertUser(
-        client,
-        'telegram',
-        extId,
-        handle,
-        name,
-      );
+      const id = await upsertUser(client, extId, handle, name);
       userCache.set(key, id);
       return id;
     };
@@ -97,17 +117,31 @@ async function ingestBatch(client: any, events: string[]): Promise<{ inserted: n
     const senderUserId = await getUserId(senderExt, row.sender_username, row.sender_name);
     const peerUserId = await getUserId(peerExt, row.peer_username, row.peer_name);
 
+    const sentAt = new Date(row.date || Date.now()).toISOString();
     const chatId = String(row.chat_id);
 
+    const accountUserId = row.direction === 'outbound' ? senderUserId : peerUserId;
+    const subjectUserId = row.direction === 'outbound' ? peerUserId : senderUserId;
+
     const convRes = await client.query(
-      `INSERT INTO dm_conversations (platform, external_chat_id, user_a_id, user_b_id, last_message_at)
-       VALUES ('telegram', $1, LEAST($2::bigint, $3::bigint), GREATEST($2::bigint, $3::bigint), $4::timestamptz)
-       ON CONFLICT (platform, external_chat_id)
+      `INSERT INTO dm_conversations (
+         platform, account_user_id, subject_user_id, external_chat_id,
+         status, source, priority, metadata, last_activity_at, title
+       )
+       VALUES ('telegram', $1, $2, $3, 'active', 'listener', 0, '{}'::jsonb, $4::timestamptz, $5)
+       ON CONFLICT (platform, account_user_id, external_chat_id)
        DO UPDATE SET
-         last_message_at = GREATEST(dm_conversations.last_message_at, EXCLUDED.last_message_at),
+         subject_user_id = EXCLUDED.subject_user_id,
+         last_activity_at = GREATEST(dm_conversations.last_activity_at, EXCLUDED.last_activity_at),
          updated_at = now()
        RETURNING id`,
-      [chatId, senderUserId, peerUserId, new Date(row.date || Date.now()).toISOString()],
+      [
+        accountUserId,
+        subjectUserId,
+        chatId,
+        sentAt,
+        `${row.peer_name || row.peer_username || row.peer_id || 'DM Thread'}`,
+      ],
     );
 
     if (!convRes.rows.length) {
@@ -116,50 +150,38 @@ async function ingestBatch(client: any, events: string[]): Promise<{ inserted: n
     }
 
     const convId = convRes.rows[0].id as number;
+    const msgText = row.text ?? null;
 
     const msgRes = await client.query(
       `INSERT INTO dm_messages (
-         conversation_id, external_message_id, sender_id,
-         direction, text, text_len, sent_at, reply_to_external_message_id,
-         views, forwards, has_links, has_mentions
-       ) VALUES ($1, $2, $3, $4::text, $5, $6, $7::timestamptz, $8, $9, $10, $11)
+         conversation_id, external_message_id, direction, message_text,
+         text_hash, sent_at, raw_json, response_to_external_message_id,
+         has_links, has_mentions, extracted_handles
+       ) VALUES ($1, $2, $3::text, $4, $5, $6::timestamptz, $7::jsonb, $8, $9, $10, $11)
        ON CONFLICT (conversation_id, external_message_id) DO NOTHING`,
       [
         convId,
         String(row.message_id),
-        senderUserId,
         row.direction,
-        row.text ?? null,
-        Number(row.text_len || 0),
-        new Date(row.date || Date.now()).toISOString(),
+        msgText,
+        textHash(msgText),
+        sentAt,
+        JSON.stringify(row),
         row.reply_to_message_id != null ? String(row.reply_to_message_id) : null,
-        Number(row.views || 0),
-        Number(row.forwards || 0),
         Boolean(row.has_links),
         Boolean(row.has_mentions),
+        extractHandles(msgText),
       ],
     );
 
     if (msgRes.rowCount === 1) {
       inserted += 1;
-      await client.query(
-        `UPDATE dm_conversations
-         SET message_count = COALESCE(message_count, 0) + 1,
-             last_message_at = GREATEST(last_message_at, $2::timestamptz)
-         WHERE id = $1`,
-        [convId, new Date(row.date || Date.now()).toISOString()],
-      );
     } else {
       skipped += 1;
     }
   }
 
-  return {
-    inserted,
-    skipped,
-    malformed,
-    userCount: userCache.size,
-  };
+  return { inserted, skipped, malformed, users: userCache.size };
 }
 
 async function main() {
@@ -179,11 +201,9 @@ async function main() {
 
   const start = Date.now();
   const rows: string[] = [];
-  for await (const line of rl) {
-    rows.push(line);
-  }
+  for await (const line of rl) rows.push(line);
 
-  const { inserted, skipped, malformed, userCount } = await db.transaction(async (client) => {
+  const { inserted, skipped, malformed, users } = await db.transaction(async (client) => {
     return ingestBatch(client, rows);
   });
 
@@ -192,7 +212,7 @@ async function main() {
   console.log(`   Inserted messages: ${inserted}`);
   console.log(`   Skipped/Duplicates: ${skipped}`);
   console.log(`   Malformed lines: ${malformed}`);
-  console.log(`   Upserted users: ${userCount}`);
+  console.log(`   Upserted users: ${users}`);
   console.log(`   Time: ${elapsedSec}s`);
 
   await db.close();
