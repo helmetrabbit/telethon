@@ -143,7 +143,7 @@ def claim_pending(conn, limit: int, max_retries: int) -> List[Dict[str, Any]]:
                   response_attempts = response_attempts + 1,
                   response_last_error = NULL
               WHERE id IN (SELECT id FROM pending)
-              RETURNING id, conversation_id, external_message_id, text, sender_id, response_attempts, response_status
+              RETURNING id, conversation_id, external_message_id, text, sender_id, sent_at, response_attempts, response_status
             )
             SELECT
               c.id,
@@ -152,6 +152,7 @@ def claim_pending(conn, limit: int, max_retries: int) -> List[Dict[str, Any]]:
               c.text,
               c.response_attempts,
               c.response_status,
+              c.sent_at,
               u.external_id AS sender_external_id,
               u.handle AS sender_handle,
               u.display_name
@@ -230,6 +231,7 @@ async def main() -> None:
     sent = 0
     failed = 0
     skipped = 0
+    dispatched_signatures = set()
     try:
         for row in pending:
             try:
@@ -262,6 +264,12 @@ async def main() -> None:
                     'display_name': row['display_name'],
                     'text': row['text'] or '',
                 })
+                batch_key = (row['conversation_id'], row['sender_external_id'], row['sent_at'], text)
+                if batch_key in dispatched_signatures:
+                    conn.commit()
+                    skipped += 1
+                    mark_failed(conn, row['id'], 'duplicate_text_in_same_batch')
+                    continue
 
                 # Optional idempotence guard: avoid re-sending exact same outgoing text.
                 with conn.cursor() as cur:
@@ -288,11 +296,13 @@ async def main() -> None:
                     mark_responded(conn, row['id'], 'dry-run')
                     conn.commit()
                     sent += 1
+                    dispatched_signatures.add(batch_key)
                     continue
 
                 sentMsg = await client.send_message(peer_id, text)
                 mark_responded(conn, row['id'], str(sentMsg.id))
                 sent += 1
+                dispatched_signatures.add(batch_key)
                 conn.commit()
             except Exception as exc:
                 failed += 1
