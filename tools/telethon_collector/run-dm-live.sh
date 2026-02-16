@@ -13,6 +13,7 @@ MODE="${3:-profile}"  # profile|ingest
 RESPONSE_ENABLED="${RESPONSE_ENABLED:-1}"
 STATE_FILE="${4:-$ROOT_DIR/data/.state/dm-live.state.json}"
 SESSION_PATH="${5:-$ROOT_DIR/tools/telethon_collector/telethon_openclaw.session}"
+SNAPSHOT_STATE_FILE="${SNAPSHOT_STATE_FILE:-$ROOT_DIR/data/.state/dm-live-catchup.state.json}"
 
 if [ -f "$ROOT_DIR/.env" ]; then
   set -a
@@ -67,7 +68,7 @@ listener_is_running() {
   fi
 
   local pids
-  pids=$(pgrep -f "\\.venv/bin/python3 listen-dms.py --out ${JSONL_PATH}\|python3 listen-dms.py --out ${JSONL_PATH}" || true)
+  pids=$(pgrep -f "listen-dms.py --out ${JSONL_PATH}" || true)
   [ -n "$pids" ]
 }
 
@@ -119,6 +120,30 @@ cleanup_listener_pidfile() {
       rm -f "$path"
     fi
   fi
+}
+
+
+run_snapshot_cycle() {
+  if [ ! -x "$ROOT_DIR/tools/telethon_collector/.venv/bin/python" ]; then
+    return 0
+  fi
+
+  (
+    cd "$ROOT_DIR/tools/telethon_collector"
+    . .venv/bin/activate
+    python3 snapshot-dms.py \
+      --out "$JSONL_PATH" \
+      --state-file "$SNAPSHOT_STATE_FILE" \
+      --session-path "$SESSION_PATH" \
+      --limit "${CATCHUP_LIMIT:-40}"
+  ) >> "$LOG_DIR/dm-ingest.log" 2>&1
+
+  local status=$?
+  if [ "$status" -ne 0 ]; then
+    log_err "snapshot-catchup failed with status=$status"
+    return 1
+  fi
+  return 0
 }
 
 has_response_status_column() {
@@ -243,6 +268,16 @@ stop_listener() {
 run_ingest_cycle() {
   local mode=$1
   local ok=0
+  local listener_was_running=0
+
+  if listener_is_running; then
+    listener_was_running=1
+    stop_listener
+    cleanup_stale_listener "$JSONL_PATH"
+    sleep 1
+  fi
+
+  run_snapshot_cycle || true
 
   local ingest_cmd=(npm run ingest-dm-jsonl -- --file "$JSONL_FILE" --state-file "$STATE_FILE")
 
@@ -257,6 +292,7 @@ run_ingest_cycle() {
     if [ "$ingest_status" -ne 0 ]; then
       log "ingest failed (status $ingest_status)"
       echo "[$(date -Is)] ingest failed (status $ingest_status)" >> "$LOG_DIR/dm-ingest.log"
+      [ "$listener_was_running" -eq 1 ] && start_listener || true
       return 1
     fi
 
@@ -269,18 +305,11 @@ run_ingest_cycle() {
     if [ "$reconcile_status" -ne 0 ]; then
       log "reconcile failed (status $reconcile_status)"
       echo "[$(date -Is)] reconcile failed (status $reconcile_status)" >> "$LOG_DIR/dm-ingest.log"
+      [ "$listener_was_running" -eq 1 ] && start_listener || true
       return 1
     fi
 
     if [ "$RESPONSE_ENABLED" = "1" ] || [ "$RESPONSE_ENABLED" = "true" ]; then
-      local listener_was_running=0
-      if listener_is_running; then
-        listener_was_running=1
-        stop_listener
-        cleanup_stale_listener "$JSONL_PATH"
-        sleep 1
-      fi
-
       if has_response_status_column; then
         (
           cd "$ROOT_DIR"
@@ -301,10 +330,6 @@ run_ingest_cycle() {
         log "response_status column missing; skipping responder until schema is migrated"
         echo "[$(date -Is)] skipping response cycle: dm_messages.response_status missing" >> "$LOG_DIR/dm-respond.log"
       fi
-
-      if [ "$listener_was_running" -eq 1 ]; then
-        start_listener || true
-      fi
     fi
   else
     log "ingesting $JSONL_FILE + state=$STATE_FILE"
@@ -316,12 +341,18 @@ run_ingest_cycle() {
     if [ "$ingest_status" -ne 0 ]; then
       log "ingest failed (status $ingest_status)"
       echo "[$(date -Is)] ingest failed (status $ingest_status)" >> "$LOG_DIR/dm-ingest.log"
+      [ "$listener_was_running" -eq 1 ] && start_listener || true
       return 1
     fi
   fi
 
+  if [ "$listener_was_running" -eq 1 ]; then
+    start_listener || true
+  fi
+
   return "$ok"
 }
+
 
 acquire_lock() {
   exec 9>"$LOCK_FILE"
