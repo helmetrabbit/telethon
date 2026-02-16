@@ -1,7 +1,7 @@
 # ── Makefile — convenience commands ──────────────────────
 .PHONY: db-up db-down db-migrate db-rollback db-reset db-status \
         env-remote env-remote-ip env-local db-smoke serve-viewer \
-        tg-listen-dm tg-ingest-dm-jsonl build pipeline
+        tg-listen-dm tg-ingest-dm-jsonl tg-listen-ingest-dm build pipeline
 
 # ── Environment helpers ──────────────────────────────────
 env-remote:
@@ -60,3 +60,13 @@ tg-listen-dm:
 tg-ingest-dm-jsonl:
 	@FILE=$${file:-data/exports/telethon_dms_live.jsonl}; \
 	npm run ingest-dm-jsonl -- --file "$$FILE"
+
+# ── ‑‑‑ Continuous DM live loop (capture + periodic ingest) ─‑‑‑
+tg-listen-ingest-dm:
+	@FILE=$${file:-data/exports/telethon_dms_live.jsonl}; \
+	INTERVAL=$${interval:-30}; \
+	while true; do \
+		echo "[$$(date -Is)] ingesting $$FILE"; \
+		npm run ingest-dm-jsonl -- --file "$$FILE" || true; \
+		sleep $$INTERVAL; \
+	done
