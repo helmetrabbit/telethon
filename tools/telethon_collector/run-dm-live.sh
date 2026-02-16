@@ -67,7 +67,7 @@ listener_is_running() {
   fi
 
   local pids
-  pids=$(pgrep -f "python3 listen-dms.py --out ${JSONL_PATH}" || true)
+  pids=$(pgrep -f "\\.venv/bin/python3 listen-dms.py --out ${JSONL_PATH}\|python3 listen-dms.py --out ${JSONL_PATH}" || true)
   [ -n "$pids" ]
 }
 
@@ -98,7 +98,7 @@ cleanup_stale_listener() {
   local out_path="$1"
   # kill old listeners targeting this exact output file path (stops sqlite lock/dupes)
   local pids
-  pids=$(pgrep -f "python3 listen-dms.py --out ${out_path}" || true)
+  pids=$(pgrep -f "python3 listen-dms.py --out ${out_path}\|\.venv/bin/python3 listen-dms.py --out ${out_path}" || true)
   if [ -n "$pids" ]; then
     log "Cleaning up old listener processes for $out_path: $pids"
     while IFS= read -r pid; do
@@ -185,7 +185,7 @@ start_listener() {
     DM_AUTO_ACK="${DM_AUTO_ACK:-0}" \
     DM_AUTO_ACK_TEXT="${DM_AUTO_ACK_TEXT:-Got it — I captured this message and will process it now.}" \
     TG_SESSION_PATH="$SESSION_PATH" \
-    .venv/bin/python3 listen-dms.py --out "$JSONL_PATH"
+    .venv/bin/python3 -u listen-dms.py --out "$JSONL_PATH"
   ) >> "$LOG_DIR/dm-listener.log" 2>&1 &
   listener_pid=$!
   echo "$listener_pid" > "$LISTENER_PID_FILE"
