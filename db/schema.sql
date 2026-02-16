@@ -407,6 +407,29 @@ CREATE TABLE public.memberships (
 
 
 --
+-- Name: message_insights; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.message_insights (
+    message_id bigint NOT NULL,
+    user_id bigint NOT NULL,
+    sent_at timestamp with time zone NOT NULL,
+    group_id bigint NOT NULL,
+    text_hash text NOT NULL,
+    classifier_version text DEFAULT 'v1'::text NOT NULL,
+    is_noise boolean DEFAULT false,
+    signal_types text[] DEFAULT '{}'::text[],
+    extracted_urls text[] DEFAULT '{}'::text[],
+    extracted_handles text[] DEFAULT '{}'::text[],
+    extracted_orgs text[] DEFAULT '{}'::text[],
+    extracted_roles text[] DEFAULT '{}'::text[],
+    first_person_score real DEFAULT 0,
+    llm_confidence real,
+    updated_at timestamp with time zone DEFAULT now()
+);
+
+
+--
 -- Name: message_mentions; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -609,7 +632,17 @@ CREATE TABLE public.user_psychographics (
     total_msgs integer,
     avg_msg_length integer,
     peak_hours integer[],
-    active_days text[]
+    active_days text[],
+    total_reactions integer,
+    avg_reactions_per_msg numeric(5,1),
+    total_replies_received integer,
+    avg_replies_per_msg numeric(5,1),
+    engagement_rate numeric(5,1),
+    total_messages integer,
+    most_active_days text[],
+    role_company_timeline jsonb DEFAULT '[]'::jsonb,
+    conflict_notes jsonb DEFAULT '{}'::jsonb,
+    evidence_summary_json jsonb DEFAULT '{}'::jsonb
 );
 
 
@@ -663,6 +696,27 @@ COMMENT ON COLUMN public.user_psychographics.top_conversation_partners IS 'Top p
 
 
 --
+-- Name: COLUMN user_psychographics.role_company_timeline; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.user_psychographics.role_company_timeline IS 'Timeline of role/company changes with evidence: [{org, role, start_hint, end_hint, is_current, evidence_message_ids[], confidence}]';
+
+
+--
+-- Name: COLUMN user_psychographics.conflict_notes; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.user_psychographics.conflict_notes IS 'Structured conflict notes (e.g., bio vs message evidence).';
+
+
+--
+-- Name: COLUMN user_psychographics.evidence_summary_json; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.user_psychographics.evidence_summary_json IS 'Per-user evidence pack summary: counts, recency share, ranges.';
+
+
+--
 -- Name: user_psychographics_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
@@ -701,7 +755,11 @@ CREATE TABLE public.users (
     is_scam boolean DEFAULT false,
     is_fake boolean DEFAULT false,
     is_premium boolean DEFAULT false,
-    lang_code text
+    lang_code text,
+    bio_source text,
+    bio_updated_at timestamp with time zone,
+    display_name_source text,
+    display_name_updated_at timestamp with time zone
 );
 
 
@@ -826,6 +884,14 @@ ALTER TABLE ONLY public.groups
 
 ALTER TABLE ONLY public.memberships
     ADD CONSTRAINT memberships_pkey PRIMARY KEY (group_id, user_id);
+
+
+--
+-- Name: message_insights message_insights_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.message_insights
+    ADD CONSTRAINT message_insights_pkey PRIMARY KEY (message_id);
 
 
 --
@@ -955,6 +1021,41 @@ COMMENT ON INDEX public.idx_claims_unique_per_version IS 'Enables ON CONFLICT up
 --
 
 CREATE INDEX idx_claims_user ON public.claims USING btree (subject_user_id);
+
+
+--
+-- Name: idx_message_insights_extracted_orgs; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_message_insights_extracted_orgs ON public.message_insights USING gin (extracted_orgs);
+
+
+--
+-- Name: idx_message_insights_extracted_roles; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_message_insights_extracted_roles ON public.message_insights USING gin (extracted_roles);
+
+
+--
+-- Name: idx_message_insights_extracted_urls; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_message_insights_extracted_urls ON public.message_insights USING gin (extracted_urls);
+
+
+--
+-- Name: idx_message_insights_signal_types; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_message_insights_signal_types ON public.message_insights USING gin (signal_types);
+
+
+--
+-- Name: idx_message_insights_user_sent_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_message_insights_user_sent_at ON public.message_insights USING btree (user_id, sent_at);
 
 
 --
@@ -1110,6 +1211,14 @@ ALTER TABLE ONLY public.memberships
 
 
 --
+-- Name: message_insights message_insights_message_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.message_insights
+    ADD CONSTRAINT message_insights_message_id_fkey FOREIGN KEY (message_id) REFERENCES public.messages(id) ON DELETE CASCADE;
+
+
+--
 -- Name: message_mentions message_mentions_mentioned_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1205,4 +1314,9 @@ INSERT INTO public.schema_migrations (version) VALUES
     ('20260209120000'),
     ('20260209130000'),
     ('20260209140000'),
-    ('20260209150000');
+    ('20260209150000'),
+    ('20260210100000'),
+    ('20260210110000'),
+    ('20260210120000'),
+    ('20260210130000'),
+    ('20260214190000');

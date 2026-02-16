@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Telethon Profile Viewer</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="data.js?v=8"></script>
+    <script src="data.js?v=9"></script>
     <style>
         .tag { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 11px; margin-right: 3px; margin-bottom: 3px; border: 1px solid; font-weight: 500; }
         .kv { font-size: 12px; color: #475569; }
@@ -89,6 +89,302 @@
         .hm-toggle { font-size: 11px; color: #3b82f6; font-weight: 500; }
         .hm-best { margin-top: 8px; font-size: 11px; color: #475569; }
         .hm-best strong { color: #1e40af; }
+
+        /* ── Lifecycle visuals ── */
+        .global-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 10px;
+        }
+        .viz-card {
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            background: #f8fafc;
+            padding: 10px;
+        }
+        .viz-title { font-size: 12px; font-weight: 600; color: #334155; }
+        .viz-sub { font-size: 10px; color: #94a3b8; }
+
+        .lifeline-list {
+            max-height: 340px;
+            overflow-y: auto;
+            margin-top: 8px;
+            padding-right: 2px;
+        }
+        .lifeline-row {
+            display: grid;
+            grid-template-columns: 130px 1fr 84px;
+            gap: 8px;
+            align-items: center;
+            margin-bottom: 4px;
+        }
+        .lifeline-name {
+            font-size: 11px;
+            color: #334155;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .lifeline-track {
+            position: relative;
+            height: 10px;
+            background: #e2e8f0;
+            border-radius: 999px;
+            overflow: hidden;
+        }
+        .lifeline-segment {
+            position: absolute;
+            top: 0;
+            height: 10px;
+            border-radius: 999px;
+            background: linear-gradient(to right, #93c5fd, #2563eb);
+        }
+        .lifeline-end {
+            position: absolute;
+            top: -1px;
+            width: 2px;
+            height: 12px;
+            background: #0f172a;
+        }
+        .lifeline-meta {
+            font-size: 10px;
+            color: #64748b;
+            text-align: right;
+            white-space: nowrap;
+        }
+
+        .hist-row {
+            display: grid;
+            grid-template-columns: 64px 1fr 42px;
+            gap: 6px;
+            align-items: center;
+            margin-top: 5px;
+        }
+        .hist-label { font-size: 10px; color: #64748b; }
+        .hist-bar {
+            height: 10px;
+            background: #e2e8f0;
+            border-radius: 999px;
+            overflow: hidden;
+        }
+        .hist-fill {
+            height: 10px;
+            border-radius: 999px;
+            background: linear-gradient(to right, #99f6e4, #14b8a6);
+        }
+        .hist-count { font-size: 10px; color: #334155; text-align: right; }
+
+        .scatter-wrap { overflow-x: auto; margin-top: 6px; }
+        .scatter-svg { width: 100%; min-width: 340px; height: 220px; display: block; }
+        .scatter-axis { font-size: 10px; fill: #64748b; }
+        .scatter-grid { stroke: #e2e8f0; stroke-width: 1; }
+
+        .cohort-table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 2px;
+            margin-top: 6px;
+            font-size: 10px;
+        }
+        .cohort-head { color: #64748b; font-weight: 600; text-align: center; }
+        .cohort-label {
+            color: #334155;
+            font-weight: 600;
+            text-align: left;
+            white-space: nowrap;
+            padding-right: 4px;
+        }
+        .cohort-cell {
+            width: 22px;
+            height: 18px;
+            border-radius: 4px;
+            text-align: center;
+            color: #0f172a;
+            font-weight: 600;
+        }
+
+        .cal-band {
+            display: grid;
+            grid-auto-flow: column;
+            grid-auto-columns: minmax(14px, 1fr);
+            gap: 2px;
+            overflow-x: auto;
+            padding-bottom: 2px;
+        }
+        .cal-cell {
+            height: 14px;
+            border-radius: 3px;
+        }
+        .cal-labels {
+            display: grid;
+            grid-auto-flow: column;
+            grid-auto-columns: minmax(14px, 1fr);
+            gap: 2px;
+            margin-top: 3px;
+            overflow-x: auto;
+            font-size: 9px;
+            color: #64748b;
+        }
+        .cal-label { text-align: center; white-space: nowrap; }
+
+        /* ── Digest mode ── */
+        .digest-kpis {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+        .kpi-card {
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            background: #f8fafc;
+            padding: 8px;
+        }
+        .kpi-value {
+            font-size: 18px;
+            line-height: 1.15;
+            font-weight: 700;
+            color: #0f172a;
+        }
+        .kpi-label { font-size: 10px; color: #64748b; margin-top: 2px; }
+        .digest-note { font-size: 11px; color: #475569; margin-bottom: 10px; }
+
+        .rank-row {
+            display: grid;
+            grid-template-columns: 1fr 42px;
+            gap: 6px;
+            align-items: center;
+            margin-top: 6px;
+        }
+        .rank-track {
+            height: 10px;
+            border-radius: 999px;
+            background: #e2e8f0;
+            overflow: hidden;
+            position: relative;
+        }
+        .rank-fill {
+            height: 10px;
+            border-radius: 999px;
+            background: linear-gradient(to right, #86efac, #10b981);
+        }
+        .rank-label {
+            position: absolute;
+            left: 6px;
+            top: 0;
+            height: 10px;
+            line-height: 10px;
+            font-size: 9px;
+            color: #0f172a;
+            white-space: nowrap;
+            text-shadow: 0 0 1px rgba(255,255,255,0.8);
+        }
+        .rank-count {
+            font-size: 10px;
+            color: #334155;
+            text-align: right;
+        }
+
+        .pagination-wrap {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .pagination-controls {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .pagination-controls button {
+            font-size: 11px;
+            border: 1px solid #cbd5e1;
+            background: #fff;
+            color: #334155;
+            border-radius: 6px;
+            padding: 3px 8px;
+        }
+        .pagination-controls button:disabled {
+            opacity: 0.45;
+            cursor: default;
+        }
+        .page-indicator { font-size: 11px; color: #64748b; min-width: 72px; text-align: center; }
+
+        .persona-wrap {
+            margin-bottom: 8px;
+            border: 1px solid #e2e8f0;
+            background: #f8fafc;
+            border-radius: 8px;
+            padding: 8px;
+        }
+        .persona-line {
+            font-size: 11px;
+            color: #334155;
+            line-height: 1.4;
+            margin-bottom: 3px;
+        }
+        .persona-line:last-child { margin-bottom: 0; }
+        .persona-line strong {
+            color: #0f172a;
+            font-weight: 600;
+            margin-right: 4px;
+        }
+        .highlight-wrap {
+            margin-bottom: 8px;
+            display: grid;
+            gap: 4px;
+        }
+        .highlight-item {
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
+            background: #ffffff;
+            padding: 6px 8px;
+        }
+        .highlight-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 3px;
+        }
+        .highlight-label {
+            font-size: 10px;
+            color: #64748b;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+            text-transform: uppercase;
+        }
+        .highlight-date {
+            font-size: 10px;
+            color: #94a3b8;
+        }
+        .highlight-value {
+            font-size: 11px;
+            color: #1e293b;
+            font-weight: 600;
+        }
+        .highlight-quote {
+            font-size: 11px;
+            color: #475569;
+            margin-top: 2px;
+            line-height: 1.35;
+        }
+        .quality-rich {
+            background: #dcfce7;
+            color: #166534;
+            border-color: #86efac;
+        }
+        .quality-medium {
+            background: #fef9c3;
+            color: #854d0e;
+            border-color: #fde68a;
+        }
+        .quality-thin {
+            background: #fee2e2;
+            color: #991b1b;
+            border-color: #fca5a5;
+        }
     </style>
 </head>
 <body class="bg-slate-50 text-slate-800 font-sans">
@@ -114,6 +410,15 @@
                 <select id="archetype-filter" onchange="render()" class="text-xs border border-slate-300 rounded px-2 py-1.5 bg-white">
                     <option value="">All Archetypes</option>
                 </select>
+                <select id="view-mode" onchange="onViewModeChange()" class="text-xs border border-slate-300 rounded px-2 py-1.5 bg-white">
+                    <option value="digest">View: Digest</option>
+                    <option value="detailed">View: Detailed</option>
+                </select>
+                <select id="page-size" onchange="onPageSizeChange()" class="text-xs border border-slate-300 rounded px-2 py-1.5 bg-white">
+                    <option value="30">Rows: 30</option>
+                    <option value="60">Rows: 60</option>
+                    <option value="100">Rows: 100</option>
+                </select>
             </div>
         </div>
 
@@ -138,6 +443,31 @@
 
         <div id="active-filters" class="hidden mb-3 flex flex-wrap items-center gap-1.5"></div>
 
+        <div class="heatmap-wrap" id="digest-section">
+            <div class="hm-header">
+                <div>
+                    <span class="hm-title">🧾 At-a-Glance</span>
+                    <span class="hm-subtitle" id="digest-user-count"></span>
+                </div>
+            </div>
+            <div id="digest-kpis" class="digest-kpis"></div>
+            <div id="digest-note" class="digest-note"></div>
+            <div class="global-grid">
+                <div class="viz-card">
+                    <div class="viz-title">Top Current Orgs</div>
+                    <div id="digest-orgs"></div>
+                </div>
+                <div class="viz-card">
+                    <div class="viz-title">Top Current Roles</div>
+                    <div id="digest-roles"></div>
+                </div>
+                <div class="viz-card">
+                    <div class="viz-title">Top Archetypes</div>
+                    <div id="digest-archetypes"></div>
+                </div>
+            </div>
+        </div>
+
         <!-- Activity Heatmap -->
         <div class="heatmap-wrap" id="heatmap-section">
             <div class="hm-header" onclick="toggleHeatmap()">
@@ -160,7 +490,63 @@
             </div>
         </div>
 
-        <div class="text-xs text-slate-400 mb-3" id="stats-count"></div>
+        <div class="heatmap-wrap" id="lifecycle-section">
+            <div class="hm-header" onclick="toggleLifecycle()">
+                <div>
+                    <span class="hm-title">🧭 Lifecycle Analytics</span>
+                    <span class="hm-subtitle" id="lc-user-count"></span>
+                </div>
+                <span class="hm-toggle" id="lc-toggle-text">▼ Hide</span>
+            </div>
+            <div id="lc-body">
+                <div class="text-[11px] text-slate-500 mb-2" id="lc-summary"></div>
+
+                <div class="viz-card mb-2">
+                    <div class="viz-title">User Lifelines</div>
+                    <div class="viz-sub" id="lifeline-caption">First message to last message for top users by volume in current filter.</div>
+                    <div class="lifeline-list" id="lifeline-chart"></div>
+                </div>
+
+                <div class="global-grid">
+                    <div class="viz-card">
+                        <div class="viz-title">Last-Seen Distribution</div>
+                        <div class="viz-sub">Activity recency buckets for filtered users.</div>
+                        <div id="last-seen-hist"></div>
+                    </div>
+
+                    <div class="viz-card">
+                        <div class="viz-title">Tenure vs Volume</div>
+                        <div class="viz-sub">X: tenure days, Y: message volume (log).</div>
+                        <div class="scatter-wrap">
+                            <svg id="tenure-scatter" class="scatter-svg"></svg>
+                        </div>
+                    </div>
+
+                    <div class="viz-card">
+                        <div class="viz-title">Cohort Survival Grid</div>
+                        <div class="viz-sub">Monthly first-message cohorts with activity retention.</div>
+                        <div class="overflow-x-auto">
+                            <table id="cohort-grid" class="cohort-table"></table>
+                        </div>
+                    </div>
+
+                    <div class="viz-card">
+                        <div class="viz-title">First / Last Message Bands</div>
+                        <div class="viz-sub">Monthly concentration of onboarding vs most recent activity.</div>
+                        <div class="text-[10px] text-slate-500 mt-1">First message month</div>
+                        <div id="first-band" class="cal-band"></div>
+                        <div class="text-[10px] text-slate-500 mt-2">Last message month</div>
+                        <div id="last-band" class="cal-band"></div>
+                        <div id="band-labels" class="cal-labels"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="text-xs text-slate-400 mb-2 pagination-wrap">
+            <div id="stats-count"></div>
+            <div id="pagination" class="pagination-controls"></div>
+        </div>
         <div id="feed" class="space-y-3"></div>
     </div>
 
@@ -170,6 +556,12 @@
         var activeFilters = [];
         var valueIndex = {};
         var heatmapVisible = true;
+        var lifecycleVisible = true;
+        var evidenceLookup = (data && data.evidence_lookup) ? data.evidence_lookup : {};
+        var lifecycleLookup = (data && data.lifecycle) ? data.lifecycle : {};
+        var currentPage = 1;
+        var pageSize = 30;
+        var viewMode = 'digest';
 
         var DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
         var FIELD_OPTIONS = [
@@ -209,6 +601,26 @@
             heatmapVisible = !heatmapVisible;
             document.getElementById('hm-body').style.display = heatmapVisible ? 'block' : 'none';
             document.getElementById('hm-toggle-text').textContent = heatmapVisible ? '▼ Hide' : '▶ Show';
+        }
+
+        function toggleLifecycle() {
+            lifecycleVisible = !lifecycleVisible;
+            document.getElementById('lc-body').style.display = lifecycleVisible ? 'block' : 'none';
+            document.getElementById('lc-toggle-text').textContent = lifecycleVisible ? '▼ Hide' : '▶ Show';
+        }
+
+        function onViewModeChange() {
+            var el = document.getElementById('view-mode');
+            viewMode = el ? (el.value || 'digest') : 'digest';
+            render();
+        }
+
+        function onPageSizeChange() {
+            var el = document.getElementById('page-size');
+            var next = el ? Number(el.value || '30') : 30;
+            pageSize = Number.isFinite(next) && next > 0 ? next : 30;
+            currentPage = 1;
+            render();
         }
 
         function heatColor(ratio) {
@@ -275,6 +687,507 @@
             } else {
                 bestEl.innerHTML = 'No activity data for current filter.';
             }
+        }
+
+        /* ── Lifecycle visuals ── */
+        function toMonthKey(d) {
+            return d.getUTCFullYear() + '-' + String(d.getUTCMonth() + 1).padStart(2, '0');
+        }
+
+        function parseMonthKey(monthKey) {
+            var m = /^(\d{4})-(\d{2})$/.exec(monthKey || '');
+            if (!m) return null;
+            return { year: Number(m[1]), month: Number(m[2]) };
+        }
+
+        function addMonths(monthKey, delta) {
+            var parsed = parseMonthKey(monthKey);
+            if (!parsed) return monthKey;
+            var total = parsed.year * 12 + (parsed.month - 1) + delta;
+            var year = Math.floor(total / 12);
+            var month = (total % 12) + 1;
+            return year + '-' + String(month).padStart(2, '0');
+        }
+
+        function monthDiff(fromMonthKey, toMonthKeyVal) {
+            var a = parseMonthKey(fromMonthKey);
+            var b = parseMonthKey(toMonthKeyVal);
+            if (!a || !b) return 0;
+            return (b.year - a.year) * 12 + (b.month - a.month);
+        }
+
+        function monthRange(startMonth, endMonth) {
+            var out = [];
+            if (!startMonth || !endMonth) return out;
+            var steps = monthDiff(startMonth, endMonth);
+            if (steps < 0) return out;
+            for (var i = 0; i <= steps; i++) out.push(addMonths(startMonth, i));
+            return out;
+        }
+
+        function monthLabel(monthKey) {
+            var p = parseMonthKey(monthKey);
+            if (!p) return monthKey;
+            return String(p.year).slice(-2) + '-' + String(p.month).padStart(2, '0');
+        }
+
+        function daysBetween(aMs, bMs) {
+            return Math.max(0, Math.round((bMs - aMs) / 86400000));
+        }
+
+        function lifecycleCellColor(ratio) {
+            if (ratio <= 0) return '#e2e8f0';
+            if (ratio < 0.2) return '#bfdbfe';
+            if (ratio < 0.4) return '#93c5fd';
+            if (ratio < 0.6) return '#60a5fa';
+            if (ratio < 0.8) return '#3b82f6';
+            return '#1d4ed8';
+        }
+
+        function freshnessColor(daysSinceLast) {
+            if (daysSinceLast <= 7) return '#14b8a6';
+            if (daysSinceLast <= 30) return '#0ea5e9';
+            if (daysSinceLast <= 90) return '#3b82f6';
+            if (daysSinceLast <= 180) return '#64748b';
+            return '#94a3b8';
+        }
+
+        function getUserById(uid) {
+            if (users.has(uid)) return users.get(uid);
+            var asNum = Number(uid);
+            if (users.has(asNum)) return users.get(asNum);
+            var asStr = String(uid);
+            if (users.has(asStr)) return users.get(asStr);
+            return null;
+        }
+
+        function collectLifecycleRows(filteredUserIds) {
+            var nowMs = Date.now();
+            var rows = [];
+            filteredUserIds.forEach(function(uid) {
+                var item = lifecycleLookup[String(uid)];
+                if (!item || !item.first_msg_at || !item.last_msg_at) return;
+                var first = new Date(item.first_msg_at);
+                var last = new Date(item.last_msg_at);
+                if (!Number.isFinite(first.getTime()) || !Number.isFinite(last.getTime())) return;
+                var firstMs = first.getTime();
+                var lastMs = last.getTime();
+                var u = getUserById(uid);
+                rows.push({
+                    user_id: uid,
+                    label: u ? getUserLabel(u) : ('User #' + String(uid)),
+                    first_ms: firstMs,
+                    last_ms: lastMs,
+                    first_month: toMonthKey(first),
+                    last_month: toMonthKey(last),
+                    total_msgs: Number(item.total_msgs || 0),
+                    tenure_days: daysBetween(firstMs, lastMs),
+                    days_since_last: daysBetween(lastMs, nowMs),
+                    active_months: Array.isArray(item.active_months) ? item.active_months : []
+                });
+            });
+            return rows;
+        }
+
+        function renderEmptyLifecycleState(message) {
+            var msg = esc(message || 'No lifecycle data for current filter.');
+            document.getElementById('lc-user-count').textContent = ' • 0 users with lifecycle data';
+            document.getElementById('lc-summary').textContent = 'No first/last message records available.';
+            document.getElementById('lifeline-chart').innerHTML = '<div class="text-[11px] text-slate-400 py-2">' + msg + '</div>';
+            document.getElementById('last-seen-hist').innerHTML = '<div class="text-[11px] text-slate-400 py-2">' + msg + '</div>';
+            document.getElementById('cohort-grid').innerHTML = '<tr><td class="text-[11px] text-slate-400 py-2">' + msg + '</td></tr>';
+            document.getElementById('first-band').innerHTML = '';
+            document.getElementById('last-band').innerHTML = '';
+            document.getElementById('band-labels').innerHTML = '';
+            document.getElementById('tenure-scatter').innerHTML = '';
+        }
+
+        function renderUserLifelines(rows, minFirstMs, maxLastMs) {
+            var el = document.getElementById('lifeline-chart');
+            if (rows.length === 0) {
+                el.innerHTML = '<div class="text-[11px] text-slate-400 py-2">No users.</div>';
+                return;
+            }
+            var spanMs = Math.max(1, maxLastMs - minFirstMs);
+            var topRows = rows.slice().sort(function(a, b) {
+                return (b.total_msgs - a.total_msgs) || (b.tenure_days - a.tenure_days);
+            }).slice(0, 70);
+
+            var html = '';
+            topRows.forEach(function(r) {
+                var startPct = ((r.first_ms - minFirstMs) / spanMs) * 100;
+                var endPct = ((r.last_ms - minFirstMs) / spanMs) * 100;
+                var widthPct = Math.max(0.7, endPct - startPct);
+                var endMarker = Math.min(99.7, endPct);
+                var startDate = new Date(r.first_ms).toISOString().slice(0, 10);
+                var endDate = new Date(r.last_ms).toISOString().slice(0, 10);
+                var color = freshnessColor(r.days_since_last);
+                html += '<div class="lifeline-row">' +
+                    '<div class="lifeline-name" title="' + esc(r.label) + '">' + esc(r.label) + '</div>' +
+                    '<div class="lifeline-track" title="' + esc(startDate + ' → ' + endDate) + '">' +
+                        '<div class="lifeline-segment" style="left:' + startPct.toFixed(2) + '%; width:' + widthPct.toFixed(2) + '%; background:' + color + ';"></div>' +
+                        '<div class="lifeline-end" style="left:' + endMarker.toFixed(2) + '%;"></div>' +
+                    '</div>' +
+                    '<div class="lifeline-meta">' + r.tenure_days + 'd • ' + r.total_msgs + 'm</div>' +
+                '</div>';
+            });
+            el.innerHTML = html;
+            document.getElementById('lifeline-caption').textContent =
+                'Top ' + topRows.length + ' by message count in current filter.';
+        }
+
+        function renderLastSeenHistogram(rows) {
+            var el = document.getElementById('last-seen-hist');
+            var bins = [
+                { label: '0-7d', min: 0, max: 7, count: 0 },
+                { label: '8-30d', min: 8, max: 30, count: 0 },
+                { label: '31-90d', min: 31, max: 90, count: 0 },
+                { label: '91-180d', min: 91, max: 180, count: 0 },
+                { label: '181-365d', min: 181, max: 365, count: 0 },
+                { label: '366d+', min: 366, max: 1000000, count: 0 }
+            ];
+            rows.forEach(function(r) {
+                for (var i = 0; i < bins.length; i++) {
+                    if (r.days_since_last >= bins[i].min && r.days_since_last <= bins[i].max) {
+                        bins[i].count++;
+                        break;
+                    }
+                }
+            });
+            var maxCount = Math.max.apply(null, bins.map(function(b) { return b.count; }).concat([1]));
+            var html = '';
+            bins.forEach(function(b) {
+                var w = (b.count / maxCount) * 100;
+                html += '<div class="hist-row">' +
+                    '<div class="hist-label">' + b.label + '</div>' +
+                    '<div class="hist-bar"><div class="hist-fill" style="width:' + w.toFixed(2) + '%;"></div></div>' +
+                    '<div class="hist-count">' + b.count + '</div>' +
+                '</div>';
+            });
+            el.innerHTML = html;
+        }
+
+        function renderTenureScatter(rows) {
+            var svg = document.getElementById('tenure-scatter');
+            if (!svg) return;
+            if (rows.length === 0) {
+                svg.innerHTML = '';
+                return;
+            }
+
+            var sample = rows.slice().sort(function(a, b) { return b.total_msgs - a.total_msgs; }).slice(0, 1200);
+            var width = Math.max(340, svg.clientWidth || 340);
+            var height = 220;
+            var margin = { top: 10, right: 10, bottom: 28, left: 40 };
+            var innerW = Math.max(10, width - margin.left - margin.right);
+            var innerH = Math.max(10, height - margin.top - margin.bottom);
+            var maxTenure = Math.max.apply(null, sample.map(function(r) { return r.tenure_days; }).concat([1]));
+            var maxMsgs = Math.max.apply(null, sample.map(function(r) { return r.total_msgs; }).concat([1]));
+            var maxLog = Math.log10(maxMsgs + 1);
+
+            function x(v) { return margin.left + (v / maxTenure) * innerW; }
+            function y(v) {
+                var lv = Math.log10(v + 1);
+                return margin.top + innerH - (lv / maxLog) * innerH;
+            }
+
+            var html = '';
+            for (var g = 0; g <= 4; g++) {
+                var gy = margin.top + (innerH * g / 4);
+                html += '<line class="scatter-grid" x1="' + margin.left + '" y1="' + gy.toFixed(2) + '" x2="' + (margin.left + innerW) + '" y2="' + gy.toFixed(2) + '"></line>';
+            }
+
+            sample.forEach(function(r) {
+                var cx = x(r.tenure_days);
+                var cy = y(r.total_msgs);
+                var color = freshnessColor(r.days_since_last);
+                var radius = r.total_msgs > 5000 ? 3.3 : (r.total_msgs > 1000 ? 2.8 : 2.3);
+                html += '<circle cx="' + cx.toFixed(2) + '" cy="' + cy.toFixed(2) + '" r="' + radius + '" fill="' + color + '" fill-opacity="0.78">' +
+                    '<title>' + esc(r.label) + ' · ' + r.total_msgs + ' msgs · tenure ' + r.tenure_days + 'd · last active ' + r.days_since_last + 'd ago</title>' +
+                '</circle>';
+            });
+
+            html += '<text class="scatter-axis" x="' + margin.left + '" y="' + (height - 8) + '">0d</text>' +
+                '<text class="scatter-axis" x="' + (margin.left + innerW - 24) + '" y="' + (height - 8) + '">' + maxTenure + 'd</text>' +
+                '<text class="scatter-axis" x="' + (margin.left + 4) + '" y="' + (margin.top + 10) + '">' + maxMsgs + 'm</text>' +
+                '<text class="scatter-axis" x="' + (margin.left + 4) + '" y="' + (margin.top + innerH + 1) + '">1m</text>' +
+                '<text class="scatter-axis" x="' + (margin.left + (innerW / 2) - 34) + '" y="' + (height - 8) + '">tenure days</text>';
+
+            svg.setAttribute('viewBox', '0 0 ' + width + ' ' + height);
+            svg.innerHTML = html;
+        }
+
+        function renderCohortGrid(rows) {
+            var table = document.getElementById('cohort-grid');
+            if (!table) return;
+            if (rows.length === 0) {
+                table.innerHTML = '<tr><td class="text-[11px] text-slate-400 py-2">No cohort data.</td></tr>';
+                return;
+            }
+
+            var maxOffset = 12;
+            var cohorts = {};
+            rows.forEach(function(r) {
+                var cohort = r.first_month;
+                if (!cohorts[cohort]) {
+                    cohorts[cohort] = { size: 0, active: new Array(maxOffset + 1).fill(0) };
+                }
+                cohorts[cohort].size += 1;
+                var seen = {};
+                (r.active_months || []).forEach(function(m) {
+                    var off = monthDiff(cohort, m);
+                    if (off >= 0 && off <= maxOffset) seen[off] = true;
+                });
+                Object.keys(seen).forEach(function(k) {
+                    cohorts[cohort].active[Number(k)] += 1;
+                });
+            });
+
+            var cohortKeys = Object.keys(cohorts)
+                .filter(function(k) { return cohorts[k].size >= 3; })
+                .sort()
+                .reverse()
+                .slice(0, 12);
+
+            if (cohortKeys.length === 0) {
+                table.innerHTML = '<tr><td class="text-[11px] text-slate-400 py-2">Need at least 3 users per cohort for display.</td></tr>';
+                return;
+            }
+
+            var html = '<tr><th></th>';
+            for (var h = 0; h <= maxOffset; h++) {
+                html += '<th class="cohort-head">M' + h + '</th>';
+            }
+            html += '</tr>';
+
+            cohortKeys.forEach(function(ck) {
+                var row = cohorts[ck];
+                html += '<tr><td class="cohort-label">' + ck + ' (' + row.size + ')</td>';
+                for (var o = 0; o <= maxOffset; o++) {
+                    var pct = row.size > 0 ? row.active[o] / row.size : 0;
+                    var val = Math.round(pct * 100);
+                    html += '<td class="cohort-cell" title="' + ck + ' M' + o + ': ' + val + '%" style="background:' + lifecycleCellColor(pct) + ';">' + val + '</td>';
+                }
+                html += '</tr>';
+            });
+
+            table.innerHTML = html;
+        }
+
+        function renderCalendarBands(rows) {
+            var firstBand = document.getElementById('first-band');
+            var lastBand = document.getElementById('last-band');
+            var labels = document.getElementById('band-labels');
+            if (!firstBand || !lastBand || !labels) return;
+            if (rows.length === 0) {
+                firstBand.innerHTML = '';
+                lastBand.innerHTML = '';
+                labels.innerHTML = '';
+                return;
+            }
+
+            var firstCounts = {};
+            var lastCounts = {};
+            rows.forEach(function(r) {
+                firstCounts[r.first_month] = (firstCounts[r.first_month] || 0) + 1;
+                lastCounts[r.last_month] = (lastCounts[r.last_month] || 0) + 1;
+            });
+
+            var months = monthRange(
+                Object.keys(firstCounts).sort()[0],
+                Object.keys(lastCounts).sort().slice(-1)[0]
+            );
+            if (months.length === 0) months = Object.keys(firstCounts).sort();
+
+            var maxFirst = Math.max.apply(null, months.map(function(m) { return firstCounts[m] || 0; }).concat([1]));
+            var maxLast = Math.max.apply(null, months.map(function(m) { return lastCounts[m] || 0; }).concat([1]));
+
+            var firstHtml = '';
+            var lastHtml = '';
+            var labelHtml = '';
+            var step = Math.max(1, Math.floor(months.length / 12));
+            months.forEach(function(m, idx) {
+                var f = firstCounts[m] || 0;
+                var l = lastCounts[m] || 0;
+                firstHtml += '<div class="cal-cell" title="' + m + ': ' + f + ' first messages" style="background:' + lifecycleCellColor(f / maxFirst) + ';"></div>';
+                lastHtml += '<div class="cal-cell" title="' + m + ': ' + l + ' last messages" style="background:' + lifecycleCellColor(l / maxLast) + ';"></div>';
+                if (idx % step === 0 || idx === months.length - 1) labelHtml += '<div class="cal-label">' + monthLabel(m) + '</div>';
+                else labelHtml += '<div class="cal-label"></div>';
+            });
+
+            firstBand.innerHTML = firstHtml;
+            lastBand.innerHTML = lastHtml;
+            labels.innerHTML = labelHtml;
+        }
+
+        function renderLifecycleViews(filteredUserIds) {
+            var rows = collectLifecycleRows(filteredUserIds);
+            if (rows.length === 0) {
+                renderEmptyLifecycleState('No lifecycle rows found for current filter.');
+                return;
+            }
+
+            var minFirstMs = Math.min.apply(null, rows.map(function(r) { return r.first_ms; }));
+            var maxLastMs = Math.max.apply(null, rows.map(function(r) { return r.last_ms; }));
+            var activeNow = rows.filter(function(r) { return r.days_since_last <= 30; }).length;
+            var avgTenure = Math.round(rows.reduce(function(sum, r) { return sum + r.tenure_days; }, 0) / Math.max(rows.length, 1));
+
+            document.getElementById('lc-user-count').textContent = ' • ' + rows.length + ' users with lifecycle data';
+            document.getElementById('lc-summary').textContent =
+                'Window: ' + new Date(minFirstMs).toISOString().slice(0, 10) + ' → ' + new Date(maxLastMs).toISOString().slice(0, 10) +
+                ' • Active <=30d: ' + activeNow + ' • Avg tenure: ' + avgTenure + 'd';
+
+            renderUserLifelines(rows, minFirstMs, maxLastMs);
+            renderLastSeenHistogram(rows);
+            renderTenureScatter(rows);
+            renderCohortGrid(rows);
+            renderCalendarBands(rows);
+        }
+
+        function toTopCounts(list, extractor, limit) {
+            var counts = {};
+            list.forEach(function(u) {
+                var raw = extractor(u);
+                if (!raw) return;
+                var value = String(raw).trim();
+                if (!value) return;
+                counts[value] = (counts[value] || 0) + 1;
+            });
+            return Object.keys(counts)
+                .map(function(label) { return { label: label, count: counts[label] }; })
+                .sort(function(a, b) { return (b.count - a.count) || a.label.localeCompare(b.label); })
+                .slice(0, limit || 6);
+        }
+
+        function median(nums) {
+            if (!nums || nums.length === 0) return null;
+            var sorted = nums.slice().sort(function(a, b) { return a - b; });
+            var mid = Math.floor(sorted.length / 2);
+            if (sorted.length % 2 === 1) return sorted[mid];
+            return Math.round((sorted[mid - 1] + sorted[mid]) / 2);
+        }
+
+        function renderRankList(elId, rows) {
+            var el = document.getElementById(elId);
+            if (!el) return;
+            if (!rows || rows.length === 0) {
+                el.innerHTML = '<div class="text-[11px] text-slate-400 py-1">No data for current filter.</div>';
+                return;
+            }
+            var maxCount = rows[0].count || 1;
+            var html = '';
+            rows.forEach(function(r) {
+                var pct = (r.count / maxCount) * 100;
+                html += '<div class="rank-row">' +
+                    '<div class="rank-track">' +
+                        '<div class="rank-fill" style="width:' + pct.toFixed(2) + '%;"></div>' +
+                        '<div class="rank-label" title="' + esc(r.label) + '">' + esc(r.label) + '</div>' +
+                    '</div>' +
+                    '<div class="rank-count">' + r.count + '</div>' +
+                '</div>';
+            });
+            el.innerHTML = html;
+        }
+
+        function renderDigestOverview(list) {
+            var total = list.length;
+            document.getElementById('digest-user-count').textContent = ' • ' + total + ' filtered users';
+
+            if (total === 0) {
+                document.getElementById('digest-kpis').innerHTML = '';
+                document.getElementById('digest-note').textContent = 'No users match current filters.';
+                renderRankList('digest-orgs', []);
+                renderRankList('digest-roles', []);
+                renderRankList('digest-archetypes', []);
+                return;
+            }
+
+            var active7 = 0;
+            var active30 = 0;
+            var dormant180 = 0;
+            var conflictUsers = 0;
+            var msgTotals = [];
+            var recencyVals = [];
+
+            list.forEach(function(u) {
+                var p = u.psycho || {};
+                var days = Number(p.last_active_days);
+                if (Number.isFinite(days)) {
+                    recencyVals.push(days);
+                    if (days <= 7) active7++;
+                    if (days <= 30) active30++;
+                    if (days > 180) dormant180++;
+                }
+                var msgs = Number(p.total_msgs || 0);
+                if (Number.isFinite(msgs) && msgs > 0) msgTotals.push(msgs);
+                if (p.conflict_notes && Array.isArray(p.conflict_notes.role_company_conflict) && p.conflict_notes.role_company_conflict.length > 0) {
+                    conflictUsers++;
+                }
+            });
+
+            var avgMsgs = msgTotals.length > 0
+                ? Math.round(msgTotals.reduce(function(sum, x) { return sum + x; }, 0) / msgTotals.length)
+                : 0;
+            var medianRecency = median(recencyVals);
+            var activePct = Math.round((active30 / Math.max(total, 1)) * 100);
+
+            var orgTop = toTopCounts(list, function(u) {
+                var p = u.psycho || {};
+                var cur = getCurrentTimelineEntry(p);
+                return cur && cur.org ? cur.org : p.primary_company;
+            }, 6);
+            var roleTop = toTopCounts(list, function(u) {
+                var p = u.psycho || {};
+                var cur = getCurrentTimelineEntry(p);
+                return cur && cur.role ? cur.role : p.primary_role;
+            }, 6);
+            var archetypeTop = toTopCounts(list, function(u) {
+                return (u.psycho || {}).commercial_archetype;
+            }, 6);
+
+            var kpis = [
+                { value: total, label: 'Profiles' },
+                { value: active7, label: 'Active ≤7d' },
+                { value: active30, label: 'Active ≤30d' },
+                { value: dormant180, label: 'Dormant >180d' },
+                { value: conflictUsers, label: 'Role/Org conflicts' },
+                { value: avgMsgs, label: 'Avg msgs/user' }
+            ];
+            document.getElementById('digest-kpis').innerHTML = kpis.map(function(k) {
+                return '<div class="kpi-card"><div class="kpi-value">' + k.value + '</div><div class="kpi-label">' + esc(k.label) + '</div></div>';
+            }).join('');
+
+            var leadOrg = orgTop.length > 0 ? orgTop[0].label : 'n/a';
+            var leadRole = roleTop.length > 0 ? roleTop[0].label : 'n/a';
+            document.getElementById('digest-note').textContent =
+                activePct + '% active in 30d • median last-active ' +
+                (medianRecency == null ? 'n/a' : (medianRecency + 'd')) +
+                ' • top org "' + leadOrg + '" • top role "' + leadRole + '"';
+
+            renderRankList('digest-orgs', orgTop);
+            renderRankList('digest-roles', roleTop);
+            renderRankList('digest-archetypes', archetypeTop);
+        }
+
+        function renderPagination(totalCount, totalPages, start, end) {
+            var pg = document.getElementById('pagination');
+            if (!pg) return;
+            if (totalPages <= 1) {
+                pg.innerHTML = '';
+                return;
+            }
+            pg.innerHTML =
+                '<button onclick="changePage(-1)" ' + (currentPage <= 1 ? 'disabled' : '') + '>Prev</button>' +
+                '<span class="page-indicator">Page ' + currentPage + '/' + totalPages + '</span>' +
+                '<button onclick="changePage(1)" ' + (currentPage >= totalPages ? 'disabled' : '') + '>Next</button>';
+        }
+
+        function changePage(delta) {
+            var next = currentPage + delta;
+            if (next < 1) next = 1;
+            currentPage = next;
+            render();
+            window.scrollTo({ top: 0, behavior: 'smooth' });
         }
 
         /* ── Searchable Combo-box Controller ── */
@@ -436,8 +1349,13 @@
                         add(field, typeof v === 'string' ? v : (v.value || ''));
                     });
                 }
-                add('role', p.primary_role);
-                add('company', p.primary_company);
+                var currentTimeline = getCurrentTimelineEntry(p);
+                add('role', currentTimeline && currentTimeline.role ? currentTimeline.role : p.primary_role);
+                add('company', currentTimeline && currentTimeline.org ? currentTimeline.org : p.primary_company);
+                addArr('role', getTimelineRoles(p));
+                addArr('company', getTimelineOrgs(p));
+                addArr('company', getBioOrgCandidates(p));
+                addArr('company', getOrgScoreOrgs(p));
                 add('archetype', p.commercial_archetype);
                 add('stage', p.career_stage);
                 add('based', p.based_in);
@@ -475,8 +1393,8 @@
         /* ── Filter matching ── */
         function getFilterTarget(p, field) {
             switch (field) {
-                case 'role': return (p.primary_role || '').toLowerCase();
-                case 'company': return (p.primary_company || '').toLowerCase();
+                case 'role': return [p.primary_role].concat(getTimelineRoles(p)).filter(Boolean).map(function(s){ return String(s).toLowerCase(); });
+                case 'company': return [p.primary_company].concat(getTimelineOrgs(p)).concat(getBioOrgCandidates(p)).concat(getOrgScoreOrgs(p)).filter(Boolean).map(function(s){ return String(s).toLowerCase(); });
                 case 'skill': return (p.deep_skills || []).map(function(s){return s.toLowerCase();});
                 case 'based': return (p.based_in || '').toLowerCase();
                 case 'tribe': return (p.tribe_affiliations || []).map(function(s){return s.toLowerCase();});
@@ -510,9 +1428,33 @@
         }
 
         /* ── Helpers ── */
-        function getUser(id, name, bio) {
-            if (!users.has(id)) users.set(id, { id: id, display_name: name, bio: bio, claims: [], psycho: null });
-            return users.get(id);
+        function isUnknownDisplayName(name) {
+            if (name == null) return true;
+            var t = String(name).trim();
+            if (!t) return true;
+            var lc = t.toLowerCase();
+            return lc === 'unknown' || lc === 'deleted account';
+        }
+
+        function getUserLabel(u) {
+            var name = !isUnknownDisplayName(u.display_name) ? String(u.display_name).trim() : '';
+            if (name) return name;
+            var handle = String(u.handle || '').trim();
+            if (handle) return handle.charAt(0) === '@' ? handle : ('@' + handle);
+            return 'User #' + String(u.id || '');
+        }
+
+        function getUser(id, name, handle, bio) {
+            if (!users.has(id)) {
+                users.set(id, { id: id, display_name: null, handle: null, bio: null, claims: [], psycho: null });
+            }
+            var u = users.get(id);
+            if (u) {
+                if (!isUnknownDisplayName(name) && isUnknownDisplayName(u.display_name)) u.display_name = name;
+                if (handle && String(handle).trim() && !u.handle) u.handle = String(handle).trim();
+                if (bio && !u.bio) u.bio = bio;
+            }
+            return u;
         }
 
         function esc(s) {
@@ -540,20 +1482,305 @@
             }).join('');
         }
 
+        function renderEvidence(ids) {
+            if (!ids || ids.length === 0) return '<div class="text-[11px] text-slate-400">No evidence IDs.</div>';
+            var html = '<div class="space-y-1.5">';
+            ids.forEach(function(id) {
+                var ev = evidenceLookup[id];
+                if (!ev) return;
+                html += '<div class="text-[11px] text-slate-600 border border-slate-100 rounded p-2">' +
+                    '<div class="text-[10px] text-slate-400">' + esc(ev.sent_at) + ' \u2022 ' + esc(ev.group_title || '') + ' \u2022 #' + id + '</div>' +
+                    '<div class="mt-0.5">' + esc(ev.snippet) + '</div>' +
+                '</div>';
+            });
+            html += '</div>';
+            return html;
+        }
+
+        function timelineEntries(p) {
+            if (!p || !Array.isArray(p.role_company_timeline)) return [];
+            return p.role_company_timeline;
+        }
+
+        function getCurrentTimelineEntry(p) {
+            var entries = timelineEntries(p);
+            for (var i = 0; i < entries.length; i++) {
+                if (entries[i] && entries[i].is_current) return entries[i];
+            }
+            return null;
+        }
+
+        function getTimelineOrgs(p) {
+            return timelineEntries(p)
+                .map(function(t) { return t && t.org ? String(t.org).trim() : ''; })
+                .filter(Boolean);
+        }
+
+        function getTimelineRoles(p) {
+            return timelineEntries(p)
+                .map(function(t) { return t && t.role ? String(t.role).trim() : ''; })
+                .filter(Boolean);
+        }
+
+        function getEvidenceSummary(p) {
+            if (!p || !p.evidence_summary_json || typeof p.evidence_summary_json !== 'object') return {};
+            return p.evidence_summary_json;
+        }
+
+        function getBioOrgCandidates(p) {
+            var summary = getEvidenceSummary(p);
+            if (!Array.isArray(summary.bio_org_candidates)) return [];
+            return summary.bio_org_candidates.map(function(o) { return String(o || '').trim(); }).filter(Boolean);
+        }
+
+        function getOrgScoreOrgs(p) {
+            var summary = getEvidenceSummary(p);
+            if (!Array.isArray(summary.role_company_org_scores)) return [];
+            return summary.role_company_org_scores
+                .map(function(s) { return s && s.org ? String(s.org).trim() : ''; })
+                .filter(Boolean);
+        }
+
+        function truncateText(text, maxLen) {
+            var s = String(text || '').replace(/\s+/g, ' ').trim();
+            if (!s) return '';
+            if (!Number.isFinite(maxLen) || maxLen <= 0 || s.length <= maxLen) return s;
+            return s.slice(0, Math.max(0, maxLen - 3)).trim() + '...';
+        }
+
+        function normalizeEvidenceItem(item) {
+            if (!item) return null;
+            if (typeof item === 'string') {
+                var s = item.trim();
+                if (!s) return null;
+                return { value: s, quote: '', date: '' };
+            }
+            if (typeof item !== 'object') return null;
+            var value = String(item.value || '').trim();
+            if (!value) return null;
+            return {
+                value: value,
+                quote: typeof item.quote === 'string' ? item.quote.trim() : '',
+                date: typeof item.date === 'string' ? item.date.trim() : ''
+            };
+        }
+
+        function normalizedEvidenceList(arr) {
+            if (!Array.isArray(arr)) return [];
+            var out = [];
+            arr.forEach(function(item) {
+                var norm = normalizeEvidenceItem(item);
+                if (norm) out.push(norm);
+            });
+            return out;
+        }
+
+        function hasGroundedEvidence(item) {
+            if (!item) return false;
+            return Boolean(item.quote && item.quote.length >= 12 && /^\d{4}-\d{2}-\d{2}$/.test(item.date || ''));
+        }
+
+        function countGroundedEvidence(p) {
+            var buckets = [
+                normalizedEvidenceList(p.quirks),
+                normalizedEvidenceList(p.notable_topics),
+                normalizedEvidenceList(p.pain_points),
+                normalizedEvidenceList(p.crypto_values),
+                normalizedEvidenceList(p.connection_requests)
+            ];
+            var count = 0;
+            buckets.forEach(function(bucket) {
+                bucket.forEach(function(item) {
+                    if (hasGroundedEvidence(item)) count++;
+                });
+            });
+            return count;
+        }
+
+        function getRoleEvidenceQuality(p) {
+            var summary = getEvidenceSummary(p);
+            var scores = Array.isArray(summary.role_company_org_scores) ? summary.role_company_org_scores : [];
+            var strict = 0;
+            var url = 0;
+            var loose = 0;
+            scores.forEach(function(s) {
+                strict += Number((s && s.strict_hits) || 0);
+                url += Number((s && s.url_hits) || 0);
+                loose += Number((s && s.loose_hits) || 0);
+            });
+            var strong = strict + url;
+            var level = 'none';
+            if (strong >= 4) level = 'strong';
+            else if (strong >= 2) level = 'moderate';
+            else if (strong >= 1) level = 'limited';
+            else if (loose > 0) level = 'mention_only';
+            return { level: level, strict: strict, url: url, loose: loose, strong: strong, orgCount: scores.length };
+        }
+
+        function roleEvidenceBadgeMeta(p) {
+            var rq = getRoleEvidenceQuality(p);
+            if (rq.level === 'strong') {
+                return { text: 'Identity evidence: strong', cls: 'bg-emerald-50 text-emerald-700 border-emerald-200', detail: rq };
+            }
+            if (rq.level === 'moderate') {
+                return { text: 'Identity evidence: moderate', cls: 'bg-lime-50 text-lime-700 border-lime-200', detail: rq };
+            }
+            if (rq.level === 'limited') {
+                return { text: 'Identity evidence: limited', cls: 'bg-amber-50 text-amber-700 border-amber-200', detail: rq };
+            }
+            if (rq.level === 'mention_only') {
+                return { text: 'Identity evidence: mention-only', cls: 'bg-orange-50 text-orange-700 border-orange-200', detail: rq };
+            }
+            return { text: 'Identity evidence: none', cls: 'bg-red-50 text-red-700 border-red-200', detail: rq };
+        }
+
+        function isGenericContactStyle(text) {
+            var s = String(text || '').toLowerCase().replace(/\s+/g, ' ').trim();
+            if (!s) return true;
+            var genericPatterns = [
+                'direct and technical',
+                'friendly and professional',
+                'casual and approachable',
+                'professional and concise',
+                'direct and concise',
+                'direct and approachable',
+                'formal and professional',
+                'solution-oriented responses',
+                'prefers discussing specific protocols',
+            ];
+            return genericPatterns.some(function(pat) { return s.indexOf(pat) !== -1; });
+        }
+
+        function getProfileQuality(p) {
+            var grounded = countGroundedEvidence(p);
+            var timelineLen = timelineEntries(p).length;
+            var roleQuality = getRoleEvidenceQuality(p);
+            var hasCurrent = Boolean(getCurrentTimelineEntry(p));
+            var hasIdentity = Boolean((p.primary_role || p.primary_company || (p.current_role_company && (p.current_role_company.role || p.current_role_company.org))));
+            var hasContactStyle = Boolean(p.preferred_contact_style && String(p.preferred_contact_style).trim().length >= 24);
+
+            var score = 0;
+            if (grounded >= 3) score += 2;
+            else if (grounded >= 1) score += 1;
+            if (timelineLen >= 2 && roleQuality.strong >= 1) score += 2;
+            else if (timelineLen === 1 && roleQuality.strong >= 1) score += 1;
+            if (hasCurrent && roleQuality.strong >= 1) score += 1;
+            if (hasIdentity && roleQuality.level !== 'none') score += 1;
+            if (roleQuality.level === 'strong') score += 2;
+            else if (roleQuality.level === 'moderate') score += 1;
+            else if (roleQuality.level === 'mention_only') score -= 2;
+            if (hasContactStyle) score += 1;
+            if (isGenericContactStyle(p.preferred_contact_style)) score -= 1;
+            if (score < 0) score = 0;
+
+            if (score >= 7) return { label: 'Profile: Rich', className: 'quality-rich', score: score, grounded: grounded, timelineLen: timelineLen, roleQuality: roleQuality };
+            if (score >= 4) return { label: 'Profile: Solid', className: 'quality-medium', score: score, grounded: grounded, timelineLen: timelineLen, roleQuality: roleQuality };
+            return { label: 'Profile: Thin', className: 'quality-thin', score: score, grounded: grounded, timelineLen: timelineLen, roleQuality: roleQuality };
+        }
+
+        function pickBestEvidence(fieldName, arr) {
+            var items = normalizedEvidenceList(arr);
+            if (items.length === 0) return null;
+            for (var i = 0; i < items.length; i++) {
+                if (hasGroundedEvidence(items[i])) {
+                    return { field: fieldName, item: items[i] };
+                }
+            }
+            return { field: fieldName, item: items[0] };
+        }
+
+        function buildPersonaSummary(u, p, headlineRole, headlineCompany) {
+            var roleQuality = getRoleEvidenceQuality(p);
+            var who = '';
+            if (roleQuality.level === 'mention_only') {
+                who = 'Identity uncertain (org mentions only, no strong role/company proof)';
+            } else if (headlineRole && headlineCompany) who = headlineRole + ' @ ' + headlineCompany;
+            else if (headlineRole) who = headlineRole;
+            else if (headlineCompany) who = 'Affiliated with ' + headlineCompany;
+            else if (p.commercial_archetype) who = String(p.commercial_archetype).replace(/_/g, ' ');
+            else who = 'Role/company not explicit';
+
+            var topic = pickBestEvidence('topic', p.notable_topics);
+            var seeking = pickBestEvidence('seeking', p.connection_requests);
+            var value = pickBestEvidence('value', p.crypto_values);
+            var focus = '';
+            if (topic && seeking) focus = topic.item.value + ' | seeking: ' + seeking.item.value;
+            else if (topic) focus = topic.item.value;
+            else if (seeking) focus = 'seeking: ' + seeking.item.value;
+            else if (value) focus = 'value signal: ' + value.item.value;
+            else if (Array.isArray(p.business_focus) && p.business_focus.length > 0) focus = p.business_focus[0];
+            else focus = 'No strong focus signal captured';
+
+            var engage = '';
+            if (p.preferred_contact_style && String(p.preferred_contact_style).trim() && !isGenericContactStyle(p.preferred_contact_style)) {
+                engage = truncateText(p.preferred_contact_style, 140);
+            } else if (topic && topic.item && topic.item.quote) {
+                engage = 'Open with a specific question on "' + truncateText(topic.item.value, 48) + '" and reference their wording: "' +
+                    truncateText(topic.item.quote, 80) + '"';
+            } else if (u.handle && String(u.handle).trim()) {
+                engage = 'Best first touch is Telegram DM at @' + String(u.handle).replace(/^@/, '');
+            } else {
+                engage = 'Use a specific opener tied to their current org and recent topic.';
+            }
+
+            return {
+                who: truncateText(who, 100),
+                focus: truncateText(focus, 140),
+                engage: engage
+            };
+        }
+
+        function buildEvidenceHighlights(p, maxItems) {
+            var picks = [];
+            var ordered = [
+                pickBestEvidence('Seeking', p.connection_requests),
+                pickBestEvidence('Topic', p.notable_topics),
+                pickBestEvidence('Pain point', p.pain_points),
+                pickBestEvidence('Quirk', p.quirks),
+                pickBestEvidence('Value', p.crypto_values)
+            ];
+            ordered.forEach(function(entry) {
+                if (entry && entry.item && picks.length < maxItems) picks.push(entry);
+            });
+            return picks;
+        }
+
+        function renderEvidenceHighlights(p, maxItems) {
+            var highlights = buildEvidenceHighlights(p, maxItems);
+            if (highlights.length === 0) return '';
+            var html = '<div class="highlight-wrap">';
+            highlights.forEach(function(h) {
+                var date = h.item.date ? esc(h.item.date) : '';
+                var quote = h.item.quote ? '<div class="highlight-quote">"' + esc(truncateText(h.item.quote, 180)) + '"</div>' : '';
+                html += '<div class="highlight-item">' +
+                    '<div class="highlight-head">' +
+                        '<span class="highlight-label">' + esc(h.field) + '</span>' +
+                        (date ? '<span class="highlight-date">' + date + '</span>' : '') +
+                    '</div>' +
+                    '<div class="highlight-value">' + esc(h.item.value) + '</div>' +
+                    quote +
+                '</div>';
+            });
+            html += '</div>';
+            return html;
+        }
+
         /* ── Init ── */
         document.addEventListener('DOMContentLoaded', function() {
             if (!data) return;
 
             data.claims.forEach(function(c) {
-                var u = getUser(c.subject_user_id, c.display_name, c.bio);
+                var u = getUser(c.subject_user_id, c.display_name, c.handle, c.bio);
                 u.claims.push(c);
             });
 
             if (data.psychographics) {
                 data.psychographics.forEach(function(p) {
-                    if (!users.has(p.user_id)) getUser(p.user_id, null, null);
-                    var u = users.get(p.user_id);
-                    if (u) u.psycho = p;
+                    var u = getUser(p.user_id, p.display_name, p.handle, p.bio);
+                    if (u) {
+                        u.psycho = p;
+                        if (!u.handle && p.handle) u.handle = p.handle;
+                    }
                 });
             }
 
@@ -574,6 +1801,8 @@
             buildValueIndex();
             setupFieldCombo();
             setupValueCombo();
+            document.getElementById('view-mode').value = viewMode;
+            document.getElementById('page-size').value = String(pageSize);
             render();
         });
 
@@ -591,10 +1820,15 @@
             if (search) {
                 list = list.filter(function(u) {
                     var p = u.psycho || {};
+                    var timelineOrgs = getTimelineOrgs(p);
+                    var timelineRoles = getTimelineRoles(p);
+                    var bioOrgCandidates = getBioOrgCandidates(p);
+                    var orgScoreOrgs = getOrgScoreOrgs(p);
                     var haystack = [
-                        u.display_name, u.bio, p.generated_bio_professional, p.generated_bio_personal,
+                        u.display_name, u.handle, u.bio, p.generated_bio_professional, p.generated_bio_personal,
                         p.primary_role, p.primary_company, p.based_in, p.commercial_archetype
-                    ].concat(p.deep_skills || []).concat(p.fingerprint_tags || [])
+                    ].concat(timelineOrgs).concat(timelineRoles).concat(bioOrgCandidates).concat(orgScoreOrgs)
+                     .concat(p.deep_skills || []).concat(p.fingerprint_tags || [])
                      .concat(p.tribe_affiliations || []).concat(p.group_tags || [])
                      .concat((p.notable_topics || []).map(function(t) { return typeof t === 'string' ? t : t.value; }))
                      .filter(Boolean).join(' ').toLowerCase();
@@ -615,29 +1849,50 @@
                 });
             }
 
-            // Update heatmap with filtered users
+            // Global summaries / visual sections
             var filteredIds = list.map(function(u) { return u.id; });
-            renderHeatmap(filteredIds);
+            renderDigestOverview(list);
+            var isDetailed = viewMode === 'detailed';
+            document.getElementById('heatmap-section').style.display = isDetailed ? 'block' : 'none';
+            document.getElementById('lifecycle-section').style.display = isDetailed ? 'block' : 'none';
+            if (isDetailed) {
+                renderHeatmap(filteredIds);
+                renderLifecycleViews(filteredIds);
+            }
 
             list.sort(function(a, b) {
                 var pa = a.psycho || {}, pb = b.psycho || {};
                 switch (sortBy) {
-                    case 'msgs': return (pb.total_messages || 0) - (pa.total_messages || 0);
+                    case 'msgs': return (pb.total_msgs || pb.total_messages || 0) - (pa.total_msgs || pa.total_messages || 0);
                     case 'reactions': return (pb.total_reactions || 0) - (pa.total_reactions || 0);
                     case 'engagement': return (Number(pb.engagement_rate) || 0) - (Number(pa.engagement_rate) || 0);
                     case 'recent': return (pa.last_active_days == null ? 9999 : pa.last_active_days) - (pb.last_active_days == null ? 9999 : pb.last_active_days);
                     case 'scam': return (pb.scam_risk_score || 0) - (pa.scam_risk_score || 0);
-                    case 'name': return (a.display_name || '').localeCompare(b.display_name || '');
+                    case 'name': return getUserLabel(a).localeCompare(getUserLabel(b));
                     default: return 0;
                 }
             });
 
-            document.getElementById('stats-count').innerText = 'Showing ' + list.length + ' profiles';
+            var totalCount = list.length;
+            var totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+            if (currentPage > totalPages) currentPage = totalPages;
+            if (currentPage < 1) currentPage = 1;
+            var start = (currentPage - 1) * pageSize;
+            var end = Math.min(start + pageSize, totalCount);
+            var pageList = list.slice(start, end);
 
-            var max = Math.min(list.length, 200);
-            for (var idx = 0; idx < max; idx++) {
-                var u = list[idx];
+            if (totalCount === 0) document.getElementById('stats-count').innerText = 'Showing 0 profiles';
+            else document.getElementById('stats-count').innerText = 'Showing ' + (start + 1) + '–' + end + ' of ' + totalCount + ' profiles';
+            renderPagination(totalCount, totalPages, start, end);
+
+            for (var idx = 0; idx < pageList.length; idx++) {
+                var u = pageList[idx];
                 var p = u.psycho;
+                var currentTimeline = getCurrentTimelineEntry(p);
+                var headlineRole = (currentTimeline && currentTimeline.role) ? currentTimeline.role : p.primary_role;
+                var headlineCompany = (currentTimeline && currentTimeline.org) ? currentTimeline.org : p.primary_company;
+                var headlineSource = currentTimeline ? 'timeline current' : 'primary';
+                var userLabel = getUserLabel(u);
                 var card = document.createElement('div');
                 var scamBorder = (p.scam_risk_score || 0) >= 60 ? 'border-l-red-500' :
                                  (p.scam_risk_score || 0) >= 30 ? 'border-l-yellow-400' : 'border-l-emerald-400';
@@ -659,39 +1914,158 @@
                     }).join(', ');
                     socialsHtml = '<div class="kv"><strong>Links:</strong> ' + links + '</div>';
                 }
+                if (!isDetailed) {
+                    partnersHtml = '';
+                    socialsHtml = '';
+                }
 
                 var traitPairs = [
                     ['tone', p.tone], ['professionalism', p.professionalism], ['verbosity', p.verbosity],
                     ['decision', p.decision_style], ['seniority', p.seniority_signal]
                 ].filter(function(pair) { return pair[1]; });
+                if (!isDetailed) traitPairs = traitPairs.slice(0, 2);
                 var traitsHtml = traitPairs.map(function(pair) {
                     return '<span class="tag bg-slate-100 text-slate-600 border-slate-200 clickable"' + fclick(pair[0], pair[1]) + '>' + esc(pair[1]) + '</span>';
                 }).join('');
                 if (p.approachability != null) traitsHtml += '<span class="tag bg-emerald-50 text-emerald-700 border-emerald-200">' + (p.approachability * 10).toFixed(0) + '/10 open</span>';
 
                 var stats = [];
-                if (p.total_messages) stats.push('<strong>' + p.total_messages + '</strong> msgs');
+                if (p.total_msgs) stats.push('<strong>' + p.total_msgs + '</strong> msgs');
                 if (p.total_reactions) stats.push('<strong>' + p.total_reactions + '</strong> reactions');
                 if (p.total_replies_received) stats.push('<strong>' + p.total_replies_received + '</strong> replies');
                 if (p.engagement_rate) stats.push('<strong>' + Number(p.engagement_rate).toFixed(1) + '%</strong> engagement');
                 if (p.avg_msg_length) stats.push('avg <strong>' + p.avg_msg_length + '</strong> chars');
                 if (p.buying_power) stats.push('<span class="clickable"' + fclick('buying', p.buying_power) + '>' + esc(p.buying_power) + '</span>');
                 if ((p.scam_risk_score || 0) >= 30) stats.push('<span class="text-red-600 font-bold">Scam: ' + p.scam_risk_score + '/100</span>');
+                if (!isDetailed) {
+                    stats = [];
+                    if (p.total_msgs) stats.push('<strong>' + p.total_msgs + '</strong> msgs');
+                    if (p.engagement_rate) stats.push('<strong>' + Number(p.engagement_rate).toFixed(1) + '%</strong> engagement');
+                    if (p.buying_power) stats.push('<span class="clickable"' + fclick('buying', p.buying_power) + '>' + esc(p.buying_power) + '</span>');
+                    if ((p.scam_risk_score || 0) >= 30) stats.push('<span class="text-red-600 font-bold">Scam ' + p.scam_risk_score + '</span>');
+                }
                 var statsHtml = stats.join(' &middot; ');
+                var hasConflict = p.conflict_notes && p.conflict_notes.role_company_conflict && p.conflict_notes.role_company_conflict.length > 0;
+                var conflictCount = hasConflict ? p.conflict_notes.role_company_conflict.length : 0;
+                var conflictBadge = hasConflict ? '<span class="tag bg-red-50 text-red-700 border-red-200">Conflict (' + conflictCount + ')</span>' : '';
+                var timelinePatchBadge = (p.conflict_notes && p.conflict_notes.timeline_patch && p.conflict_notes.timeline_patch.applied)
+                    ? '<span class="tag bg-emerald-50 text-emerald-700 border-emerald-200">Timeline patched</span>'
+                    : '';
+                var quality = getProfileQuality(p);
+                var qualityBadge = '<span class="tag ' + quality.className + '">' + esc(quality.label) + '</span>';
+                var roleEvidenceMeta = roleEvidenceBadgeMeta(p);
+                var roleEvidenceBadge = '<span class="tag ' + roleEvidenceMeta.cls + '">' + esc(roleEvidenceMeta.text) + '</span>';
+                var groundedBadge = '<span class="tag bg-slate-50 text-slate-600 border-slate-200">' +
+                    quality.grounded + ' grounded facts' +
+                    (quality.timelineLen > 0 ? ' | ' + quality.timelineLen + ' timeline' : '') +
+                    '</span>';
+                var persona = buildPersonaSummary(u, p, headlineRole, headlineCompany);
+                var personaHtml = '<div class="persona-wrap">' +
+                    '<div class="persona-line"><strong>Who:</strong> ' + esc(persona.who) + '</div>' +
+                    '<div class="persona-line"><strong>Focus:</strong> ' + esc(persona.focus) + '</div>' +
+                    '<div class="persona-line"><strong>How to engage:</strong> ' + esc(persona.engage) + '</div>' +
+                '</div>';
+                var highlightsHtml = renderEvidenceHighlights(p, isDetailed ? 3 : 1);
+
+                var timelineHtml = '';
+                if (p.role_company_timeline && p.role_company_timeline.length > 0) {
+                    var rows = p.role_company_timeline.map(function(t) {
+                        var label = '';
+                        if (t.role && t.org) label = esc(t.role) + ' @ ' + esc(t.org);
+                        else if (t.org) label = 'Affiliated with ' + esc(t.org);
+                        else if (t.role) label = esc(t.role);
+                        else label = 'Unclear affiliation';
+                        var current = t.is_current ? ' <span class="text-[10px] text-emerald-600">current</span>' : '';
+                        var conf = (t.confidence != null) ? ' <span class="text-[10px] text-slate-400">' + Math.round(t.confidence * 100) + '%</span>' : '';
+                        var certainty = (!t.role || Number(t.confidence || 0) < 0.6)
+                            ? ' <span class="text-[10px] text-amber-600">low certainty</span>'
+                            : '';
+                        var ids = t.evidence_message_ids || [];
+                        var ev = ids.length > 0
+                          ? '<details class="mt-1"><summary class="text-[11px] text-blue-600 cursor-pointer">Evidence</summary>' +
+                            renderEvidence(ids) + '</details>'
+                          : '<div class="text-[11px] text-slate-400">No evidence ids</div>';
+                        return '<div class="text-[12px] text-slate-600 border border-slate-100 rounded p-2">' +
+                          '<div><strong>' + label + '</strong>' + current + conf + certainty + '</div>' +
+                          (t.start_hint ? '<div class="text-[10px] text-slate-400">start: ' + esc(t.start_hint) + '</div>' : '') +
+                          (t.end_hint ? '<div class="text-[10px] text-slate-400">end: ' + esc(t.end_hint) + '</div>' : '') +
+                          ev +
+                        '</div>';
+                    }).join('');
+                    timelineHtml = '<div class="kv"><strong>Role/Company Timeline:</strong></div><div class="space-y-1.5">' + rows + '</div>';
+                }
+
+                var conflictDetailsHtml = '';
+                if (hasConflict) {
+                    var conflictRows = (p.conflict_notes.role_company_conflict || []).map(function(c) {
+                        var bioOrgs = (c.bio_orgs || []).join(', ') || '(none)';
+                        var msgOrgs = (c.message_orgs || []).join(', ') || '(none)';
+                        return '<div class="text-[11px] text-slate-600 border border-red-100 rounded p-2">' +
+                            '<div><strong>bio orgs:</strong> ' + esc(bioOrgs) + '</div>' +
+                            '<div><strong>message orgs:</strong> ' + esc(msgOrgs) + '</div>' +
+                        '</div>';
+                    }).join('');
+                    var patchMeta = '';
+                    if (p.conflict_notes.timeline_patch) {
+                        var tp = p.conflict_notes.timeline_patch;
+                        patchMeta = '<div class="text-[11px] text-slate-500 border border-emerald-100 rounded p-2">' +
+                            '<div><strong>timeline patch:</strong> ' + (tp.applied ? 'applied' : 'not applied') + '</div>' +
+                            '<div><strong>added org:</strong> ' + esc(tp.added_org || '(none)') + '</div>' +
+                            '<div><strong>promoted to current:</strong> ' + (tp.promoted_to_current ? 'yes' : 'no') + '</div>' +
+                        '</div>';
+                    }
+                    conflictDetailsHtml = '<div class="kv"><strong>Role/Company conflict:</strong></div>' +
+                        '<div class="space-y-1.5">' + conflictRows + patchMeta + '</div>';
+                }
+
+                var evidenceSummaryHtml = '';
+                var summary = getEvidenceSummary(p);
+                var bioOrgCandidates = getBioOrgCandidates(p);
+                var orgScores = Array.isArray(summary.role_company_org_scores) ? summary.role_company_org_scores.slice(0, 5) : [];
+                if (bioOrgCandidates.length > 0 || orgScores.length > 0) {
+                    var rq = getRoleEvidenceQuality(p);
+                    var rqLine = '<div class="text-[11px] text-slate-600 mb-1"><strong>role evidence:</strong> ' +
+                        esc(roleEvidenceMeta.text.replace('Identity evidence: ', '')) +
+                        ' (strict:' + rq.strict + ', url:' + rq.url + ', loose:' + rq.loose + ')' +
+                        '</div>';
+                    var bioLine = bioOrgCandidates.length > 0
+                        ? '<div class="text-[11px] text-slate-600"><strong>bio org candidates:</strong> ' + bioOrgCandidates.map(esc).join(', ') + '</div>'
+                        : '';
+                    var scoreRows = orgScores.map(function(s) {
+                        return '<div class="text-[11px] text-slate-600 border border-slate-100 rounded p-2">' +
+                            '<strong>' + esc(s.org || '(unknown)') + '</strong>' +
+                            ' · strict:' + Number(s.strict_hits || 0) +
+                            ' · url:' + Number(s.url_hits || 0) +
+                            ' · loose:' + Number(s.loose_hits || 0) +
+                            ' · bio:' + Number(s.bio_hits || 0) +
+                            (s.most_recent ? ' · recent:' + esc(s.most_recent) : '') +
+                        '</div>';
+                    }).join('');
+                    evidenceSummaryHtml = '<div class="kv"><strong>Evidence Summary:</strong></div>' +
+                        rqLine +
+                        bioLine +
+                        (scoreRows ? '<div class="space-y-1.5 mt-1">' + scoreRows + '</div>' : '');
+                }
 
                 card.innerHTML =
                     '<div class="p-4">' +
                         '<div class="flex justify-between items-start mb-2">' +
                             '<div class="flex-1 min-w-0">' +
                                 '<div class="flex items-center gap-2 flex-wrap">' +
-                                    '<h3 class="text-base font-bold text-slate-900 truncate">' + esc(u.display_name || 'Unknown') + '</h3>' +
-                                    (p.primary_role ? '<span class="text-xs text-slate-500 clickable"' + fclick('role', p.primary_role) + '>' + esc(p.primary_role) + '</span>' : '') +
-                                    (p.primary_company ? '<span class="text-xs text-slate-400 clickable"' + fclick('company', p.primary_company) + '>@ ' + esc(p.primary_company) + '</span>' : '') +
+                                    '<h3 class="text-base font-bold text-slate-900 truncate">' + esc(userLabel) + '</h3>' +
+                                    (headlineRole ? '<span class="text-xs text-slate-500 clickable"' + fclick('role', headlineRole) + '>' + esc(headlineRole) + '</span>' : '') +
+                                    (headlineCompany ? '<span class="text-xs text-slate-400 clickable"' + fclick('company', headlineCompany) + '>@ ' + esc(headlineCompany) + '</span>' : '') +
+                                    '<span class="tag bg-slate-50 text-slate-600 border-slate-200">' + esc(headlineSource) + '</span>' +
                                     (p.commercial_archetype ? '<span class="tag bg-indigo-100 text-indigo-700 border-indigo-200 clickable"' + fclick('archetype', p.commercial_archetype) + '>' + esc(p.commercial_archetype.replace(/_/g, ' ')) + '</span>' : '') +
+                                    qualityBadge +
+                                    roleEvidenceBadge +
+                                    groundedBadge +
+                                    conflictBadge +
+                                    timelinePatchBadge +
                                     (p.career_stage ? '<span class="text-[10px] text-slate-400 clickable"' + fclick('stage', p.career_stage) + '>' + esc(p.career_stage) + '</span>' : '') +
                                 '</div>' +
                                 (u.bio ? '<p class="text-xs text-slate-500 mt-1">' + esc(u.bio) + '</p>' : '') +
-                                (p.generated_bio_professional ? '<p class="text-xs text-slate-600 mt-1">' + esc(p.generated_bio_professional) + '</p>' : '') +
+                                ((isDetailed && p.generated_bio_professional) ? '<p class="text-xs text-slate-600 mt-1">' + esc(p.generated_bio_professional) + '</p>' : '') +
                             '</div>' +
                             '<div class="flex flex-col items-end ml-3 shrink-0 text-right">' +
                                 '<div class="text-xs font-mono text-slate-400">#' + u.id + '</div>' +
@@ -703,22 +2077,24 @@
                         '<div class="flex gap-4 text-[11px] text-slate-500 mb-2 border-b border-slate-100 pb-2 flex-wrap">' + statsHtml + '</div>' +
 
                         '<div class="mb-2 flex flex-wrap gap-1">' + traitsHtml + '</div>' +
+                        personaHtml +
+                        highlightsHtml +
 
                         '<div class="space-y-0.5">' +
-                            (p.based_in ? '<div class="kv"><strong>Based in:</strong> <span class="clickable"' + fclick('based', p.based_in) + '>' + esc(p.based_in) + '</span></div>' : '') +
-                            (p.languages && p.languages.length > 0 ? '<div class="kv"><strong>Languages:</strong> ' + clickList(p.languages, 'lang') + '</div>' : '') +
-                            (p.deep_skills && p.deep_skills.length > 0 ? '<div class="kv"><strong>Skills:</strong> ' + clickList(p.deep_skills, 'skill') + '</div>' : '') +
+                            ((isDetailed && p.based_in) ? '<div class="kv"><strong>Based in:</strong> <span class="clickable"' + fclick('based', p.based_in) + '>' + esc(p.based_in) + '</span></div>' : '') +
+                            ((isDetailed && p.languages && p.languages.length > 0) ? '<div class="kv"><strong>Languages:</strong> ' + clickList(p.languages, 'lang') + '</div>' : '') +
+                            ((isDetailed && p.deep_skills && p.deep_skills.length > 0) ? '<div class="kv"><strong>Skills:</strong> ' + clickList(p.deep_skills, 'skill') + '</div>' : '') +
                             (p.fifo ? '<div class="kv"><strong>Active:</strong> ' + esc(p.fifo) + '</div>' : '') +
-                            (p.peak_hours && p.peak_hours.length > 0 ? '<div class="kv"><strong>Peak hours:</strong> ' + p.peak_hours.map(esc).join(', ') + ' UTC</div>' : '') +
-                            (p.most_active_days && p.most_active_days.length > 0 ? '<div class="kv"><strong>Most active:</strong> ' + p.most_active_days.map(esc).join(', ') + '</div>' : '') +
+                            ((isDetailed && p.peak_hours && p.peak_hours.length > 0) ? '<div class="kv"><strong>Peak hours:</strong> ' + p.peak_hours.map(esc).join(', ') + ' UTC</div>' : '') +
+                            ((isDetailed && p.active_days && p.active_days.length > 0) ? '<div class="kv"><strong>Most active:</strong> ' + p.active_days.map(esc).join(', ') + '</div>' : '') +
                             socialsHtml +
                             partnersHtml +
                         '</div>' +
 
-                        (p.group_tags && p.group_tags.length > 0 ? '<div class="mt-2">' + clickPills(p.group_tags, 'group', 'bg-violet-50', 'text-violet-700 border-violet-200') + '</div>' : '') +
+                        ((isDetailed && p.group_tags && p.group_tags.length > 0) ? '<div class="mt-2">' + clickPills(p.group_tags, 'group', 'bg-violet-50', 'text-violet-700 border-violet-200') + '</div>' : '') +
 
                         '<details class="mt-2">' +
-                            '<summary class="text-xs text-blue-600 font-medium hover:text-blue-800">Show details</summary>' +
+                            '<summary class="text-xs text-blue-600 font-medium hover:text-blue-800">' + (isDetailed ? 'Show details' : 'Open full profile') + '</summary>' +
                             '<div class="mt-2 space-y-1.5 border-t border-slate-100 pt-2">' +
                                 (p.generated_bio_personal ? '<div class="kv"><strong>Personal bio:</strong> <em>' + esc(p.generated_bio_personal) + '</em></div>' : '') +
                                 (p.preferred_contact_style ? '<div class="kv"><strong>Contact style:</strong> <span class="clickable"' + fclick('contact', p.preferred_contact_style) + '>' + esc(p.preferred_contact_style) + '</span></div>' : '') +
@@ -733,6 +2109,9 @@
                                 (p.tribe_affiliations && p.tribe_affiliations.length > 0 ? '<div class="kv"><strong>Tribes:</strong> ' + clickList(p.tribe_affiliations, 'tribe') + '</div>' : '') +
                                 (p.attended_events && p.attended_events.length > 0 ? '<div class="kv"><strong>Events:</strong> ' + clickList(p.attended_events, 'event') + '</div>' : '') +
                                 (p.affiliations && p.affiliations.length > 0 ? '<div class="kv"><strong>Affiliations:</strong> ' + p.affiliations.map(esc).join(', ') + '</div>' : '') +
+                                (timelineHtml ? '<div class="mt-1.5">' + timelineHtml + '</div>' : '') +
+                                (conflictDetailsHtml ? '<div class="mt-1.5">' + conflictDetailsHtml + '</div>' : '') +
+                                (evidenceSummaryHtml ? '<div class="mt-1.5">' + evidenceSummaryHtml + '</div>' : '') +
                                 (p.social_platforms && p.social_platforms.length > 0 ? '<div class="kv"><strong>Platforms:</strong> ' + clickList(p.social_platforms, 'platform') + '</div>' : '') +
                                 (p.reasoning ? '<div class="kv mt-1 text-slate-400 italic border-l-2 border-slate-200 pl-2">' + esc(p.reasoning) + '</div>' : '') +
                                 (p.fingerprint_tags && p.fingerprint_tags.length > 0 ? '<div class="mt-1.5">' + clickPills(p.fingerprint_tags, 'tag', 'bg-slate-100', 'text-slate-500 border-slate-200') + '</div>' : '') +
@@ -742,14 +2121,8 @@
                 feed.appendChild(card);
             }
 
-            if (list.length === 0) {
+            if (totalCount === 0) {
                 feed.innerHTML = '<div class="text-center text-slate-400 py-10">No profiles match your filters.</div>';
-            }
-            if (list.length > 200) {
-                var note = document.createElement('div');
-                note.className = 'text-center text-xs text-slate-400 py-4';
-                note.textContent = 'Showing 200 of ' + list.length + '. Narrow your search to see more.';
-                feed.appendChild(note);
             }
         }
     </script>

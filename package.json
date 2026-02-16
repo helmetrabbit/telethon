@@ -6,17 +6,26 @@
   "scripts": {
     "build": "tsc",
     "bulk-ingest": "node dist/cli/bulk-ingest.js",
+    "backfill-message-names": "node dist/cli/backfill-message-names.js",
     "compute-features": "node dist/cli/compute-features.js",
+    "compute-message-insights": "node dist/cli/compute-message-insights.js",
+    "backfill-telethon-names": "bash tools/backfill_telethon_names.sh",
     "scrape-bios": "node dist/cli/scrape-bios.js",
     "enrich-psycho": "node dist/cli/enrich-psycho.js",
     "export-viewer": "node dist/cli/export-viewer.js",
+    "profile-regress": "node dist/cli/run-profile-regression.js",
+    "extract-claims": "node dist/cli/extract-claims.js",
     "db:up": "docker compose up -d postgres",
     "db:down": "docker compose down",
     "db:migrate": "docker compose run --rm dbmate up",
     "db:rollback": "docker compose run --rm dbmate down",
     "db:reset": "docker compose down -v && docker compose up -d postgres && sleep 2 && docker compose run --rm dbmate up",
     "run-sql": "docker compose exec -e PGPASSWORD=tgprofile postgres psql -U tgprofile -d tgprofile -c",
-    "pipeline": "npm run build && npm run bulk-ingest && npm run compute-features && npm run enrich-psycho && npm run export-viewer"
+    "pipeline": "npm run build && npm run bulk-ingest && npm run backfill-message-names && npm run backfill-telethon-names && npm run compute-features && npm run compute-message-insights && npm run enrich-psycho -- --strict-insights true && npm run export-viewer",
+    "env:remote": "bash tools/use-remote-db.sh",
+    "env:remote:ip": "bash tools/use-remote-db.sh --ip",
+    "env:local": "bash tools/use-local-db.sh",
+    "db:smoke": "npm run build && node dist/db/smoke-test.js"
   },
   "engines": {
     "node": ">=18"

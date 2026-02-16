@@ -3,6 +3,13 @@ import { db } from '../db/index.js';
 import fs from 'fs';
 import path from 'path';
 
+function keyOf(id: unknown): string {
+  if (typeof id === 'string') return id;
+  if (typeof id === 'number') return String(id);
+  if (typeof id === 'bigint') return id.toString();
+  return String(id);
+}
+
 async function main() {
   const version = 'v0.6.0';
   console.log(`Exporting data for version ${version}...`);
@@ -11,7 +18,7 @@ async function main() {
   console.log('Fetching claims...');
   const claimsRes = await db.query(`
     SELECT 
-      c.id, c.subject_user_id, u.display_name, u.bio, 
+      c.id, c.subject_user_id, u.display_name, u.handle, u.bio, u.bio_source, u.bio_updated_at,
       c.predicate, c.object_value, c.status, c.confidence, c.notes
     FROM claims c
     JOIN users u ON u.id = c.subject_user_id
@@ -49,7 +56,7 @@ async function main() {
   console.log('Fetching Psychographics...');
   const psychoRes = await db.query(`
     SELECT DISTINCT ON (p.user_id)
-      p.user_id, u.display_name, u.bio,
+      p.user_id, u.display_name, u.handle, u.bio, u.bio_source, u.bio_updated_at,
       p.tone, p.professionalism, p.verbosity, p.responsiveness, p.decision_style, 
       p.seniority_signal, p.commercial_archetype, p.approachability, 
       p.quirks, p.notable_topics, p.pain_points, p.crypto_values, p.connection_requests, p.fingerprint_tags,
@@ -59,17 +66,78 @@ async function main() {
       p.scam_risk_score, p.confidence_score, p.career_stage, p.tribe_affiliations,
       p.reputation_score, p.driving_values, p.technical_specifics, p.business_focus,
       p.fifo, p.group_tags, p.reputation_summary,
-      p.total_messages, p.avg_msg_length, p.peak_hours, p.most_active_days,
+      p.total_msgs, p.avg_msg_length, p.peak_hours, p.active_days,
       p.total_reactions, p.avg_reactions_per_msg, p.total_replies_received, p.avg_replies_per_msg, p.engagement_rate,
-      p.last_active_days, p.top_conversation_partners
+      p.last_active_days, p.top_conversation_partners, p.role_company_timeline, p.conflict_notes, p.evidence_summary_json
     FROM user_psychographics p
     JOIN users u ON u.id = p.user_id
     ORDER BY p.user_id, p.created_at DESC
   `);
 
+  // 4b. Build evidence lookup from psychographics
+  console.log('Building evidence lookup...');
+  const evidenceIds = new Set<number>();
+  for (const row of psychoRes.rows as any[]) {
+    const timeline = row.role_company_timeline;
+    if (Array.isArray(timeline)) {
+      for (const t of timeline) {
+        const ids = t?.evidence_message_ids;
+        if (Array.isArray(ids)) {
+          for (const id of ids) {
+            if (Number.isFinite(id)) evidenceIds.add(id);
+          }
+        }
+      }
+    }
+    const conflicts = row.conflict_notes;
+    if (conflicts && typeof conflicts === 'object') {
+      const walk = (obj: any) => {
+        if (!obj || typeof obj !== 'object') return;
+        if (Array.isArray(obj)) {
+          obj.forEach(walk);
+          return;
+        }
+        if (Array.isArray(obj.evidence_message_ids)) {
+          for (const id of obj.evidence_message_ids) {
+            if (Number.isFinite(id)) evidenceIds.add(id);
+          }
+        }
+        for (const v of Object.values(obj)) walk(v);
+      };
+      walk(conflicts);
+    }
+  }
+
+  const evidenceLookup: Record<number, { sent_at: string; group_title: string; snippet: string }> = {};
+  if (evidenceIds.size > 0) {
+    const idList = Array.from(evidenceIds);
+    const { rows: evidenceRows } = await db.query<{
+      message_id: number; sent_at: string; group_title: string; snippet: string;
+    }>(`
+      SELECT m.id as message_id, m.sent_at::text as sent_at, g.title as group_title,
+             LEFT(COALESCE(m.text, ''), 240) as snippet
+      FROM messages m
+      JOIN groups g ON g.id = m.group_id
+      WHERE m.id = ANY($1)
+    `, [idList]);
+
+    for (const r of evidenceRows) {
+      evidenceLookup[r.message_id] = {
+        sent_at: r.sent_at,
+        group_title: r.group_title,
+        snippet: r.snippet,
+      };
+    }
+  }
+
   // 5. Activity heatmap: day-of-week × hour-of-day from raw messages (enriched users only)
   console.log('Computing activity heatmap...');
-  const heatmapRes = await db.query(`
+  const heatmapRes = await db.query<{
+    dow: number;
+    hour: number;
+    user_id: unknown;
+    cnt: number;
+  }>(`
     SELECT
       EXTRACT(DOW FROM m.sent_at)::int AS dow,
       EXTRACT(HOUR FROM m.sent_at)::int AS hour,
@@ -81,15 +149,56 @@ async function main() {
   `);
 
   // Build per-user activity grids: { user_id -> [[h0..h23] x 7 days] }
-  const userActivity: Record<number, number[][]> = {};
+  const userActivity: Record<string, number[][]> = {};
   for (const row of heatmapRes.rows) {
-    if (!userActivity[row.user_id]) {
-      userActivity[row.user_id] = Array.from({ length: 7 }, () => new Array(24).fill(0));
+    const uid = keyOf(row.user_id);
+    if (!userActivity[uid]) {
+      userActivity[uid] = Array.from({ length: 7 }, () => new Array(24).fill(0));
     }
-    userActivity[row.user_id][row.dow][row.hour] += row.cnt;
+    userActivity[uid][row.dow][row.hour] += row.cnt;
   }
 
-  // 6. Stats
+  // 6. Lifecycle metrics: first/last message, volume, active months
+  console.log('Computing lifecycle metrics...');
+  const lifecycleRes = await db.query<{
+    user_id: unknown;
+    first_msg_at: string;
+    last_msg_at: string;
+    total_msgs: number;
+    active_months: string[] | null;
+  }>(`
+    SELECT
+      m.user_id,
+      MIN(m.sent_at)::text AS first_msg_at,
+      MAX(m.sent_at)::text AS last_msg_at,
+      COUNT(*)::int AS total_msgs,
+      ARRAY_AGG(
+        DISTINCT to_char(date_trunc('month', m.sent_at), 'YYYY-MM')
+        ORDER BY to_char(date_trunc('month', m.sent_at), 'YYYY-MM')
+      ) AS active_months
+    FROM messages m
+    WHERE m.user_id IN (SELECT user_id FROM user_psychographics)
+    GROUP BY m.user_id
+  `);
+
+  const lifecycle: Record<string, {
+    first_msg_at: string;
+    last_msg_at: string;
+    total_msgs: number;
+    active_months: string[];
+  }> = {};
+
+  for (const row of lifecycleRes.rows) {
+    const uid = keyOf(row.user_id);
+    lifecycle[uid] = {
+      first_msg_at: row.first_msg_at,
+      last_msg_at: row.last_msg_at,
+      total_msgs: row.total_msgs,
+      active_months: Array.isArray(row.active_months) ? row.active_months : [],
+    };
+  }
+
+  // 7. Stats
   const stats = {
      total_claims: claimsRes.rows.length,
      supported_claims: claimsRes.rows.filter(r => r.status === 'supported').length,
@@ -105,7 +214,9 @@ async function main() {
       abstentions: abstentionRes.rows,
       enrichments: enrichmentsRes.rows,
       psychographics: psychoRes.rows,
-      activity: userActivity
+      activity: userActivity,
+      lifecycle,
+      evidence_lookup: evidenceLookup
   };
 
   // Write as a JS file to allow opening via file:// protocol without CORS

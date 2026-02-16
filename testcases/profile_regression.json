@@ -1,0 +1,24 @@
+{
+  "_comment": "Edit with real user IDs from your DB. Run with: npm run profile-regress",
+  "cases": [
+    {
+      "id": "nicky-like",
+      "enabled": false,
+      "user_id": null,
+      "assert": [
+        { "path": "role_company_timeline", "contains_any": ["Pelagos", "Neon", "Telos"] },
+        { "path": "role_company_timeline", "contains": "Pelagos" }
+      ]
+    },
+    {
+      "id": "breevie-like",
+      "enabled": false,
+      "user_id": null,
+      "assert": [
+        { "path": "role_company_timeline", "contains": "Zenrock" },
+        { "path": "role_company_timeline", "contains": "GoGoPool" },
+        { "path": "conflict_notes.role_company_conflict", "exists": true }
+      ]
+    }
+  ]
+}
