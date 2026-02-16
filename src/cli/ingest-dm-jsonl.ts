@@ -166,6 +166,15 @@ function cleanupCompanyName(raw: string): string {
     .trim();
 }
 
+function normalizeCompanyOrStatus(raw: string): string {
+  const clean = sanitizeEntity(raw) || '';
+  if (!clean) return '';
+  if (/(?:^|\b)(?:unemployed|not working|between jobs|job hunting|looking for work)(?:\b|$)/iu.test(clean)) {
+    return 'unemployed';
+  }
+  return cleanupCompanyName(clean);
+}
+
 function normalizeRole(raw: string): string {
   return raw
     .replace(/^[\s-]+/, '')
@@ -205,7 +214,7 @@ function isThirdPartyProfileQuery(source: string): boolean {
 
 function hasExplicitSelfProfileUpdate(source: string): boolean {
   const s = source.toLowerCase();
-  return /(?:\bmy role\b|\bmy title\b|\bi work as\b|\bi(?:'m| am)\b|\bno longer at\b|\bleft\b|\bjoined\b|\bunemployed\b|\bmy priorities are\b|\bfocused on\b|\bprefer(?:\s+to)? communicate\b|\bbest way to reach me\b)/iu.test(s);
+  return /(?:\bmy role\b|\bmy title\b|\bi work as\b|\bi(?:'m| am)\b|\bno longer at\b|\bleft\b|\bjoined\b|\bunemployed\b|\bmy priorities are\b|\bfocused on\b|\bprefer(?:\s+to)? communicate\b|\bbest way to reach me\b|\b(?:role|title|position|company|project|priorities|priority|communication|style)\s*:)/iu.test(s);
 }
 
 function normalizeContactStyle(raw: string): string {
@@ -350,6 +359,130 @@ function splitPriorityTopics(raw: string): string[] {
     .slice(0, 6);
 }
 
+function parseLabeledProfileUpdates(source: string): ProfileEvent[] {
+  const events: ProfileEvent[] = [];
+  const valueByField: Partial<Record<'primary_role' | 'primary_company' | 'preferred_contact_style', string>> = {};
+  let priorityTopics: string[] = [];
+
+  const lines = source
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+
+  for (const line of lines) {
+    const m = line.match(/^([A-Za-z][A-Za-z _-]{1,24})\s*:\s*(.+)$/u);
+    if (!m) continue;
+    const key = m[1].toLowerCase().replace(/[\s_-]+/g, '');
+    const rawValue = sanitizeEntity(m[2] || '');
+    if (!rawValue) continue;
+
+    if (['role', 'title', 'position', 'job'].includes(key)) {
+      const role = normalizeRole(rawValue);
+      if (role && isLikelyRole(role)) {
+        valueByField.primary_role = role;
+      }
+      continue;
+    }
+
+    if (['company', 'project', 'organization', 'org', 'employer'].includes(key)) {
+      const company = normalizeCompanyOrStatus(rawValue);
+      if (company) {
+        valueByField.primary_company = company;
+      }
+      continue;
+    }
+
+    if (['priorities', 'priority', 'focus', 'topics'].includes(key)) {
+      const topics = splitPriorityTopics(rawValue);
+      if (topics.length) {
+        priorityTopics = topics;
+      }
+      continue;
+    }
+
+    if (['communication', 'communicationstyle', 'preferredcommunication', 'contactstyle', 'style'].includes(key)) {
+      const style = normalizeContactStyle(rawValue);
+      if (style) {
+        valueByField.preferred_contact_style = style;
+      }
+      continue;
+    }
+  }
+
+  const role = valueByField.primary_role || null;
+  const company = valueByField.primary_company || null;
+  if (role || company) {
+    const extractedFacts: ProfileFact[] = [];
+    if (role) {
+      extractedFacts.push({
+        field: 'primary_role',
+        old_value: null,
+        new_value: role,
+        confidence: 0.9,
+      });
+    }
+    if (company) {
+      extractedFacts.push({
+        field: 'primary_company',
+        old_value: null,
+        new_value: company,
+        confidence: 0.9,
+      });
+    }
+    events.push({
+      event_type: role && company ? 'profile.role_company_update' : role ? 'profile.role_update' : 'profile.company_update',
+      confidence: 0.9,
+      event_payload: {
+        raw_text: source,
+        trigger: 'labeled_profile_update',
+        role,
+        company,
+      },
+      extracted_facts: extractedFacts,
+    });
+  }
+
+  if (valueByField.preferred_contact_style) {
+    events.push({
+      event_type: 'profile.contact_style_update',
+      confidence: 0.85,
+      event_payload: {
+        raw_text: source,
+        trigger: 'labeled_profile_update',
+        preferred_contact_style: valueByField.preferred_contact_style,
+      },
+      extracted_facts: [
+        {
+          field: 'preferred_contact_style',
+          old_value: null,
+          new_value: valueByField.preferred_contact_style,
+          confidence: 0.85,
+        },
+      ],
+    });
+  }
+
+  if (priorityTopics.length) {
+    events.push({
+      event_type: 'profile.priorities_update',
+      confidence: 0.85,
+      event_payload: {
+        raw_text: source,
+        trigger: 'labeled_profile_update',
+        priorities: priorityTopics,
+      },
+      extracted_facts: priorityTopics.map((topic) => ({
+        field: 'notable_topics',
+        old_value: null,
+        new_value: topic,
+        confidence: 0.85,
+      })),
+    });
+  }
+
+  return events;
+}
+
 async function extractProfileEventsFromText(text: string | null): Promise<ProfileEvent[]> {
   if (!text) return [];
   const source = text;
@@ -357,6 +490,7 @@ async function extractProfileEventsFromText(text: string | null): Promise<Profil
     return [];
   }
   const events: ProfileEvent[] = [];
+  events.push(...parseLabeledProfileUpdates(source));
 
   // Pattern: "I no longer work at X and now I'm at Y"
   const entityToken = "[A-Za-z0-9 .,'-]{1,120}";

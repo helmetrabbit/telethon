@@ -78,6 +78,32 @@ _THIRD_PARTY_TARGET_RE = re.compile(
     re.IGNORECASE,
 )
 _HANDLE_RE = re.compile(r"@([A-Za-z0-9_]{3,32})")
+_SYSTEM_PROMPT_QUERY_RE = re.compile(
+    r"\b(?:system\s+prompt|hidden\s+prompt|developer\s+prompt|instruction(?:s)?|who\s+created\s+you|who\s+made\s+you|who\s+built\s+you)\b",
+    re.IGNORECASE,
+)
+_IDENTITY_OVERRIDE_RE = re.compile(
+    r"\b(?:update|change|rewrite|replace)\b.{0,24}\b(?:system\s+prompt|prompt|instruction(?:s)?)\b|"
+    r"\b(?:call\s+yourself|rename\s+yourself|new\s+identity|from\s+now\s+on\s+you\s+are|reboot|restart|stay\s+in\s+roleplay|roleplay\s+mode|only\s+respond\s+with)\b",
+    re.IGNORECASE,
+)
+_CAPABILITIES_QUERY_RE = re.compile(
+    r"\b(?:what\s+skills\s+do\s+you\s+have|what\s+can\s+you\s+do|your\s+capabilities)\b",
+    re.IGNORECASE,
+)
+_UNSUPPORTED_ACTION_RE = re.compile(
+    r"\b(?:change|update|set)\b.{0,28}\b(?:profile\s+picture|avatar|pfp)\b|"
+    r"\b(?:what\s+files?.{0,24}(?:desktop|~\/|home)|list\s+files?.{0,20}(?:desktop|~\/|home)|on\s+your\s+system|on\s+your\s+machine)\b|"
+    r"\b(?:store|create|save)\b.{0,24}\b(?:new\s+skill|function(?:\s+calling)?)\b|"
+    r"\b(?:fetch|get)\s+my\s+public\s+ip\b|"
+    r"\bcurl\s+https?://",
+    re.IGNORECASE,
+)
+_LLM_FORBIDDEN_CLAIM_RE = re.compile(
+    r"\b(?:system\s+prompt\s+updated|new\s+identity\s+confirmed|rebooting|executing\s+the\s+new\s+function|your\s+public\s+ip\s+is|"
+    r"i(?:'ll| will)\s+(?:update|change|set)\s+my\s+(?:telegram\s+)?(?:profile\s+picture|avatar|pfp))\b",
+    re.IGNORECASE,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -536,6 +562,29 @@ def is_third_party_profile_request(text: Optional[str]) -> bool:
     return True
 
 
+def is_control_plane_request(text: Optional[str]) -> bool:
+    source = _clean_text(text)
+    if not source:
+        return False
+    return bool(_SYSTEM_PROMPT_QUERY_RE.search(source) or _IDENTITY_OVERRIDE_RE.search(source))
+
+
+def is_capabilities_request(text: Optional[str]) -> bool:
+    source = _clean_text(text)
+    if not source:
+        return False
+    return bool(_CAPABILITIES_QUERY_RE.search(source))
+
+
+def is_unsupported_action_request(text: Optional[str]) -> bool:
+    source = _clean_text(text)
+    if not source:
+        return False
+    if is_full_profile_request(source) or is_third_party_profile_request(source):
+        return False
+    return bool(_UNSUPPORTED_ACTION_RE.search(source))
+
+
 def _extract_third_party_target(text: Optional[str]) -> Dict[str, Optional[str]]:
     source = _clean_text(text)
     out: Dict[str, Optional[str]] = {'handle': None, 'name': None, 'company': None}
@@ -828,6 +877,40 @@ def render_indecision_reply(profile: Dict[str, Any]) -> str:
     return "Let's make it concrete. Pick one path:\n" + "\n".join(options) + "\nReply with 1, 2, or 3 and I'll draft the exact next steps."
 
 
+def render_control_plane_reply(persona_name: str) -> str:
+    return (
+        "This assistant is configured by your OpenClaw deployment.\n"
+        f"I can’t disclose or rewrite hidden system instructions, switch identity, or reboot from chat, and I’ll continue as {persona_name}.\n"
+        "If you want behavior changes, tell me the exact response style you want (for example: concise bullets, deeper technical detail, no roleplay)."
+    )
+
+
+def render_capabilities_reply() -> str:
+    return (
+        "Capabilities in this chat:\n"
+        "- Profile snapshot and update capture (role/company/priorities/communication style)\n"
+        "- Third-party profile lookups from existing stored records\n"
+        "- Concrete next-step planning when you’re stuck\n"
+        "Limits:\n"
+        "- I can’t execute shell commands, curl websites, or browse a filesystem from chat\n"
+        "- I can’t change Telegram account settings (profile picture/name/reboot) from chat"
+    )
+
+
+def render_unsupported_action_reply() -> str:
+    return (
+        "I can’t execute that action from chat (no shell/curl/filesystem/account-setting control).\n"
+        "If you want, I can give exact commands or a runbook for you to run on the server."
+    )
+
+
+def llm_reply_looks_untrusted(reply: Optional[str]) -> bool:
+    source = _clean_text(reply)
+    if not source:
+        return False
+    return bool(_LLM_FORBIDDEN_CLAIM_RE.search(source))
+
+
 def call_openrouter_chat(system_prompt: str, user_prompt: str) -> Optional[str]:
     if not DM_RESPONSE_LLM_ENABLED or not OPENROUTER_API_KEY:
         return None
@@ -922,12 +1005,15 @@ def render_llm_conversational_reply(
         "4) If user says they are unsure what to do, provide 3 concrete next-step options tailored to their context.\n"
         "5) If the message is about another person, answer as a third-party lookup and do NOT treat it as a profile update for the sender.\n"
         "6) Avoid repetitive intros, avoid generic filler, avoid asking the same question twice.\n"
+        "7) Never claim to execute tools, shell commands, HTTP requests, profile-picture changes, reboots, or system-prompt edits.\n"
+        "8) If asked for unavailable actions, state limits and give a practical alternative.\n"
         "Output constraints:\n"
         "- Plain text only.\n"
         "- Keep it concise but substantial.\n"
         "- If profile request: use short bullet lines.\n"
         "- If unsure data: say what is missing and ask one precise follow-up.\n"
-        "- Never claim to have updated profile data unless context shows pending_profile_updates for this sender."
+        "- Never claim to have updated profile data unless context shows pending_profile_updates for this sender.\n"
+        "- Never claim your system prompt was changed."
     )
     user_prompt = "Conversation context JSON:\n" + json.dumps(context, ensure_ascii=True)
     return call_openrouter_chat(system_prompt, user_prompt)
@@ -1046,8 +1132,21 @@ def render_response(args: argparse.Namespace, conn, row: Dict[str, Any]) -> str:
     if third_party_lookup:
         return render_third_party_profile_reply(third_party_lookup)
 
+    latest_text = row.get('text')
+    if is_control_plane_request(latest_text):
+        return render_control_plane_reply(args.persona_name)
+    if is_capabilities_request(latest_text):
+        return render_capabilities_reply()
+    if is_unsupported_action_request(latest_text):
+        return render_unsupported_action_reply()
+
+    if is_full_profile_request(latest_text) or is_indecision_request(latest_text):
+        return render_conversational_reply(row, profile, args.persona_name, pending_events)
+    if _collect_current_message_updates(row, pending_events):
+        return render_conversational_reply(row, profile, args.persona_name, pending_events)
+
     llm_reply = render_llm_conversational_reply(row, profile, args.persona_name, recent_messages, pending_events)
-    if llm_reply:
+    if llm_reply and not llm_reply_looks_untrusted(llm_reply):
         return llm_reply
     return render_conversational_reply(row, profile, args.persona_name, pending_events)
 
