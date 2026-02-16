@@ -73,21 +73,24 @@ async function main() {
       const handle = p.username || null;
       const displayName = p.display_name || p.first_name || p.username || null;
       const bio = p.about || p.bio || null;
+      const bioSource = bio ? 'telegram_export' : null;
       
       const res = await client.query(
-        `INSERT INTO users (platform, external_id, handle, display_name, bio, is_scam, is_fake, is_verified, is_premium, lang_code)
-         VALUES ('telegram', $1, $2, $3, $4, $5, $6, $7, $8, $9)
+        `INSERT INTO users (platform, external_id, handle, display_name, bio, bio_source, bio_updated_at, is_scam, is_fake, is_verified, is_premium, lang_code)
+         VALUES ('telegram', $1, $2, $3::text, $4::text, $5::text, CASE WHEN COALESCE($4::text, '') <> '' THEN now() ELSE NULL END, $6, $7, $8, $9, $10)
          ON CONFLICT (platform, external_id) DO UPDATE SET
            handle = COALESCE(EXCLUDED.handle, users.handle),
            display_name = COALESCE(EXCLUDED.display_name, users.display_name),
            bio = COALESCE(EXCLUDED.bio, users.bio),
+           bio_source = CASE WHEN EXCLUDED.bio IS NOT NULL AND EXCLUDED.bio <> '' THEN EXCLUDED.bio_source ELSE users.bio_source END,
+           bio_updated_at = CASE WHEN EXCLUDED.bio IS NOT NULL AND EXCLUDED.bio <> '' THEN now() ELSE users.bio_updated_at END,
            is_scam = COALESCE(EXCLUDED.is_scam, users.is_scam),
            is_fake = COALESCE(EXCLUDED.is_fake, users.is_fake),
            is_verified = COALESCE(EXCLUDED.is_verified, users.is_verified),
            is_premium = COALESCE(EXCLUDED.is_premium, users.is_premium),
            lang_code = COALESCE(EXCLUDED.lang_code, users.lang_code)
          RETURNING id`,
-        [extId, handle, displayName, bio, p.scam, p.fake, p.verified, p.premium, p.lang_code]
+        [extId, handle, displayName, bio, bioSource, p.scam, p.fake, p.verified, p.premium, p.lang_code]
       );
       userMap.set(extId, res.rows[0].id);
     }
@@ -97,6 +100,7 @@ async function main() {
     // 4. Prepare message data
     console.log('   Preparing message data...');
     const messages: string[] = [];
+    const mentionRows: string[] = [];
     let skipped = 0;
     
     for (const rawMsg of exportData.messages) {
@@ -161,9 +165,23 @@ async function main() {
       ].join('\t');
       
       messages.push(row);
+
+      if (mentions.length > 0) {
+        for (const handle of mentions) {
+          // temp table: group_id, external_message_id, mentioned_handle
+          mentionRows.push([
+            groupId,
+            msg.id,
+            escape(handle),
+          ].join('\t'));
+        }
+      }
     }
     
     console.log(`   ✅ ${messages.length.toLocaleString()} messages prepared (${skipped} skipped)`);
+    if (mentionRows.length > 0) {
+      console.log(`   ✅ ${mentionRows.length.toLocaleString()} mentions prepared`);
+    }
 
     // 5. COPY into database
     console.log('   🚀 Bulk loading via COPY...');
@@ -178,6 +196,41 @@ async function main() {
     
     const dataStream = require('stream').Readable.from(messages.map(m => m + '\n'));
     await pipeline(dataStream, copyStream);
+
+    // 6. Insert mentions (if any)
+    if (mentionRows.length > 0) {
+      await client.query(`
+        CREATE TEMP TABLE temp_message_mentions (
+          group_id BIGINT,
+          external_message_id TEXT,
+          mentioned_handle TEXT
+        ) ON COMMIT DROP
+      `);
+
+      const mentionCopy = client.query(copyFrom(`
+        COPY temp_message_mentions (
+          group_id, external_message_id, mentioned_handle
+        ) FROM STDIN
+      `));
+
+      const mentionStream = require('stream').Readable.from(mentionRows.map(m => m + '\n'));
+      await pipeline(mentionStream, mentionCopy);
+
+      await client.query(`
+        INSERT INTO message_mentions (message_id, mentioned_handle, mentioned_user_id)
+        SELECT
+          m.id,
+          t.mentioned_handle,
+          u.id
+        FROM temp_message_mentions t
+        JOIN messages m
+          ON m.group_id = t.group_id
+         AND m.external_message_id = t.external_message_id
+        LEFT JOIN users u
+          ON LOWER(u.handle) = t.mentioned_handle
+        ON CONFLICT DO NOTHING
+      `);
+    }
     
     const elapsed = (Date.now() - t0) / 1000;
     const rate = Math.round(messages.length / elapsed);

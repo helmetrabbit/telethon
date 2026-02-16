@@ -164,6 +164,7 @@ const LINK_RE = /https?:\/\/[^\s)>\]]+/gi;
  * Returns deduplicated, lowercased handles (without @).
  */
 export function extractMentions(plainText: string): string[] {
+  MENTION_RE.lastIndex = 0;
   const matches = plainText.matchAll(MENTION_RE);
   const handles = new Set<string>();
   for (const m of matches) {
@@ -176,6 +177,7 @@ export function extractMentions(plainText: string): string[] {
  * Check whether the text contains at least one http(s) link.
  */
 export function hasLinks(plainText: string): boolean {
+  LINK_RE.lastIndex = 0;
   return LINK_RE.test(plainText);
 }
 

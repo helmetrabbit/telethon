@@ -1,0 +1,25 @@
+services:
+  tgprofile-postgres:
+    image: postgres:16-alpine
+    container_name: tgprofile-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: tgprofile
+      POSTGRES_PASSWORD: localdev
+      POSTGRES_DB: tgprofile
+    volumes:
+      - telethon_pgdata:/var/lib/postgresql/data
+    networks:
+      - openclaw_default
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tgprofile -d tgprofile"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  telethon_pgdata:
+
+networks:
+  openclaw_default:
+    external: true
