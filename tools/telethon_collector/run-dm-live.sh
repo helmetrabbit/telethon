@@ -7,7 +7,6 @@ LISTENER_PID_FILE="$PID_DIR/tg-listen-dm.pid"
 SUPERVISOR_PID_FILE="$PID_DIR/tg-live-supervisor.pid"
 LOG_DIR="$ROOT_DIR/data/logs"
 LOCK_FILE="$PID_DIR/tg-live-supervisor.lock"
-TELEGRAM_SESSION_LOCK="$PID_DIR/telethon-session.lock"
 JSONL_FILE="${1:-data/exports/telethon_dms_live.jsonl}"
 INTERVAL="${2:-30}"
 MODE="${3:-profile}"  # profile|ingest
@@ -60,6 +59,16 @@ is_running() {
   pid="$(cat "$pid_file" 2>/dev/null || true)"
   [ -n "$pid" ] || return 1
   kill -0 "$pid" 2>/dev/null
+}
+
+listener_is_running() {
+  if is_running "$LISTENER_PID_FILE"; then
+    return 0
+  fi
+
+  local pids
+  pids=$(pgrep -f "python3 listen-dms.py --out ${JSONL_PATH}" || true)
+  [ -n "$pids" ]
 }
 
 check_requirements() {
@@ -172,8 +181,6 @@ start_listener() {
   fi
 
   (
-    exec 11>>"$TELEGRAM_SESSION_LOCK"
-    flock -n 11 || { echo "[$(date -Is)] listener failed to acquire telethon session lock" >> "$LOG_DIR/dm-listener.log"; exit 1; }
     cd "$ROOT_DIR"
     DM_AUTO_ACK="${DM_AUTO_ACK:-0}" \
     DM_AUTO_ACK_TEXT="${DM_AUTO_ACK_TEXT:-Got it — I captured this message and will process it now.}" \
@@ -263,14 +270,18 @@ run_ingest_cycle() {
     fi
 
     if [ "$RESPONSE_ENABLED" = "1" ] || [ "$RESPONSE_ENABLED" = "true" ]; then
+      local listener_was_running=0
+      if listener_is_running; then
+        listener_was_running=1
+        stop_listener
+        cleanup_stale_listener "$JSONL_PATH"
+        sleep 1
+      fi
+
       if has_response_status_column; then
         (
           cd "$ROOT_DIR"
-          DM_SESSION_PATH="$SESSION_PATH" \
-          DM_RESPONSE_LIMIT="${DM_RESPONSE_LIMIT:-20}" \
-          DM_MAX_RETRIES="${DM_MAX_RETRIES:-3}" \
-          DM_RESPONSE_TEMPLATE="${DM_RESPONSE_TEMPLATE:-Got it — I captured this message and will reply shortly.}" \
-          bash tools/telethon_collector/run-dm-response.sh
+          DM_SESSION_PATH="$SESSION_PATH"           DM_RESPONSE_LIMIT="${DM_RESPONSE_LIMIT:-20}"           DM_MAX_RETRIES="${DM_MAX_RETRIES:-3}"           DM_RESPONSE_TEMPLATE="${DM_RESPONSE_TEMPLATE:-Got it — I captured this message and will reply shortly.}"           bash tools/telethon_collector/run-dm-response.sh
         ) >> "$LOG_DIR/dm-respond.log" 2>&1
         local respond_status=$?
         if [ "$respond_status" -ne 0 ]; then
@@ -280,6 +291,10 @@ run_ingest_cycle() {
       else
         log "response_status column missing; skipping responder until schema is migrated"
         echo "[$(date -Is)] skipping response cycle: dm_messages.response_status missing" >> "$LOG_DIR/dm-respond.log"
+      fi
+
+      if [ "$listener_was_running" -eq 1 ]; then
+        start_listener || true
       fi
     fi
   else
