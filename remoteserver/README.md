@@ -27,3 +27,8 @@ Optional arguments:
 ```bash
 bash remoteserver/audit-openclaw-server.sh cat@96.43.135.91 remoteserver/OPENCLAW_AUDIT_LATEST.md
 ```
+
+The generated audit now includes:
+- workspace read/write probe from inside OpenClaw runtime
+- Postgres access/privilege checks for `tgprofile`
+- Telethon runtime readiness (venv/import/env/session/Telegram egress)

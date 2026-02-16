@@ -1,6 +1,6 @@
 # OpenClaw Audit Snapshot
 
-- Generated (UTC): 2026-02-16T05:48:38Z
+- Generated (UTC): 2026-02-16T06:15:04Z
 - Remote: `cat@96.43.135.91`
 
 ## Host and Runtime
@@ -8,10 +8,10 @@
 ```text
 hostname: litterbox
 user: cat
-time: 2026-02-16T05:48:43+00:00
+time: 2026-02-16T06:15:08+00:00
 os: Ubuntu 24.04.2 LTS
 kernel: 6.8.0-90-generic
-uptime: 05:48:43 up 24 days, 14:24,  1 user,  load average: 0.08, 0.09, 0.09
+uptime: 06:15:08 up 24 days, 14:51,  1 user,  load average: 0.17, 0.21, 0.14
 docker: Docker version 28.3.2, build 578ccf6
 compose: Docker Compose version v2.38.2
 tailscale: 1.94.2
@@ -31,8 +31,8 @@ openclaw_version: 2026.2.15
 
 ```text
 NAMES                         IMAGE                  STATUS                  PORTS
-openclaw-openclaw-gateway-1   openclaw:local         Up 14 hours             100.110.29.6:18789-18790->18789-18790/tcp
-tgprofile-postgres            postgres:16-alpine     Up 15 hours (healthy)   100.110.29.6:5433->5432/tcp
+openclaw-openclaw-gateway-1   openclaw:local         Up 15 hours             100.110.29.6:18789-18790->18789-18790/tcp
+tgprofile-postgres            postgres:16-alpine     Up 16 hours (healthy)   100.110.29.6:5433->5432/tcp
 timescaledb                   explorer-timescaledb   Up 3 weeks              0.0.0.0:5432->5432/tcp, [::]:5432->5432/tcp
 ```
 
@@ -70,6 +70,7 @@ tcp   LISTEN 0      4096                          [::]:5432          [::]:*
 ```text
 OPENCLAW_BRIDGE_PORT
 OPENCLAW_CONFIG_DIR
+OPENCLAW_DOCKER_APT_PACKAGES
 OPENCLAW_GATEWAY_BIND
 OPENCLAW_GATEWAY_PORT
 OPENCLAW_GATEWAY_TOKEN
@@ -83,6 +84,16 @@ OPENCLAW_WORKSPACE_DIR
 1:DATABASE_URL=postgresql://tgprofile:********@tgprofile-postgres:5432/tgprofile?sslmode=disable
 ```
 
+## Workspace Access Probe
+
+```text
+uid=1000(node) gid=1000(node) groups=1000(node)
+drwx------  5 node node 4096 Feb 15 11:34 /home/node/.openclaw/workspace
+drwxr-xr-x 12 node node 4096 Feb 16 06:11 /home/node/.openclaw/workspace/telethon
+-rw-r--r-- 1 node node 6 Feb 16 06:15 /home/node/.openclaw/workspace/telethon/.openclaw_rw_probe_5593
+workspace_write_test=PASS
+```
+
 ## OpenClaw State Permissions
 
 ```text
@@ -91,7 +102,7 @@ drwx------  3 cat cat 4096 Feb 15 09:50 /home/cat/.openclaw/agents
 drwx------  2 cat cat 4096 Feb 15 09:54 /home/cat/.openclaw/canvas
 drwx------  2 cat cat 4096 Feb 15 09:53 /home/cat/.openclaw/completions
 drwx------  2 cat cat 4096 Feb 15 15:35 /home/cat/.openclaw/cron
-drwxr-xr-x  2 cat cat 4096 Feb 16 05:34 /home/cat/.openclaw/devices
+drwxr-xr-x  2 cat cat 4096 Feb 16 06:14 /home/cat/.openclaw/devices
 -rw-------  1 cat cat  176 Feb 16 05:27 /home/cat/.openclaw/exec-approvals.json
 drwxr-xr-x  3 cat cat 4096 Feb 15 15:35 /home/cat/.openclaw/gateway
 drwx------  2 cat cat 4096 Feb 15 10:00 /home/cat/.openclaw/identity
@@ -128,11 +139,11 @@ tmux
 node: v22.22.0
 npm: 10.9.4
 python3: Python 3.11.2
-pip3: MISSING
+pip3: pip 23.0.1 from /usr/lib/python3/dist-packages/pip (python 3.11)
 git: git version 2.39.5
-rg: MISSING
-jq: MISSING
-psql: MISSING
+rg: ripgrep 13.0.0
+jq: jq-1.6
+psql: psql (PostgreSQL) 15.16 (Debian 15.16-0+deb12u1)
 make: GNU Make 4.3
 gcc: gcc (Debian 12.2.0-14+deb12u1) 12.2.0
 g++: g++ (Debian 12.2.0-14+deb12u1) 12.2.0
@@ -147,7 +158,7 @@ go: MISSING
 Agents: main (default)
 Heartbeat interval: 30m (main)
 Session store (main): /home/node/.openclaw/agents/main/sessions/sessions.json (1 entries)
-- agent:main:main (0m ago)
+- agent:main:main (13m ago)
 ```
 
 ## tgprofile DB Access
@@ -163,7 +174,7 @@ schema_privs_ok
 t
 (1 row)
 total_tables	rw_tables
-14	14
+15	15
 (1 row)
 total_sequences	rw_sequences
 8	8
@@ -173,6 +184,20 @@ S	tgprofile	public	{tgprofile=rwU/tgprofile}
 f	tgprofile	public	{tgprofile=X/tgprofile}
 r	tgprofile	public	{tgprofile=arwdDxt/tgprofile}
 (3 rows)
+```
+
+## Telethon Readiness
+
+```text
+telethon_collector=present
+telethon_venv=present
+telethon_import=PASS version=1.42.0
+TG_API_ID=empty
+TG_API_HASH=empty
+TG_PHONE=empty
+TG_SESSION_PATH=set
+telethon_session=missing
+telegram_egress=PASS
 ```
 
 ## tgprofile DB Stats

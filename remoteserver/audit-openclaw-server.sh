@@ -89,6 +89,23 @@ workspace_db_url() {
   fi
 }
 
+workspace_rw() {
+  if ! docker ps --format '{{.Names}}' | grep -qx 'openclaw-openclaw-gateway-1'; then
+    echo "openclaw-openclaw-gateway-1 not running"
+    return
+  fi
+  docker exec openclaw-openclaw-gateway-1 sh -lc '
+    set -e
+    id
+    ls -ld /home/node/.openclaw/workspace /home/node/.openclaw/workspace/telethon
+    probe=/home/node/.openclaw/workspace/telethon/.openclaw_rw_probe_$$
+    echo "probe" > "$probe"
+    ls -l "$probe"
+    rm -f "$probe"
+    echo "workspace_write_test=PASS"
+  '
+}
+
 openclaw_permissions() {
   ls -ld "$HOME/.openclaw" "$HOME/.openclaw"/* 2>/dev/null || true
 }
@@ -146,6 +163,55 @@ order by 1;
 SQL
 }
 
+telethon_readiness() {
+  if ! docker ps --format '{{.Names}}' | grep -qx 'openclaw-openclaw-gateway-1'; then
+    echo "openclaw-openclaw-gateway-1 not running"
+    return
+  fi
+  docker exec openclaw-openclaw-gateway-1 sh -lc '
+    set -e
+    base=/home/node/.openclaw/workspace/telethon/tools/telethon_collector
+    if [ ! -d "$base" ]; then
+      echo "telethon_collector=missing"
+      exit 0
+    fi
+    echo "telethon_collector=present"
+    if [ -x "$base/.venv/bin/python" ]; then
+      echo "telethon_venv=present"
+      "$base/.venv/bin/python" - <<'"'"'PY'"'"'
+import telethon
+print("telethon_import=PASS version=" + telethon.__version__)
+PY
+    else
+      echo "telethon_venv=missing"
+    fi
+    if [ -f "$base/.env" ]; then
+      python3 - <<'"'"'PY'"'"'
+from pathlib import Path
+p = Path("/home/node/.openclaw/workspace/telethon/tools/telethon_collector/.env")
+keys = ["TG_API_ID", "TG_API_HASH", "TG_PHONE", "TG_SESSION_PATH"]
+vals = {}
+for line in p.read_text().splitlines():
+    s = line.strip()
+    if not s or s.startswith("#") or "=" not in s:
+        continue
+    k, v = s.split("=", 1)
+    vals[k.strip()] = v.strip()
+for k in keys:
+    print(f"{k}=" + ("set" if vals.get(k, "") else "empty"))
+PY
+    else
+      echo "telethon_env_file=missing"
+    fi
+    [ -f "$base/telethon.session" ] && echo "telethon_session=present" || echo "telethon_session=missing"
+    if command -v nc >/dev/null 2>&1; then
+      (nc -vz -w 5 api.telegram.org 443 >/dev/null 2>&1 && echo "telegram_egress=PASS") || echo "telegram_egress=FAIL"
+    else
+      echo "telegram_egress=unknown (nc missing)"
+    fi
+  '
+}
+
 db_stats() {
   if docker ps --format '{{.Names}}' | grep -qx 'tgprofile-postgres'; then
     docker exec -e PGPASSWORD=localdev -i tgprofile-postgres psql -U tgprofile -d tgprofile -Atc "select current_database(), current_user, pg_size_pretty(pg_database_size(current_database()));"
@@ -161,11 +227,13 @@ print_block "Listening Ports (selected)" ports
 print_block "OpenClaw JSON Summary" openclaw_json_summary
 print_block "Configured Env Keys (names only)" env_keys
 print_block "Workspace DATABASE_URL (redacted)" workspace_db_url
+print_block "Workspace Access Probe" workspace_rw
 print_block "OpenClaw State Permissions" openclaw_permissions
 print_block "Host Tooling" host_tools
 print_block "OpenClaw Container Tooling" container_tools
 print_block "Gateway Health" gateway_health
 print_block "tgprofile DB Access" db_access
+print_block "Telethon Readiness" telethon_readiness
 print_block "tgprofile DB Stats" db_stats
 REMOTE
 } >"$OUT_FILE"

@@ -1,6 +1,6 @@
 # OpenClaw Remote Server Status (litterbox)
 
-Last audited: **2026-02-16 05:28 UTC** via SSH.
+Last audited: **2026-02-16 06:15 UTC** via SSH.
 
 ## Environment Snapshot
 
@@ -10,7 +10,6 @@ Last audited: **2026-02-16 05:28 UTC** via SSH.
 - Tailscale DNS: `litterbox.tail5951f7.ts.net`
 - OS: Ubuntu 24.04.2 LTS
 - Kernel: `6.8.0-90-generic`
-- Uptime at audit: ~24 days
 - Docker: `28.3.2`
 - Docker Compose: `v2.38.2`
 - Tailscale: `1.94.2`
@@ -20,12 +19,11 @@ Last audited: **2026-02-16 05:28 UTC** via SSH.
 - Repo path: `~/openclaw`
 - Repo commit: `80abb5ab9` on `main`
 - OpenClaw runtime version: `2026.2.15`
-- Docker image in use: `openclaw:local` (built ~20h before audit)
+- Docker image in use: `openclaw:local`
 - Default model from gateway logs: `openai-codex/gpt-5.3-codex-spark`
 - Control UI is TLS-enabled (`gateway.tls.enabled: true`)
 - `gateway.controlUi.allowInsecureAuth: true`
 - Gateway token is configured and required for dashboard access
-- OAuth/device identity files exist under `~/.openclaw/identity`
 
 ## Running Containers and Port Exposure
 
@@ -54,17 +52,26 @@ Last audited: **2026-02-16 05:28 UTC** via SSH.
 | Server host shell (`cat@litterbox`) | Tailnet bind on host | `postgresql://tgprofile:localdev@100.110.29.6:5433/tgprofile?sslmode=disable` |
 | Laptop over Tailscale | Tailnet bind on host | `postgresql://tgprofile:localdev@100.110.29.6:5433/tgprofile` |
 
-Notes:
-- For OpenClaw running on the server, `tgprofile-postgres:5432` is the primary endpoint.
-- `litterbox:5433` may be inconsistent depending on runtime DNS path; `100.110.29.6:5433` is the stable external endpoint.
-
-## Postgres Access Verification (OpenClaw)
+## Workspace + DB Verification (OpenClaw Runtime)
 
 Validated on **2026-02-16**:
-- Workspace `DATABASE_URL` is set to `...@tgprofile-postgres:5432/...` on server.
-- `tgprofile` role has read/write access across existing public tables and sequences.
-- Explicit grants/default privileges were applied so future objects keep the same access profile.
-- Write probe passed (`CREATE TABLE`, `INSERT`, `UPDATE`, `DELETE`) inside a rolled-back transaction.
+- Workspace mount is read/write from OpenClaw container (`workspace_write_test=PASS`).
+- Workspace `DATABASE_URL` points to `tgprofile-postgres:5432`.
+- SQL auth/query/write from OpenClaw runtime passes (`db_query=PASS`, write probe pass).
+- `tgprofile` has explicit grants/default privileges on public tables/sequences.
+
+## Telethon Readiness (OpenClaw Runtime)
+
+Current status:
+- Telethon collector is present in workspace.
+- Python venv exists at `tools/telethon_collector/.venv`.
+- Telethon import passes (`telethon==1.42.0`).
+- Telegram egress check passes (`api.telegram.org:443`).
+- Missing inputs for actual account login/use:
+  - `TG_API_ID` empty
+  - `TG_API_HASH` empty
+  - `TG_PHONE` empty
+  - `telethon.session` missing
 
 ## Installed Tooling (Host)
 
@@ -74,9 +81,9 @@ Missing: `psql`, `pip3`, `zip`, `unzip`
 
 ## Installed Tooling (Inside OpenClaw Gateway Container)
 
-Present: `node`, `npm`, `python3`, `git`, `make`, `gcc`, `g++`
+Present: `node`, `npm`, `python3`, `pip3`, `git`, `rg`, `jq`, `psql`, `nc`, `make`, `gcc`, `g++`
 
-Missing: `pip3`, `rg`, `jq`, `psql`, `cargo`, `rustc`, `go`
+Missing: `cargo`, `rustc`, `go`
 
 ## Findings and Recommendations
 
@@ -88,24 +95,21 @@ Missing: `pip3`, `rg`, `jq`, `psql`, `cargo`, `rustc`, `go`
 - Current: top-level is `700`, sensitive files are `600`, but at least `gateway/` and `devices/` are `755`.
 - Recommendation: set all state subdirs to `700` unless a specific reason exists.
 
-3. OpenClaw host tooling is usable but not fully operator-friendly.
-- Recommendation: install `postgresql-client`, `python3-pip`, `zip`, `unzip` on host for easier maintenance.
+3. Host tooling is still light for direct host-side operations.
+- Recommendation: install `postgresql-client`, `python3-pip`, `zip`, `unzip` on host.
 
-4. Container apt extras are currently empty (`OPENCLAW_DOCKER_APT_PACKAGES=`).
-- Recommendation: if you want richer in-agent tooling, set this and rebuild `openclaw:local`, for example:
-  - `ripgrep jq postgresql-client unzip zip`
+4. Container tool fixes are applied, and build args are now configured for persistence.
+- Current: `OPENCLAW_DOCKER_APT_PACKAGES` is set in `~/openclaw/.env`.
+- Recommendation: rebuild/recreate OpenClaw container to fully bake these into image lifecycle.
 
 5. Gateway auth mode is currently convenience-oriented (`gateway.controlUi.allowInsecureAuth: true`).
 - Recommendation: if you want stricter operator security, set it to `false` and use paired-device auth only.
 
 6. `tgprofile` currently has broad DB power (superuser-level).
-- Recommendation: if you want least-privilege hardening, create a non-superuser app role for OpenClaw and rotate `DATABASE_URL` to that role.
+- Recommendation: create a least-privilege app role and rotate `DATABASE_URL` to that role.
 
-## Current Behavior Notes
-
-- Gateway health check is passing (`node dist/index.js health`).
-- Dashboard auth failures in logs are mostly from sessions that did not paste a token yet (`token_missing`).
-- Successful authenticated dashboard sessions are present in recent logs.
+7. Telethon account setup is blocked only on credentials/session bootstrap.
+- Recommendation: fill `tools/telethon_collector/.env`, run first login once to generate `telethon.session`.
 
 ## Refresh Procedure (Keep This Current)
 
@@ -115,7 +119,10 @@ Run from this repo:
 bash remoteserver/audit-openclaw-server.sh
 ```
 
-This regenerates `remoteserver/OPENCLAW_AUDIT_LATEST.md` with a fresh timestamped snapshot.
+This regenerates `remoteserver/OPENCLAW_AUDIT_LATEST.md` with a fresh snapshot including:
+- Workspace write probe
+- Postgres access checks
+- Telethon readiness checks
 
 ## Useful Commands
 
@@ -137,8 +144,8 @@ OpenClaw health:
 ssh cat@96.43.135.91 'docker exec openclaw-openclaw-gateway-1 node dist/index.js health'
 ```
 
-List listening ports:
+Run current audit:
 
 ```bash
-ssh cat@96.43.135.91 'ss -tulpn'
+bash remoteserver/audit-openclaw-server.sh
 ```
