@@ -25,7 +25,7 @@ Output schema (one JSON object per line):
     "views": 0,
     "forwards": 0,
     "has_links": false,
-    "has_mentions": true,
+    "has_mentions": false,
     "text_len": 42
   }
 """
@@ -35,8 +35,10 @@ import asyncio
 import json
 import os
 import re
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 from dotenv import load_dotenv
 from telethon import TelegramClient, events
@@ -45,27 +47,11 @@ from telethon.tl.types import PeerUser
 
 # ── Load .env from collector directory ─────────────────
 _SCRIPT_DIR = Path(__file__).resolve().parent
+_ROOT_DIR = _SCRIPT_DIR.parent.parent
 load_dotenv(_SCRIPT_DIR / ".env")
 
 API_ID = os.getenv("TG_API_ID")
 API_HASH = os.getenv("TG_API_HASH")
-_session_env = os.getenv("TG_SESSION_PATH")
-ROOT_DIR = _SCRIPT_DIR.parent.parent
-if _session_env:
-    candidate = Path(_session_env)
-    if candidate.is_absolute():
-        SESSION_PATH = str(candidate)
-    else:
-        script_candidate = _SCRIPT_DIR / candidate
-        root_candidate = ROOT_DIR / candidate
-        if script_candidate.exists():
-            SESSION_PATH = str(script_candidate)
-        elif root_candidate.exists():
-            SESSION_PATH = str(root_candidate)
-        else:
-            SESSION_PATH = str(script_candidate)
-else:
-    SESSION_PATH = str(_SCRIPT_DIR / "telethon.session")
 
 LINK_RE = re.compile(r"https?://\S+")
 MENTION_RE = re.compile(r"@[A-Za-z0-9_]+")
@@ -83,7 +69,33 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="If set, skip outbound DM messages from the logged-in account.",
     )
+    p.add_argument(
+        "--session-path",
+        default=os.getenv("TG_SESSION_PATH", str(_SCRIPT_DIR / "telethon.session")),
+        help="Path to Telethon session file (default: TG_SESSION_PATH env or tools/telethon_collector/telethon.session)",
+    )
+    p.add_argument(
+        "--auto-ack",
+        action="store_true",
+        help="Send a short acknowledgement for each inbound message.",
+    )
+    p.add_argument(
+        "--ack-text",
+        default=os.getenv("DM_AUTO_ACK_TEXT", "Got it — I captured this and will process it.") ,
+        help="Acknowledgement message when --auto-ack is enabled.",
+    )
     return p.parse_args()
+
+
+def resolve_session_path(raw: str) -> str:
+    path = Path(raw)
+    if path.is_absolute():
+        return str(path)
+    candidate = (_SCRIPT_DIR / path).resolve()
+    root_candidate = (_ROOT_DIR / path).resolve()
+    if root_candidate.exists() and not candidate.exists():
+        return str(root_candidate)
+    return str(candidate)
 
 
 def looks_like_message(msg) -> bool:
@@ -127,21 +139,52 @@ def serialize_message(msg, sender, peer):
     }
 
 
+def parse_bool(value: Optional[str], default: bool = False) -> bool:
+    if not value:
+        return default
+    return value.strip().lower() in ("1", "true", "yes", "on", "y")
+
+
+async def start_with_retry(client: TelegramClient, attempts: int = 3) -> None:
+    last_err = None
+    for attempt in range(1, attempts + 1):
+        try:
+            await client.start()
+            return
+        except sqlite3.OperationalError as e:
+            if "locked" not in str(e).lower():
+                raise
+            last_err = e
+            if attempt >= attempts:
+                raise
+            wait = attempt * 2
+            print(f"SQLite session lock on startup, retrying in {wait}s (attempt {attempt}/{attempts})")
+            await asyncio.sleep(wait)
+    if last_err:
+        raise last_err
+
+
 async def main() -> None:
     args = parse_args()
 
     if not API_ID or not API_HASH:
         raise SystemExit("TG_API_ID and TG_API_HASH must be set in tools/telethon_collector/.env")
 
+    auto_ack = args.auto_ack or parse_bool(os.getenv("DM_AUTO_ACK"))
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    client = TelegramClient(SESSION_PATH, int(API_ID), API_HASH)
+    session_path = resolve_session_path(args.session_path)
+    session_parent = Path(session_path).parent
+    session_parent.mkdir(parents=True, exist_ok=True)
+
+    client = TelegramClient(session_path, int(API_ID), API_HASH)
 
     async def on_startup(_: TelegramClient):
         me = await client.get_me()
         print(f"✅ DM listener connected as {me.first_name} ({me.id})")
         print("ℹ️  Filtering to private chats only (no groups/channels).")
+        print(f"📝 Session path: {session_path}")
         print(f"📝 Writing raw DM events to: {out_path}")
         print("Press Ctrl+C to stop.")
 
@@ -180,7 +223,13 @@ async def main() -> None:
         peer_label = row["peer_name"] or row["peer_username"] or row["peer_id"] or "unknown"
         print(f"{datetime.now(timezone.utc).isoformat()}  [{direction}] {sender_label} -> {peer_label}: {str(msg.message or '')[:100]}")
 
-    await client.start()
+        if auto_ack and direction == "inbound":
+            try:
+                await event.respond(args.ack_text)
+            except Exception as exc:
+                print(f"⚠️  Failed to send auto-ack: {exc}")
+
+    await start_with_retry(client)
     await on_startup(client)
     await client.run_until_disconnected()
 
@@ -190,5 +239,11 @@ if __name__ == "__main__":
         asyncio.run(main())
     except SessionPasswordNeededError:
         raise SystemExit("2FA is enabled; please log in once interactively to create the session file.")
+    except EOFError:
+        raise SystemExit(
+            "Telegram requires interactive login to create/refresh the session. "
+            "Run once in a terminal: cd tools/telethon_collector && . .venv/bin/activate && "
+            "TG_SESSION_PATH=<path> python3 listen-dms.py --out <path>"
+        )
     except KeyboardInterrupt:
         print("\n🛑 DM listener stopped by user.")

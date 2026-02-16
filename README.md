@@ -269,6 +269,14 @@ Supervisor semantics:
 - runs reconciliation in the same cycle when started with `tg-live-start`
 - uses exponential-ish backoff after failures
 
+Important behavior:
+- This pipeline is **capture + ingest + reconcile only**. It does not
+  perform conversational reply generation.
+- The supervisor now sends a lightweight inbound acknowledgement message (`DM_AUTO_ACK`) by default
+  when `listen-dms.py` is running. That message is not full context; it is only a receipt.
+- If you stop getting listener output and see `EOFError: EOF when reading a line` or repeated
+  "Please enter your phone", the Telegram session needs interactive re-auth once.
+
 To run under systemd, call `make tg-live-start` from a service that stays running; logs are written to `data/logs/` and state is persisted in `data/.state/`.
 
 Example systemd unit bootstrap (adjust paths/user):

@@ -55,7 +55,9 @@ serve-viewer:
 # ── DM-only live listener (private chats only) ───────────
 tg-listen-dm:
 	@OUT=$${out:-../../data/exports/telethon_dms_live.jsonl}; \
-	cd tools/telethon_collector && . .venv/bin/activate && python3 listen-dms.py --out "$$OUT"
+	SESSION_PATH=$${session_path:-$${SESSION_PATH}}; \
+	if [ -z "$$SESSION_PATH" ]; then SESSION_PATH=../../tools/telethon_collector/telethon.session; fi; \
+	cd tools/telethon_collector && . .venv/bin/activate && TG_SESSION_PATH="$$SESSION_PATH" python3 listen-dms.py --out "$$OUT"
 
 # ── DM JSONL to Postgres (requires dm tables migration) ───────────
 tg-ingest-dm-jsonl:

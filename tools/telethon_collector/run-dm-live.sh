@@ -6,10 +6,12 @@ PID_DIR="$ROOT_DIR/data/.pids"
 LISTENER_PID_FILE="$PID_DIR/tg-listen-dm.pid"
 SUPERVISOR_PID_FILE="$PID_DIR/tg-live-supervisor.pid"
 LOG_DIR="$ROOT_DIR/data/logs"
+LOCK_FILE="$PID_DIR/tg-live-supervisor.lock"
 JSONL_FILE="${1:-data/exports/telethon_dms_live.jsonl}"
 INTERVAL="${2:-30}"
 MODE="${3:-profile}"  # profile|ingest
 STATE_FILE="${4:-$ROOT_DIR/data/.state/dm-live.state.json}"
+SESSION_PATH="${5:-$ROOT_DIR/tools/telethon_collector/telethon.session}"
 
 if [[ "$JSONL_FILE" = /* ]]; then
   JSONL_PATH="$JSONL_FILE"
@@ -18,8 +20,9 @@ else
 fi
 
 mkdir -p "$PID_DIR" "$LOG_DIR" "$(dirname "$STATE_FILE")"
+mkdir -p "$(dirname "$SESSION_PATH")"
 
-# Normalize arguments
+# Normalize and validate args
 if [ "$INTERVAL" -le 0 ]; then
   echo "INTERVAL must be > 0" >&2
   exit 1
@@ -34,10 +37,36 @@ is_running() {
   kill -0 "$pid" 2>/dev/null
 }
 
-start_listener() {
-  if is_running "$LISTENER_PID_FILE"; then
-    return 0
+cleanup_stale_listener() {
+  local out_path="$1"
+  local pids
+  # kill any old listeners targeting this exact output file path (prevents sqlite session lock races)
+  pids=$(pgrep -f "python3 listen-dms.py --out ${out_path}" || true)
+  if [ -n "$pids" ]; then
+    echo "Cleaning up old listener processes: $pids"
+    while IFS= read -r pid; do
+      if [ -n "$pid" ] && [ "$pid" != "$$" ]; then
+        kill "$pid" 2>/dev/null || true
+      fi
+    done <<< "$pids"
+    sleep 1
   fi
+}
+
+cleanup_listener_pidfile() {
+  local path=$1
+  if [ -f "$path" ]; then
+    local pid
+    pid="$(cat "$path" 2>/dev/null || true)"
+    if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then
+      rm -f "$path"
+    fi
+  fi
+}
+
+start_listener() {
+  cleanup_listener_pidfile "$LISTENER_PID_FILE"
+  cleanup_stale_listener "$JSONL_PATH"
 
   # ensure output file exists before listener writes
   mkdir -p "$(dirname "$JSONL_PATH")"
@@ -45,7 +74,10 @@ start_listener() {
 
   (
     cd "$ROOT_DIR"
-    make tg-listen-dm out="$JSONL_PATH"
+    DM_AUTO_ACK="1" \
+    DM_AUTO_ACK_TEXT="Got it — I captured this message and will process it now." \
+    TG_SESSION_PATH="$SESSION_PATH" \
+    make tg-listen-dm out="$JSONL_PATH" session_path="$SESSION_PATH"
   ) >> "$LOG_DIR/dm-listener.log" 2>&1 &
   listener_pid=$!
   echo "$listener_pid" > "$LISTENER_PID_FILE"
@@ -53,14 +85,19 @@ start_listener() {
 }
 
 stop_listener() {
-  if [ -f "$LISTENER_PID_FILE" ]; then
-    local pid
-    pid="$(cat "$LISTENER_PID_FILE" 2>/dev/null || true)"
-    if [ -n "$pid" ]; then
-      kill "$pid" 2>/dev/null || true
-    fi
-    rm -f "$LISTENER_PID_FILE"
+  cleanup_listener_pidfile "$LISTENER_PID_FILE"
+  if [ ! -f "$LISTENER_PID_FILE" ]; then
+    return
   fi
+
+  local pid
+  pid="$(cat "$LISTENER_PID_FILE" 2>/dev/null || true)"
+  if [ -n "$pid" ]; then
+    kill "$pid" 2>/dev/null || true
+  fi
+  rm -f "$LISTENER_PID_FILE"
+
+  cleanup_stale_listener "$JSONL_PATH"
 }
 
 run_ingest_cycle() {
@@ -93,7 +130,7 @@ run_ingest_cycle() {
       return 1
     fi
   else
-    echo "[$(date -Is)] ingesting $JSONL_FILE (state=$STATE_FILE)"
+    echo "[$(date -Is)] ingesting $JSONL_FILE + state=$STATE_FILE"
     (
       cd "$ROOT_DIR"
       "${ingest_cmd[@]}"
@@ -108,28 +145,41 @@ run_ingest_cycle() {
   return "$ok"
 }
 
+acquire_lock() {
+  exec 9>"$LOCK_FILE"
+  if ! flock -n 9; then
+    echo "Another tg-live supervisor is active for this workspace." >&2
+    exit 1
+  fi
+}
+
 cleanup() {
   echo "Received stop signal, cleaning up..."
   stop_listener
   rm -f "$SUPERVISOR_PID_FILE"
+  exec 9>&-
   exit 0
 }
 
 trap cleanup INT TERM
 
+acquire_lock
+
 # Ensure no orphaned supervisor
 if is_running "$SUPERVISOR_PID_FILE"; then
-  echo "Supervisor already running (pid $(cat "$SUPERVISOR_PID_FILE"))."
+  echo "Supervisor already running (pid $(cat "$SUPERVISOR_PID_FILE").)"
   exit 0
 fi
 
 echo "$$" > "$SUPERVISOR_PID_FILE"
 
+cleanup_stale_listener "$JSONL_PATH"
 start_listener
 
 backoff=0
 while true; do
   if ! is_running "$LISTENER_PID_FILE"; then
+    echo "[$(date -Is)] listener not running; restarting"
     start_listener
   fi
 
@@ -148,5 +198,4 @@ while true; do
   fi
 
   sleep "$INTERVAL"
-
 done
