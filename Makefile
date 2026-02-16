@@ -133,17 +133,21 @@ tg-live-start-ingest:
 tg-live-status:
 	@FILE_PATH=$${FILE:-data/exports/telethon_dms_live.jsonl}; \
 	SUPERVISOR=$$(cat data/.pids/tg-live-supervisor.pid 2>/dev/null || true); \
+	LISTENER_PGREP=$$(pgrep -f "listen-dms.py --out $$(pwd)/$$FILE_PATH" | head -n 1); \
 	LISTENER=$$(cat data/.pids/tg-listen-dm.pid 2>/dev/null || true); \
+	if [ -z "$$LISTENER" ] && [ -n "$$LISTENER_PGREP" ]; then \
+		LISTENER="$$LISTENER_PGREP"; \
+		echo $$LISTENER > data/.pids/tg-listen-dm.pid; \
+	fi; \
 	echo "Supervisor pid: $$SUPERVISOR"; \
 	echo "Listener pid: $$LISTENER"; \
 	SUP_OK=0; \
-	[ -n "$$SUPERVISOR" ] && kill -0 "$$SUPERVISOR" 2>/dev/null && SUP_OK=1 || true; \
+	if [ -n "$$SUPERVISOR" ] && kill -0 "$$SUPERVISOR" 2>/dev/null; then SUP_OK=1; fi; \
 	if [ "$$SUP_OK" -eq 1 ]; then echo "  supervisor: running"; else echo "  supervisor: stopped"; fi; \
 	LISTENER_OK=0; \
 	if [ -n "$$LISTENER" ] && kill -0 "$$LISTENER" 2>/dev/null; then LISTENER_OK=1; fi; \
-	if pgrep -f "listen-dms.py --out $$(pwd)/$$FILE_PATH" >/dev/null 2>&1; then LISTENER_OK=1; fi; \
+	if [ -n "$$LISTENER_PGREP" ]; then LISTENER_OK=1; fi; \
 	if [ "$$LISTENER_OK" -eq 1 ]; then echo "  listener: running"; else echo "  listener: stopped"; fi
-
 tg-live-stop:
 	@bash -lc 'function stop_one() {     pid_file=$$1;     label=$$2;     if [ -f "$$pid_file" ]; then PID=$$(cat "$$pid_file"); kill "$$PID" 2>/dev/null || true; rm -f "$$pid_file"; echo "$$label $$PID"; fi }; \
 	stop_one data/.pids/tg-live-supervisor.pid "stopped supervisor"; \
