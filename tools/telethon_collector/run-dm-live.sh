@@ -98,7 +98,7 @@ cleanup_stale_listener() {
   local out_path="$1"
   # kill old listeners targeting this exact output file path (stops sqlite lock/dupes)
   local pids
-  pids=$(pgrep -f "python3 listen-dms.py --out ${out_path}\|\.venv/bin/python3 listen-dms.py --out ${out_path}" || true)
+  pids=$(pgrep -f "listen-dms.py --out ${out_path}" || true)
   if [ -n "$pids" ]; then
     log "Cleaning up old listener processes for $out_path: $pids"
     while IFS= read -r pid; do

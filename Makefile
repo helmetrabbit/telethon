@@ -141,7 +141,7 @@ tg-live-status:
 	if [ "$$SUP_OK" -eq 1 ]; then echo "  supervisor: running"; else echo "  supervisor: stopped"; fi; \
 	LISTENER_OK=0; \
 	if [ -n "$$LISTENER" ] && kill -0 "$$LISTENER" 2>/dev/null; then LISTENER_OK=1; fi; \
-	if pgrep -f "\.venv/bin/python3 listen-dms.py --out $$(pwd)/$$FILE_PATH" >/dev/null 2>&1; then LISTENER_OK=1; fi; \
+	if pgrep -f "listen-dms.py --out $$(pwd)/$$FILE_PATH" >/dev/null 2>&1; then LISTENER_OK=1; fi; \
 	if [ "$$LISTENER_OK" -eq 1 ]; then echo "  listener: running"; else echo "  listener: stopped"; fi
 
 tg-live-stop:
