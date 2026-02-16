@@ -304,22 +304,21 @@ async function ingestBatch(client: any, events: string[]): Promise<{
 
     const convRes = await client.query(
       `INSERT INTO dm_conversations (
-         platform, account_user_id, subject_user_id, external_chat_id,
-         status, source, priority, metadata, last_activity_at, title
+         platform, external_chat_id, user_a_id, user_b_id, last_message_at
        )
-       VALUES ('telegram', $1, $2, $3, 'active', 'listener', 0, '{}'::jsonb, $4::timestamptz, $5)
-       ON CONFLICT (platform, account_user_id, external_chat_id)
+       VALUES ('telegram', $1, $2, $3, $4::timestamptz)
+       ON CONFLICT (platform, external_chat_id)
        DO UPDATE SET
-         subject_user_id = EXCLUDED.subject_user_id,
-         last_activity_at = GREATEST(dm_conversations.last_activity_at, EXCLUDED.last_activity_at),
+         user_a_id = EXCLUDED.user_a_id,
+         user_b_id = EXCLUDED.user_b_id,
+         last_message_at = GREATEST(dm_conversations.last_message_at, EXCLUDED.last_message_at),
          updated_at = now()
        RETURNING id`,
       [
+        chatId,
         accountUserId,
         subjectUserId,
-        chatId,
         sentAt,
-        row.peer_name || row.peer_username || row.peer_id || 'DM Thread',
       ],
     );
 
@@ -333,10 +332,10 @@ async function ingestBatch(client: any, events: string[]): Promise<{
 
     const msgRes = await client.query(
       `INSERT INTO dm_messages (
-         conversation_id, external_message_id, sender_id, direction, message_text,
-         text_hash, sent_at, raw_json, response_to_external_message_id,
-         has_links, has_mentions, extracted_handles
-       ) VALUES ($1, $2, $3, $4::text, $5, $6, $7::timestamptz, $8::jsonb, $9, $10, $11)
+         conversation_id, external_message_id, sender_id, direction, text,
+         text_len, sent_at, reply_to_external_message_id,
+         views, forwards, has_links, has_mentions, raw_payload
+       ) VALUES ($1, $2, $3, $4::text, $5, $6, $7::timestamptz, $8, $9, $10, $11, $12, $13::jsonb)
        ON CONFLICT (conversation_id, external_message_id) DO NOTHING`,
       [
         convId,
@@ -344,13 +343,14 @@ async function ingestBatch(client: any, events: string[]): Promise<{
         senderUserId,
         row.direction,
         msgText,
-        textHash(msgText),
+        row.text_len ?? 0,
         sentAt,
-        JSON.stringify(row),
         row.reply_to_message_id != null ? String(row.reply_to_message_id) : null,
+        Number(row.views || 0),
+        Number(row.forwards || 0),
         Boolean(row.has_links),
         Boolean(row.has_mentions),
-        extractHandles(msgText),
+        JSON.stringify(row),
       ],
     );
 
