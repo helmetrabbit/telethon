@@ -55,7 +55,7 @@ serve-viewer:
 # ── DM-only live listener (private chats only) ───────────
 tg-listen-dm:
 	@OUT=$${out:-../../data/exports/telethon_dms_live.jsonl}; \
-	SESSION_PATH=$${session_path:-$${SESSION_PATH}}; \
+	SESSION_PATH=$${session_path:-$${SESSION_PATH:-$${TG_SESSION_PATH}}}; \
 	if [ -z "$$SESSION_PATH" ]; then SESSION_PATH=../../tools/telethon_collector/telethon.session; fi; \
 	cd tools/telethon_collector && . .venv/bin/activate && TG_SESSION_PATH="$$SESSION_PATH" python3 listen-dms.py --out "$$OUT"
 
@@ -117,7 +117,9 @@ tg-live-start:
 	@FILE=$${FILE:-data/exports/telethon_dms_live.jsonl}; \
 	INTERVAL=$${INTERVAL:-30}; \
 	STATE_FILE=$${STATE_FILE:-data/.state/dm-live.state.json}; \
-	bash tools/telethon_collector/run-dm-live.sh "$$FILE" "$$INTERVAL" profile "$$STATE_FILE"
+	SESSION_PATH=$${SESSION_PATH:-$${TG_SESSION_PATH:-tools/telethon_collector/telethon_openclaw.session}}; \
+	bash tools/telethon_collector/run-dm-live.sh "$${FILE}" "$${INTERVAL}" profile "$${STATE_FILE}" "$${SESSION_PATH}"
+
 
 # Keep legacy naming for old behavior: full ingest loop only
 tg-live-start-ingest:
