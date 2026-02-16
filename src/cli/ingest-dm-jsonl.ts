@@ -184,7 +184,28 @@ function isLikelyRole(raw: string): boolean {
   if (/(?:^|\b)(?:currently|now|last job|previously)(?:\b|$)/iu.test(lower) && value.length < 20) {
     return false;
   }
+  if (/[?]/u.test(value)) {
+    return false;
+  }
+  if (/(?:^|\b)(?:asking|wondering|curious|trying|looking|tell me|what do you know|do you know|who is|hello|hi)\b/iu.test(lower)) {
+    return false;
+  }
+  if (value.split(/\s+/u).length > 8 && !/(?:\b)(?:head|lead|director|manager|analyst|engineer|developer|founder|co-?founder|advisor|consultant|partnerships|growth|marketing|sales|operations|product|design|qa|cto|ceo|coo|cfo|vp|principal|owner|student|freelance)(?:\b)/iu.test(lower)) {
+    return false;
+  }
   return value.length >= 2;
+}
+
+function isThirdPartyProfileQuery(source: string): boolean {
+  const s = source.toLowerCase();
+  if (!/(what do you know about|tell me about|do you know(?: much)? about|who is)/iu.test(s)) return false;
+  if (/(about me|my profile|about myself|tell me about me)/iu.test(s)) return false;
+  return true;
+}
+
+function hasExplicitSelfProfileUpdate(source: string): boolean {
+  const s = source.toLowerCase();
+  return /(?:\bmy role\b|\bmy title\b|\bi work as\b|\bi(?:'m| am)\b|\bno longer at\b|\bleft\b|\bjoined\b|\bunemployed\b|\bmy priorities are\b|\bfocused on\b|\bprefer(?:\s+to)? communicate\b|\bbest way to reach me\b)/iu.test(s);
 }
 
 function normalizeContactStyle(raw: string): string {
@@ -262,8 +283,10 @@ function parseUnemployedStatement(source: string): ProfileEvent[] {
 
 
 function shouldTryLLMForProfileExtraction(source: string): boolean {
-  const s = source.toLowerCase();
-  return /company|work|working|work at|work with|join|joined|left|unemployed|role|title|priorit|contact|how can i reach|reach me|my role|i am/.test(s);
+  if (isThirdPartyProfileQuery(source) && !hasExplicitSelfProfileUpdate(source)) {
+    return false;
+  }
+  return hasExplicitSelfProfileUpdate(source);
 }
 
 async function extractProfileEventsByLLM(source: string): Promise<ProfileEvent[]> {
@@ -276,6 +299,8 @@ Each event: {"event_type": string, "confidence": number, "event_payload": object
 Rules:
 - Use valid field values only.
 - For explicit unemployed status, set primary_company new_value="unemployed".
+- Ignore questions about other people (e.g. "what do you know about X").
+- Extract facts only when the sender explicitly states their own profile updates.
 - Do not return duplicate or empty events.
 - If no facts found, return {"events":[]}.
 Message: ${source}
@@ -328,6 +353,9 @@ function splitPriorityTopics(raw: string): string[] {
 async function extractProfileEventsFromText(text: string | null): Promise<ProfileEvent[]> {
   if (!text) return [];
   const source = text;
+  if (isThirdPartyProfileQuery(source) && !hasExplicitSelfProfileUpdate(source)) {
+    return [];
+  }
   const events: ProfileEvent[] = [];
 
   // Pattern: "I no longer work at X and now I'm at Y"
@@ -420,14 +448,14 @@ async function extractProfileEventsFromText(text: string | null): Promise<Profil
     const company = maybeCompany ? cleanupCompanyName(maybeCompany) : null;
     const facts: ProfileFact[] = [];
 
-    if (role && isLikelyRole(role)) {
-      facts.push({
-        field: 'primary_role',
-        old_value: null,
-        new_value: role,
-        confidence: 0.74,
-      });
-    }
+    if (!(role && isLikelyRole(role))) continue;
+
+    facts.push({
+      field: 'primary_role',
+      old_value: null,
+      new_value: role,
+      confidence: 0.74,
+    });
     if (company) {
       facts.push({
         field: 'primary_company',
@@ -436,7 +464,6 @@ async function extractProfileEventsFromText(text: string | null): Promise<Profil
         confidence: 0.74,
       });
     }
-    if (facts.length === 0) continue;
 
     events.push({
       event_type: company ? 'profile.role_company_update' : 'profile.role_update',

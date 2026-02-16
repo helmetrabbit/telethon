@@ -29,6 +29,7 @@ from telethon import TelegramClient
 _SCRIPT_DIR = Path(__file__).resolve().parent
 _ROOT_DIR = _SCRIPT_DIR.parent.parent
 load_dotenv(_ROOT_DIR / '.env')
+load_dotenv(_ROOT_DIR / 'openclaw.env', override=True)
 load_dotenv(_SCRIPT_DIR / '.env')
 
 DATABASE_URL = os.getenv('DATABASE_URL') or os.getenv('PG_DSN')
@@ -68,6 +69,15 @@ _INDECISION_RE = re.compile(
     r"\b(?:idk|i\s+don'?t\s+know|not\s+sure|what\s+should\s+i(?:\s+do)?|any\s+advice|help\s+me\s+choose)\b",
     re.IGNORECASE,
 )
+_THIRD_PARTY_QUERY_RE = re.compile(
+    r"\b(?:what\s+do\s+you\s+know\s+about|tell\s+me\s+about|do\s+you\s+know(?:\s+much)?\s+about|who\s+is)\b",
+    re.IGNORECASE,
+)
+_THIRD_PARTY_TARGET_RE = re.compile(
+    r"\b(?:about|on)\s+([A-Za-z0-9_][A-Za-z0-9_ .'-]{1,80}?)(?:\s+from\s+([A-Za-z0-9 .&()/'-]{2,80}))?(?:[?.!,]|$)",
+    re.IGNORECASE,
+)
+_HANDLE_RE = re.compile(r"@([A-Za-z0-9_]{3,32})")
 
 
 def parse_args() -> argparse.Namespace:
@@ -362,7 +372,7 @@ def fetch_pending_profile_events(conn, sender_db_id: Optional[int], limit: int =
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
             """
-            SELECT id, event_type, event_payload, extracted_facts, confidence, created_at
+            SELECT id, source_message_id, event_type, event_payload, extracted_facts, confidence, created_at
             FROM dm_profile_update_events
             WHERE user_id = %s
               AND processed = false
@@ -513,6 +523,158 @@ def is_indecision_request(text: Optional[str]) -> bool:
     return bool(_INDECISION_RE.search(text or ''))
 
 
+def is_third_party_profile_request(text: Optional[str]) -> bool:
+    source = _clean_text(text).lower()
+    if not source:
+        return False
+    if is_full_profile_request(source):
+        return False
+    if not _THIRD_PARTY_QUERY_RE.search(source):
+        return False
+    if re.search(r"\babout\s+me\b|\bmy\s+profile\b|\babout\s+myself\b|\babout\s+us\b", source):
+        return False
+    return True
+
+
+def _extract_third_party_target(text: Optional[str]) -> Dict[str, Optional[str]]:
+    source = _clean_text(text)
+    out: Dict[str, Optional[str]] = {'handle': None, 'name': None, 'company': None}
+    if not source:
+        return out
+
+    handle_match = _HANDLE_RE.search(source)
+    if handle_match:
+        out['handle'] = handle_match.group(1).lower()
+        return out
+
+    match = _THIRD_PARTY_TARGET_RE.search(source)
+    if not match:
+        return out
+
+    name = _clean_text(match.group(1))
+    company = _clean_text(match.group(2))
+    if name.lower() in ('me', 'myself', 'my profile', 'my'):
+        return out
+    out['name'] = name
+    out['company'] = company or None
+    return out
+
+
+def _lookup_third_party_user(conn, text: Optional[str]) -> Optional[Dict[str, Any]]:
+    if not is_third_party_profile_request(text):
+        return None
+
+    target = _extract_third_party_target(text)
+    handle = target.get('handle')
+    name = target.get('name')
+    company = target.get('company')
+
+    with conn.cursor(row_factory=dict_row) as cur:
+        if handle:
+            cur.execute(
+                """
+                SELECT id, display_name, handle
+                FROM users
+                WHERE platform = 'telegram'
+                  AND lower(handle) = lower(%s)
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                [handle],
+            )
+            row = cur.fetchone()
+        elif name:
+            exact_name = name.lower()
+            name_like = f"%{name}%"
+            company_like = f"%{company}%" if company else None
+            cur.execute(
+                """
+                SELECT u.id, u.display_name, u.handle
+                FROM users u
+                LEFT JOIN LATERAL (
+                  SELECT primary_company, generated_bio_professional
+                  FROM user_psychographics up
+                  WHERE up.user_id = u.id
+                  ORDER BY up.created_at DESC, up.id DESC
+                  LIMIT 1
+                ) p ON TRUE
+                WHERE u.platform = 'telegram'
+                  AND (
+                    lower(coalesce(u.display_name, '')) = %s
+                    OR lower(coalesce(u.handle, '')) = %s
+                    OR coalesce(u.display_name, '') ILIKE %s
+                    OR coalesce(u.handle, '') ILIKE %s
+                  )
+                  AND (
+                    %s::text IS NULL
+                    OR coalesce(p.primary_company, '') ILIKE %s
+                    OR coalesce(p.generated_bio_professional, '') ILIKE %s
+                  )
+                ORDER BY
+                  CASE
+                    WHEN lower(coalesce(u.display_name, '')) = %s THEN 0
+                    WHEN lower(coalesce(u.handle, '')) = %s THEN 1
+                    ELSE 2
+                  END,
+                  u.id DESC
+                LIMIT 1
+                """,
+                [
+                    exact_name,
+                    exact_name,
+                    name_like,
+                    name_like,
+                    company_like,
+                    company_like,
+                    company_like,
+                    exact_name,
+                    exact_name,
+                ],
+            )
+            row = cur.fetchone()
+        else:
+            row = None
+
+    if not row:
+        return {'target': target, 'profile': None}
+
+    lookup_profile = fetch_latest_profile(conn, row.get('id'))
+    return {
+        'target': target,
+        'user': {
+            'id': row.get('id'),
+            'display_name': row.get('display_name'),
+            'handle': row.get('handle'),
+        },
+        'profile': lookup_profile,
+    }
+
+
+def _collect_current_message_updates(
+    row: Dict[str, Any],
+    pending_events: List[Dict[str, Any]],
+) -> Dict[str, str]:
+    msg_id = row.get('id')
+    if not msg_id:
+        return {}
+
+    updates: Dict[str, str] = {}
+    for evt in pending_events:
+        if evt.get('source_message_id') != msg_id:
+            continue
+        facts = evt.get('extracted_facts')
+        if not isinstance(facts, list):
+            continue
+        for fact in facts:
+            if not isinstance(fact, dict):
+                continue
+            field = str(fact.get('field') or '').strip()
+            value = _as_text(fact.get('new_value'))
+            if field and value:
+                updates[field] = value
+    return updates
+
+
 def _truncate(value: Optional[str], limit: int = 180) -> Optional[str]:
     clean = _clean_text(value)
     if not clean:
@@ -525,9 +687,16 @@ def _truncate(value: Optional[str], limit: int = 180) -> Optional[str]:
 def format_profile_snapshot_lines(profile: Dict[str, Any]) -> List[str]:
     lines: List[str] = []
 
-    role = profile.get('primary_role')
-    company = profile.get('primary_company')
-    if role and company:
+    role = _as_text(profile.get('primary_role'))
+    company = _as_text(profile.get('primary_company'))
+    company_l = (company or '').lower()
+
+    if company_l == 'unemployed':
+        if role:
+            lines.append(f"Current status: unemployed (last role: {role})")
+        else:
+            lines.append("Current status: unemployed")
+    elif role and company:
         lines.append(f"Current role/company: {role} at {company}")
     elif role:
         lines.append(f"Current role: {role}")
@@ -571,7 +740,7 @@ def format_profile_snapshot_lines(profile: Dict[str, Any]) -> List[str]:
         lines.append(f"Events: {', '.join(events[:4])}")
 
     bio = _truncate(profile.get('generated_bio_professional'), limit=200)
-    if bio:
+    if bio and company_l != 'unemployed' and ' at unemployed' not in bio.lower():
         lines.append(f"Professional bio signal: {bio}")
 
     return lines
@@ -598,6 +767,43 @@ def render_profile_request_reply(row: Dict[str, Any], profile: Dict[str, Any], p
     return (
         f"Current profile context for {sender}:\n{bullets}\n"
         "If anything changed (role/company/priorities/communication), send the correction and I'll keep this in sync."
+    )
+
+
+def render_third_party_profile_reply(lookup: Dict[str, Any]) -> str:
+    target = lookup.get('target') or {}
+    user = lookup.get('user') or {}
+    profile = lookup.get('profile') if isinstance(lookup.get('profile'), dict) else None
+    handle = user.get('handle') or target.get('handle')
+    display_name = user.get('display_name') or target.get('name') or (f"@{handle}" if handle else "that person")
+    target_label = f"{display_name} (@{handle})" if handle else str(display_name)
+
+    if not profile:
+        ask_bits = []
+        if target.get('name'):
+            ask_bits.append(f"name='{target.get('name')}'")
+        if target.get('company'):
+            ask_bits.append(f"company='{target.get('company')}'")
+        if target.get('handle'):
+            ask_bits.append(f"handle='@{target.get('handle')}'")
+        criteria = ", ".join(ask_bits) if ask_bits else "handle or name+company"
+        return (
+            f"I don't have enough verified profile signal on {target_label} yet.\n"
+            f"Send a more specific lookup ({criteria}) and I'll try again.\n"
+            "I treated this as a lookup only and did not modify your profile."
+        )
+
+    lines = format_profile_snapshot_lines(profile)
+    if not lines:
+        return (
+            f"I found {target_label}, but I don't have a usable profile snapshot yet.\n"
+            "I treated this as a lookup only and did not modify your profile."
+        )
+
+    bullets = "\n".join(f"- {line}" for line in lines[:8])
+    return (
+        f"What I currently have on {target_label}:\n{bullets}\n"
+        "This was handled as a third-party lookup only and did not change your profile."
     )
 
 
@@ -700,6 +906,7 @@ def render_llm_conversational_reply(
         'sender_name': row.get('display_name') or row.get('sender_handle') or 'user',
         'latest_inbound_message': latest_text,
         'is_profile_request': is_full_profile_request(latest_text),
+        'is_third_party_profile_lookup': is_third_party_profile_request(latest_text),
         'is_indecision': is_indecision_request(latest_text),
         'profile_context': summarize_profile_for_prompt(profile),
         'recent_conversation': recent_messages[-8:],
@@ -713,33 +920,70 @@ def render_llm_conversational_reply(
         "2) If asked for profile knowledge, provide a comprehensive snapshot from known data.\n"
         "3) If user gives profile updates (job/company/unemployed/role/priorities/style), acknowledge exactly what changed and what was captured.\n"
         "4) If user says they are unsure what to do, provide 3 concrete next-step options tailored to their context.\n"
-        "5) Avoid repetitive intros, avoid generic filler, avoid asking the same question twice.\n"
+        "5) If the message is about another person, answer as a third-party lookup and do NOT treat it as a profile update for the sender.\n"
+        "6) Avoid repetitive intros, avoid generic filler, avoid asking the same question twice.\n"
         "Output constraints:\n"
         "- Plain text only.\n"
         "- Keep it concise but substantial.\n"
         "- If profile request: use short bullet lines.\n"
-        "- If unsure data: say what is missing and ask one precise follow-up."
+        "- If unsure data: say what is missing and ask one precise follow-up.\n"
+        "- Never claim to have updated profile data unless context shows pending_profile_updates for this sender."
     )
     user_prompt = "Conversation context JSON:\n" + json.dumps(context, ensure_ascii=True)
     return call_openrouter_chat(system_prompt, user_prompt)
 
 
-def render_conversational_reply(row: Dict[str, Any], profile: Dict[str, Any], persona_name: str) -> str:
+def render_conversational_reply(
+    row: Dict[str, Any],
+    profile: Dict[str, Any],
+    persona_name: str,
+    pending_events: List[Dict[str, Any]],
+) -> str:
     msg_id = int(row.get('id') or 0)
     observed_slots = infer_slots_from_text(row.get('text'))
 
     ack_options = [
-        "Love the context, thanks for sharing that.",
+        "Captured, thanks for the update.",
         "Super helpful, thanks for the update.",
-        "Nice, that gives me a much clearer signal.",
+        "Got it, that gives me a much clearer signal.",
     ]
     ack_line = _pick(ack_options, msg_id)
 
     if is_full_profile_request(row.get('text')):
         return render_profile_request_reply(row, profile, persona_name)
 
+    if is_third_party_profile_request(row.get('text')):
+        return (
+            "I treated that as a lookup request about another person, not as an update to your profile.\n"
+            "If you share their exact @handle (or full name + company), I can return what is on file."
+        )
+
     if is_indecision_request(row.get('text')):
         return render_indecision_reply(profile)
+
+    captured_updates = _collect_current_message_updates(row, pending_events)
+    if captured_updates:
+        parts: List[str] = []
+        company = captured_updates.get('primary_company')
+        role = captured_updates.get('primary_role')
+        contact_style = captured_updates.get('preferred_contact_style')
+        topic = captured_updates.get('notable_topics')
+
+        if company:
+            if company.lower() == 'unemployed':
+                parts.append("company/status -> unemployed")
+            else:
+                parts.append(f"company -> {company}")
+        if role:
+            parts.append(f"role -> {role}")
+        if contact_style:
+            parts.append(f"communication style -> {contact_style}")
+        if topic:
+            parts.append(f"priority/topic -> {topic}")
+
+        summary = "; ".join(parts) if parts else "profile updates"
+        follow_up = "If you want, ask \"What do you know about me?\" and I’ll show the updated snapshot."
+        return f"{ack_line} I captured: {summary}. {follow_up}"
 
     missing_order = ['primary_role', 'primary_company', 'notable_topics', 'preferred_contact_style']
     missing = []
@@ -787,8 +1031,6 @@ def render_conversational_reply(row: Dict[str, Any], profile: Dict[str, Any], pe
             msg_id + 2,
         )
 
-    if row.get('response_attempts') == 1:
-        return f"{ack_line} {next_question}"
     return f"{ack_line} {next_question}"
 
 
@@ -800,11 +1042,14 @@ def render_response(args: argparse.Namespace, conn, row: Dict[str, Any]) -> str:
     pending_events = fetch_pending_profile_events(conn, row.get('sender_db_id'))
     profile = apply_pending_profile_events(profile, pending_events)
     recent_messages = fetch_recent_conversation_messages(conn, row.get('conversation_id'))
+    third_party_lookup = _lookup_third_party_user(conn, row.get('text'))
+    if third_party_lookup:
+        return render_third_party_profile_reply(third_party_lookup)
 
     llm_reply = render_llm_conversational_reply(row, profile, args.persona_name, recent_messages, pending_events)
     if llm_reply:
         return llm_reply
-    return render_conversational_reply(row, profile, args.persona_name)
+    return render_conversational_reply(row, profile, args.persona_name, pending_events)
 
 
 def mark_auto_responded(conn) -> int:

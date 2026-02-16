@@ -16,6 +16,11 @@ if [ -f "$ROOT_DIR/.env" ]; then
   . "$ROOT_DIR/.env"
   set +a
 fi
+if [ -f "$ROOT_DIR/openclaw.env" ]; then
+  set -a
+  . "$ROOT_DIR/openclaw.env"
+  set +a
+fi
 if [ -f "$SCRIPT_DIR/.env" ]; then
   set -a
   . "$SCRIPT_DIR/.env"

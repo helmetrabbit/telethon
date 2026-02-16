@@ -15,6 +15,22 @@ PERSONA_NAME="${DM_PERSONA_NAME:-Lobster Llama}"
 TEMPLATE="${DM_RESPONSE_TEMPLATE:-"Thanks for reaching out — I captured this and will use it to improve your profile dataset. To help it, share: your current role/company, 2-3 priorities, and how you prefer to communicate."}"
 DRY_RUN="${DM_RESPONSE_DRY_RUN:-0}"
 
+if [ -f "$ROOT_DIR/.env" ]; then
+  set -a
+  . "$ROOT_DIR/.env"
+  set +a
+fi
+if [ -f "$ROOT_DIR/openclaw.env" ]; then
+  set -a
+  . "$ROOT_DIR/openclaw.env"
+  set +a
+fi
+if [ -f "$ROOT_DIR/tools/telethon_collector/.env" ]; then
+  set -a
+  . "$ROOT_DIR/tools/telethon_collector/.env"
+  set +a
+fi
+
 exec 9>"$LOCK_FILE"
 if ! flock -n 9; then
   echo "Responder already running; skipping this run."

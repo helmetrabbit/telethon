@@ -20,6 +20,11 @@ if [ -f "$ROOT_DIR/.env" ]; then
   . "$ROOT_DIR/.env"
   set +a
 fi
+if [ -f "$ROOT_DIR/openclaw.env" ]; then
+  set -a
+  . "$ROOT_DIR/openclaw.env"
+  set +a
+fi
 if [ -f "$ROOT_DIR/tools/telethon_collector/.env" ]; then
   set -a
   . "$ROOT_DIR/tools/telethon_collector/.env"

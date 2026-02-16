@@ -17,6 +17,7 @@ const { Pool } = pg;
 
 // Load .env from project root (works whether we run from dist/ or root)
 dotenv.config();
+dotenv.config({ path: 'openclaw.env', override: true });
 
 // ── Pool setup ──────────────────────────────────────────
 

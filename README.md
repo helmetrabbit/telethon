@@ -78,6 +78,9 @@ Optional (recommended) profile fact extraction via OpenRouter during DM ingest:
 - `DM_PROFILE_LLM_EXTRACTION=auto` (default behavior: auto-enable when key exists)
 - `DM_PROFILE_LLM_MODEL=deepseek/deepseek-chat`
 
+Repo runtime note:
+- `openclaw.env` is loaded by the live pipeline scripts (`run-dm-live.sh`, `run-dm-response.sh`, `preflight-dm-live.sh`) and by Node DB bootstrap, so OpenClaw/server runs can use it without relying on shell-exported env vars.
+
 The live ingest supports resumable checkpoints so repeated runs only process new rows:
 
 ```bash
@@ -297,8 +300,8 @@ Responder variables:
 - `DM_RESPONSE_DRY_RUN=1`: dry-run mode without sending.
 - `DM_RESPONSE_LLM_ENABLED=1`: enable OpenRouter conversational replies (fallbacks to deterministic replies on error).
 - `DM_RESPONSE_MODEL=deepseek/deepseek-chat`
-- `DM_RESPONSE_MAX_TOKENS=300`
-- `DM_RESPONSE_TEMPERATURE=0.2`
+- `DM_RESPONSE_MAX_TOKENS=420`
+- `DM_RESPONSE_TEMPERATURE=0.15`
 
 To run under systemd, call `make tg-live-start` from a service that stays running; logs are written to `data/logs/` and state is persisted in `data/.state/`.
 
