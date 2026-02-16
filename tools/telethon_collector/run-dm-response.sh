@@ -10,7 +10,7 @@ if [[ "${SESSION_PATH}" != /* ]] && [ "${SESSION_PATH}" != "" ]; then
 fi
 LIMIT="${DM_RESPONSE_LIMIT:-20}"
 MAX_RETRIES="${DM_MAX_RETRIES:-3}"
-TEMPLATE="${DM_RESPONSE_TEMPLATE:-"Got it — I captured this message and will reply with full context shortly."}"
+TEMPLATE="${DM_RESPONSE_TEMPLATE:-"Thanks for reaching out — I captured this and will use it to improve your profile dataset. To help it, share: your current role/company, 2-3 priorities, and how you prefer to communicate."}"
 DRY_RUN="${DM_RESPONSE_DRY_RUN:-0}"
 
 exec 9>"$LOCK_FILE"

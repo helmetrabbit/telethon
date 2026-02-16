@@ -273,7 +273,7 @@ Important behavior:
 - This pipeline handles capture, ingest, profile reconciliation, and **automated pending-response handling**.
 - Inbound messages are queued as `pending` when first ingested.
 - Outbound workers can send a lightweight response template and mark messages as `responded`.
-- `DM_AUTO_ACK` is still enabled for immediate receipt at capture time.
+- `DM_AUTO_ACK` defaults to off (`0`) and is optional; enable it with `DM_AUTO_ACK=1` only when you want an immediate acknowledgement on each inbound DM.
 - If you stop getting listener output and see `EOFError: EOF when reading a line` or repeated
   "Please enter your phone", the Telegram session needs interactive re-auth once.
 
