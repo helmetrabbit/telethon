@@ -6,6 +6,8 @@ import readline from 'node:readline';
 import path from 'node:path';
 import { db } from '../db/index.js';
 import { parseArgs } from '../utils.js';
+import { createLLMClient } from '../inference/llm-client.js';
+
 
 interface DmEvent {
   message_id: number;
@@ -51,6 +53,20 @@ interface IngestState {
 }
 
 const HANDLE_RE = /@([A-Za-z0-9_]+)/g;
+const DM_PROFILE_LLM_ENABLED = (process.env.DM_PROFILE_LLM_EXTRACTION || '').toLowerCase() === '1' || (process.env.DM_PROFILE_LLM_EXTRACTION || '').toLowerCase() === 'true';
+const DM_PROFILE_LLM_MODEL = process.env.DM_PROFILE_LLM_MODEL || 'deepseek/deepseek-chat';
+
+const dmLlmClient = (() => {
+  const key = process.env.OPENROUTER_API_KEY;
+  if (!DM_PROFILE_LLM_ENABLED || !key) return null;
+  return createLLMClient({
+    apiKeys: [key],
+    model: DM_PROFILE_LLM_MODEL,
+    maxRetries: 3,
+    retryDelayMs: 500,
+    requestDelayMs: 100,
+  });
+})();
 
 function parseLine(raw: string): DmEvent | null {
   try {
@@ -138,7 +154,7 @@ function sanitizeEntity(value: string | null | undefined): string | null {
 
 function cleanupCompanyName(raw: string): string {
   return raw
-    .replace(/\b(?:LLC|Ltd\.?|Inc\.?|Co\.?|Corp\.?)/gi, '')
+    .replace(/\b(?:LLC|Ltd\.?|Inc\.?|Co\.?|Corp\.?)/giu, '')
     .replace(/\s{2,}/g, ' ')
     .trim()
     .replace(/[.\s]+$/g, '')
@@ -168,6 +184,119 @@ function normalizeContactStyle(raw: string): string {
   return clean.toLowerCase();
 }
 
+function parseUnemployedStatement(source: string): ProfileEvent[] {
+  const events: ProfileEvent[] = [];
+
+  const leftNowPatterns = [
+    /(?:^|[\s\n])(?:i\s+(?:am|'m)\s+)?(?:no\s+longer|left)\s+(?:at|with|for)\s+([A-Za-z0-9 .,'-]{2,120})[^.!?\n]{0,80}?(?:and|,|\s+now)\s+(?:i\s+(?:am|'m)\s+)?(?:unemployed|not\s+working)/giu,
+    /(?:^|[\s\n])(?:i\s+(?:am|'m)\s+)?(?:formerly\s+at|previously\s+at)\s+([A-Za-z0-9 .,'-]{2,120})[^.!?\n]{0,80}?(?:and\s+now|now)\s+(?:i\s+(?:am|'m)\s+)?unemployed/giu,
+  ];
+  for (const pattern of leftNowPatterns) {
+    for (const m of source.matchAll(pattern)) {
+      const oldCompany = sanitizeEntity(m[1]);
+      if (!oldCompany) continue;
+      const cleaned = cleanupCompanyName(oldCompany);
+      if (!cleaned) continue;
+      events.push({
+        event_type: 'profile.company_update',
+        confidence: 0.88,
+        event_payload: {
+          raw_text: source,
+          old_company: cleaned,
+          new_company: 'unemployed',
+          trigger: 'left_and_unemployed',
+        },
+        extracted_facts: [
+          {
+            field: 'primary_company',
+            old_value: cleaned,
+            new_value: 'unemployed',
+            confidence: 0.88,
+          },
+        ],
+      });
+    }
+  }
+
+  const directUnemployed = /(?:i\s+(?:am|'m)\s+(?:currently\s+)?(?:not\s+working|unemployed)|currently\s+unemployed|now\s+unemployed)\b/giu;
+  if (directUnemployed.test(source) && !/(?:working|now\s+at)/iu.test(source)) {
+    events.push({
+      event_type: 'profile.company_update',
+      confidence: 0.78,
+      event_payload: {
+        raw_text: source,
+        new_company: 'unemployed',
+        trigger: 'unemployed_direct',
+      },
+      extracted_facts: [
+        {
+          field: 'primary_company',
+          old_value: null,
+          new_value: 'unemployed',
+          confidence: 0.78,
+        },
+      ],
+    });
+  }
+
+  return events;
+}
+
+
+function shouldTryLLMForProfileExtraction(source: string): boolean {
+  const s = source.toLowerCase();
+  return /company|work|working|work at|work with|join|joined|left|unemployed|role|title|priorit|contact|how can i reach|reach me|my role|i am/.test(s);
+}
+
+async function extractProfileEventsByLLM(source: string): Promise<ProfileEvent[]> {
+  if (!dmLlmClient || !DM_PROFILE_LLM_ENABLED || !shouldTryLLMForProfileExtraction(source)) return [];
+
+  const prompt = `
+You are a profile fact extractor for one DM message.
+Return ONLY JSON in this exact shape: {"events":[...]}
+Each event: {"event_type": string, "confidence": number, "event_payload": object, "extracted_facts": [{"field":"primary_company|primary_role|preferred_contact_style|notable_topics","old_value": string|null, "new_value": string|null, "confidence": number}]}
+Rules:
+- Use valid field values only.
+- For explicit unemployed status, set primary_company new_value="unemployed".
+- Do not return duplicate or empty events.
+- If no facts found, return {"events":[]}.
+Message: ${source}
+`.trim();
+
+  try {
+    const completion = await dmLlmClient.complete(prompt);
+    const parsed = JSON.parse(completion.content);
+    const list = Array.isArray((parsed as any).events) ? (parsed as any).events : [];
+    const out: ProfileEvent[] = [];
+    for (const evt of list) {
+      if (!evt || typeof evt.event_type !== 'string' || !Array.isArray(evt.extracted_facts)) continue;
+      const facts = evt.extracted_facts
+        .map((f: any) => {
+          if (!f || !['primary_company', 'primary_role', 'preferred_contact_style', 'notable_topics'].includes(f.field)) return null;
+          return {
+            field: f.field as ProfileFact['field'],
+            old_value: (typeof f.old_value === 'string' ? f.old_value : f.old_value == null ? null : null),
+            new_value: (typeof f.new_value === 'string' ? f.new_value : null),
+            confidence: Number(f.confidence ?? evt.confidence ?? 0.7),
+          } as ProfileFact;
+        })
+        .filter((f: ProfileFact | null): f is ProfileFact => f !== null)
+        .filter((f: ProfileFact) => Boolean(f.new_value));
+
+      if (!facts.length) continue;
+      out.push({
+        event_type: evt.event_type,
+        confidence: Number(evt.confidence ?? 0.75),
+        event_payload: typeof evt.event_payload === 'object' && evt.event_payload ? evt.event_payload : { raw_text: source },
+        extracted_facts: facts,
+      });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
 function splitPriorityTopics(raw: string): string[] {
   return raw
     .split(/,|;|\band\b|\&/gi)
@@ -178,7 +307,7 @@ function splitPriorityTopics(raw: string): string[] {
     .slice(0, 6);
 }
 
-function extractProfileEventsFromText(text: string | null): ProfileEvent[] {
+async function extractProfileEventsFromText(text: string | null): Promise<ProfileEvent[]> {
   if (!text) return [];
   const source = text;
   const events: ProfileEvent[] = [];
@@ -189,8 +318,7 @@ function extractProfileEventsFromText(text: string | null): ProfileEvent[] {
     `(?:i(?:'m| am)|i|just)?\s*(?:no longer|not|never|no|didn't)?\s*(?:work|worked|work(ed)?|work for|work at|work with|work there)?\s*(?:at|with|for)?\s*(${entityToken})(?:\.|,)?\s*(?:and|then|and now|now)\s+(?:i(?:'m| am))\s+(?:just\s+)?(?:left|moved|moving|joined|working|work|start(ed)?|switch(?:ed)?|shifted)\s+(?:at|with)?\s*(${entityToken})`,
     'giu',
   );
-  const mTwoStep = source.matchAll(twoStep);
-  for (const m of mTwoStep) {
+  for (const m of source.matchAll(twoStep)) {
     const oldCompany = sanitizeEntity(m[1]);
     const newCompany = sanitizeEntity(m[2]);
     if (!newCompany) continue;
@@ -266,8 +394,8 @@ function extractProfileEventsFromText(text: string | null): ProfileEvent[] {
     });
   }
 
-  // Pattern: role/company declarations (e.g. "I'm a product manager at Acme")
-  const roleAndCompany = /(?:^|[\s\n])(?:i(?:'m|’m| am)|my role(?:\s+is|['’]s)?|my title(?:\s+is|['’]s)?|i work as)\s+(?:a|an|the)?\s*([A-Za-z0-9/&+().,' -]{2,80}?)(?:\s+(?:at|with|for)\s+([A-Za-z0-9 .,'&-]{2,120}?))?(?:[.;!?]|$)/giu;
+  // Pattern: role/company declarations
+  const roleAndCompany = /(?:^|[\s\n])(?:i(?:'m|’m| am)|my role(?:\s+is|[’']s)?|my title(?:\s+is|[’']s)?|i work as)\s+(?:a|an|the)?\s*([A-Za-z0-9/&+().,' -]{2,80}?)(?:\s+(?:at|with|for)\s+([A-Za-z0-9 .,'&-]{2,120}?))?(?:[.;!?]|$)/giu;
   for (const m of source.matchAll(roleAndCompany)) {
     const role = normalizeRole(m[1] || '');
     const maybeCompany = sanitizeEntity(m[2] || '');
@@ -329,6 +457,9 @@ function extractProfileEventsFromText(text: string | null): ProfileEvent[] {
     });
   }
 
+  // Parse explicit unemployment statements
+  events.push(...parseUnemployedStatement(source));
+
   // Pattern: priority statements
   const priorities = /(?:my priorities are|i(?:'m| am)\s+focused on|currently focused on|right now\s+i(?:'m| am)\s+focused on)\s+([^.!?\n]{3,180})/giu;
   for (const m of source.matchAll(priorities)) {
@@ -350,6 +481,10 @@ function extractProfileEventsFromText(text: string | null): ProfileEvent[] {
       })),
     });
   }
+
+  const llmEvents = await extractProfileEventsByLLM(source);
+  events.push(...llmEvents);
+
 
   // dedupe by event type + fact values
   const keySet = new Set<string>();
@@ -555,7 +690,7 @@ async function ingestBatch(client: any, events: string[]): Promise<{
 
       // Extract profile-correction signals only for inbound user messages.
       const profileEvents =
-        row.direction === 'inbound' ? extractProfileEventsFromText(msgText) : [];
+        row.direction === 'inbound' ? await extractProfileEventsFromText(msgText) : [];
       if (profileEvents.length > 0 && messageDbId) {
         // subjectUserId is the inbound sender in private DM context
         const targetUserId = row.direction === 'inbound' ? senderUserId : subjectUserId;
