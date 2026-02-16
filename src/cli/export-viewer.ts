@@ -1,4 +1,3 @@
-
 import { db } from '../db/index.js';
 import fs from 'fs';
 import path from 'path';
@@ -7,11 +6,11 @@ async function main() {
   const version = 'v0.6.0';
   console.log(`Exporting data for version ${version}...`);
 
-  // 1. Get Claims
+  // 1) Claims
   console.log('Fetching claims...');
   const claimsRes = await db.query(`
-    SELECT 
-      c.id, c.subject_user_id, u.display_name, u.bio, 
+    SELECT
+      c.id, c.subject_user_id, u.display_name, u.bio,
       c.predicate, c.object_value, c.status, c.confidence, c.notes
     FROM claims c
     JOIN users u ON u.id = c.subject_user_id
@@ -19,39 +18,21 @@ async function main() {
     ORDER BY c.confidence DESC
   `, [version]);
 
-  // 2. Get Abstentions (Deprecated table, returning empty)
+  // 2) Abstentions (deprecated)
   console.log('Fetching abstentions (skipped)...');
-  const abstentionRes = { rows: [] }; 
-/*
-  const abstentionRes = await db.query(`
-    SELECT 
-        a.subject_user_id, u.display_name, u.bio,
-        a.predicate, a.reason_code, a.details
-    FROM abstention_log a
-    JOIN users u ON u.id = a.subject_user_id
-    WHERE a.model_version = $1
-    ORDER BY a.subject_user_id
-  `, [version]);
-*/
+  const abstentionRes = { rows: [] };
 
-  // 3. Get LLM Enrichments (Deprecated, returning empty)
+  // 3) LLM enrichments (deprecated)
   console.log('Fetching AI enrichments (skipped)...');
   const enrichmentsRes = { rows: [] };
-/*
-  const enrichmentsRes = await db.query(`
-    SELECT DISTINCT ON (user_id) user_id, parsed_json, created_at
-    FROM llm_enrichments
-    ORDER BY user_id, id DESC
-  `);
-*/
 
-  // 4. Get Psychographics
-  console.log('Fetching Psychographics...');
+  // 4) Psychographics
+  console.log('Fetching psychographics...');
   const psychoRes = await db.query(`
     SELECT DISTINCT ON (p.user_id)
       p.user_id, u.display_name, u.bio,
-      p.tone, p.professionalism, p.verbosity, p.responsiveness, p.decision_style, 
-      p.seniority_signal, p.commercial_archetype, p.approachability, 
+      p.tone, p.professionalism, p.verbosity, p.responsiveness, p.decision_style,
+      p.seniority_signal, p.commercial_archetype, p.approachability,
       p.quirks, p.notable_topics, p.pain_points, p.crypto_values, p.connection_requests, p.fingerprint_tags,
       p.based_in, p.attended_events, p.preferred_contact_style, p.reasoning, p.created_at,
       p.generated_bio_professional, p.generated_bio_personal, p.primary_role, p.primary_company,
@@ -67,7 +48,7 @@ async function main() {
     ORDER BY p.user_id, p.created_at DESC
   `);
 
-  // 5. Activity heatmap: day-of-week × hour-of-day from raw messages (enriched users only)
+  // 5) Activity heatmap from group messages only
   console.log('Computing activity heatmap...');
   const heatmapRes = await db.query(`
     SELECT
@@ -80,7 +61,6 @@ async function main() {
     GROUP BY m.user_id, dow, hour
   `);
 
-  // Build per-user activity grids: { user_id -> [[h0..h23] x 7 days] }
   const userActivity: Record<number, number[][]> = {};
   for (const row of heatmapRes.rows) {
     if (!userActivity[row.user_id]) {
@@ -89,37 +69,160 @@ async function main() {
     userActivity[row.user_id][row.dow][row.hour] += row.cnt;
   }
 
-  // 6. Stats
+  // 6) DM Conversations
+  console.log('Fetching DM conversations...');
+  const dmConvosRes = await db.query(`
+    SELECT
+      dc.id,
+      dc.account_user_id,
+      dc.subject_user_id,
+      ac.display_name AS account_display_name,
+      su.display_name AS subject_display_name,
+      su.handle AS subject_handle,
+      su.bio AS subject_bio,
+      dc.platform,
+      dc.external_chat_id,
+      dc.title,
+      dc.status,
+      dc.source,
+      dc.priority,
+      dc.next_followup_at,
+      dc.last_activity_at,
+      dc.created_at,
+      dc.updated_at
+    FROM dm_conversations dc
+    JOIN users ac ON ac.id = dc.account_user_id
+    JOIN users su ON su.id = dc.subject_user_id
+    ORDER BY dc.last_activity_at DESC
+  `);
+
+  // 7) DM messages and simple derived aggregates
+  console.log('Fetching DM messages...');
+  const dmMessagesRes = await db.query(`
+    SELECT
+      dm.id,
+      dm.conversation_id,
+      dm.external_message_id,
+      dm.direction,
+      dm.message_text,
+      dm.sent_at,
+      dm.has_links,
+      dm.has_mentions,
+      dm.extracted_handles,
+      dm.response_to_external_message_id,
+      dm.text_hash
+    FROM dm_messages dm
+    ORDER BY dm.conversation_id, dm.sent_at ASC
+  `);
+
+  console.log('Fetching DM interpretations...');
+  const dmInterpretationsRes = await db.query(`
+    SELECT
+      di.id,
+      di.dm_message_id,
+      di.kind,
+      di.summary,
+      di.sentiment_score,
+      di.confidence,
+      di.requires_followup,
+      di.followup_reason,
+      di.metadata,
+      di.created_at
+    FROM dm_interpretations di
+    ORDER BY di.dm_message_id, di.created_at ASC
+  `);
+
+  const dmMessagesByConversation = new Map<number, any[]>();
+  for (const row of dmMessagesRes.rows) {
+    const k = Number(row.conversation_id);
+    if (!dmMessagesByConversation.has(k)) dmMessagesByConversation.set(k, []);
+    dmMessagesByConversation.get(k)!.push(row);
+  }
+
+  const dmInterpretationsByMessage = new Map<number, any[]>();
+  for (const row of dmInterpretationsRes.rows) {
+    const k = Number(row.dm_message_id);
+    if (!dmInterpretationsByMessage.has(k)) dmInterpretationsByMessage.set(k, []);
+    dmInterpretationsByMessage.get(k)!.push(row);
+  }
+
+  const dmConversations = dmConvosRes.rows.map((c) => {
+    const convId = Number(c.id);
+    const messages = dmMessagesByConversation.get(convId) || [];
+    const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
+    const inboundCount = messages.filter(m => m.direction === 'inbound').length;
+    const outboundCount = messages.filter(m => m.direction === 'outbound').length;
+    const followupNeeded = messages
+      .map(m => dmInterpretationsByMessage.get(Number(m.id)) || [])
+      .flat()
+      .some(i => i.requires_followup);
+
+    return {
+      ...c,
+      messages,
+      inbound_count: inboundCount,
+      outbound_count: outboundCount,
+      followup_needed: followupNeeded,
+      last_message: lastMessage
+    };
+  });
+
+  const dmConvoById = new Map<number, any>(dmConversations.map((c: any) => [Number(c.id), c]));
+  const dmMessages = dmMessagesRes.rows.map((m) => {
+    const conv = dmConvoById.get(Number(m.conversation_id));
+    const interpretations = dmInterpretationsByMessage.get(Number(m.id)) || [];
+    return {
+      ...m,
+      interpretations,
+      conversation: conv
+        ? {
+            id: conv.id,
+            status: conv.status,
+            subject_display_name: conv.subject_display_name,
+            subject_handle: conv.subject_handle,
+            platform: conv.platform,
+          }
+        : null,
+    };
+  });
+
+  // 8) Stats
   const stats = {
-     total_claims: claimsRes.rows.length,
-     supported_claims: claimsRes.rows.filter(r => r.status === 'supported').length,
-     total_abstentions: abstentionRes.rows.length,
-     enrichment_count: enrichmentsRes.rows.length,
-     psycho_count: psychoRes.rows.length,
-     generated_at: new Date().toISOString()
+    total_claims: claimsRes.rows.length,
+    supported_claims: claimsRes.rows.filter(r => r.status === 'supported').length,
+    total_abstentions: abstentionRes.rows.length,
+    enrichment_count: enrichmentsRes.rows.length,
+    psycho_count: psychoRes.rows.length,
+    dm_conversations: dmConvosRes.rows.length,
+    dm_messages: dmMessagesRes.rows.length,
+    generated_at: new Date().toISOString()
   };
 
   const data = {
-      stats,
-      claims: claimsRes.rows,
-      abstentions: abstentionRes.rows,
-      enrichments: enrichmentsRes.rows,
-      psychographics: psychoRes.rows,
-      activity: userActivity
+    stats,
+    claims: claimsRes.rows,
+    abstentions: abstentionRes.rows,
+    enrichments: enrichmentsRes.rows,
+    psychographics: psychoRes.rows,
+    activity: userActivity,
+    dm: {
+      conversations: dmConversations,
+      messages: dmMessages,
+      interpretation_count: dmInterpretationsRes.rows.length,
+    }
   };
 
-  // Write as a JS file to allow opening via file:// protocol without CORS
+  // Write as JS for file:// compatibility
   const outputPath = path.resolve(process.cwd(), 'viewer/data.js');
   const fileContent = `window.TELETHON_DATA = ${JSON.stringify(data, null, 2)};`;
-  
   fs.writeFileSync(outputPath, fileContent);
   console.log(`\n✅ Data exported to ${outputPath}`);
   console.log(`\nNow open viewer/index.html in your browser to view the dashboard.`);
-  
+
   process.exit(0);
 }
 
 main().catch(e => {
-    console.error(e);
-    process.exit(1);
+  console.error(e);
+  process.exit(1);
 });
