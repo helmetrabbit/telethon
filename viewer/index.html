@@ -396,6 +396,11 @@
                 <div class="text-xs text-slate-400 mt-0.5" id="stats-header">Loading...</div>
             </div>
             <div class="flex gap-2 items-center flex-wrap">
+                <select id="scope-mode" onchange="onScopeModeChange()" class="text-xs border border-slate-300 rounded px-2 py-1.5 bg-white">
+                    <option value="enriched_only">Scope: Enriched only</option>
+                    <option value="profiles_only">Scope: Profiles only</option>
+                    <option value="all_data">Scope: All data (debug)</option>
+                </select>
                 <select id="sort-select" onchange="render()" class="text-xs border border-slate-300 rounded px-2 py-1.5 bg-white">
                     <option value="msgs">Sort: Most Messages</option>
                     <option value="reactions">Sort: Most Reactions</option>
@@ -562,6 +567,18 @@
         var currentPage = 1;
         var pageSize = 30;
         var viewMode = 'digest';
+        var SCOPE_MODE_LABELS = {
+            enriched_only: 'Enriched only',
+            profiles_only: 'Profiles only',
+            all_data: 'All data (debug)'
+        };
+        var scopeData = (data && data.scope && data.scope.modes) ? data.scope : null;
+        var qualifyingClaimStatuses = (scopeData && Array.isArray(scopeData.qualifying_claim_statuses) && scopeData.qualifying_claim_statuses.length > 0)
+            ? scopeData.qualifying_claim_statuses.map(function(s) { return String(s || '').toLowerCase().trim(); }).filter(Boolean)
+            : ['supported'];
+        var scopeMode = (scopeData && scopeData.default_mode && SCOPE_MODE_LABELS[scopeData.default_mode])
+            ? scopeData.default_mode
+            : 'enriched_only';
 
         var DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
         var FIELD_OPTIONS = [
@@ -607,6 +624,83 @@
             lifecycleVisible = !lifecycleVisible;
             document.getElementById('lc-body').style.display = lifecycleVisible ? 'block' : 'none';
             document.getElementById('lc-toggle-text').textContent = lifecycleVisible ? '▼ Hide' : '▶ Show';
+        }
+
+        function normalizeUserId(id) {
+            return String(id == null ? '' : id).trim();
+        }
+
+        function hasAnyClaim(u) {
+            return Boolean(u && Array.isArray(u.claims) && u.claims.length > 0);
+        }
+
+        function hasQualifyingClaim(u) {
+            if (!u || !Array.isArray(u.claims) || u.claims.length === 0) return false;
+            for (var i = 0; i < u.claims.length; i++) {
+                var status = String((u.claims[i] && u.claims[i].status) || '').toLowerCase();
+                if (qualifyingClaimStatuses.indexOf(status) !== -1) return true;
+            }
+            return false;
+        }
+
+        function getScopeUserIds(mode) {
+            if (scopeData && scopeData.modes && scopeData.modes[mode] && Array.isArray(scopeData.modes[mode].user_ids)) {
+                return scopeData.modes[mode].user_ids.map(function(id) { return normalizeUserId(id); }).filter(Boolean);
+            }
+            var ids = [];
+            users.forEach(function(u) {
+                if (mode === 'enriched_only' && u.psycho) ids.push(normalizeUserId(u.id));
+                else if (mode === 'profiles_only' && (u.psycho || hasQualifyingClaim(u))) ids.push(normalizeUserId(u.id));
+                else if (mode === 'all_data' && (u.psycho || hasAnyClaim(u))) ids.push(normalizeUserId(u.id));
+            });
+            return ids;
+        }
+
+        function getScopedUsers(mode) {
+            var ids = getScopeUserIds(mode);
+            var scoped = [];
+            var seen = new Set();
+            ids.forEach(function(uid) {
+                if (!uid || seen.has(uid)) return;
+                var u = getUserById(uid);
+                if (!u) return;
+                seen.add(uid);
+                scoped.push(u);
+            });
+            return scoped;
+        }
+
+        function isClaimOnlyUser(u) {
+            return Boolean(u && !u.psycho && hasAnyClaim(u));
+        }
+
+        function scopeVisibleCount(mode) {
+            if (scopeData && scopeData.visible_counts && Number.isFinite(Number(scopeData.visible_counts[mode]))) {
+                return Number(scopeData.visible_counts[mode]);
+            }
+            return getScopeUserIds(mode).length;
+        }
+
+        function updateHeaderStats() {
+            var generatedAt = (data && data.stats && data.stats.generated_at) ? String(data.stats.generated_at) : '';
+            var generatedDate = generatedAt ? generatedAt.split('T')[0] : 'n/a';
+            var psychoUsers = Number((data && data.stats && (data.stats.psycho_users != null ? data.stats.psycho_users : data.stats.psycho_count)) || 0);
+            var claimOnlyUsers = Number((data && data.stats && data.stats.claim_only_users) || 0);
+            var scopedCount = scopeVisibleCount(scopeMode);
+            var scopeLabel = SCOPE_MODE_LABELS[scopeMode] || scopeMode;
+            document.getElementById('stats-header').innerText =
+                users.size + ' users • ' + psychoUsers + ' enriched • ' + claimOnlyUsers + ' claim-only • Scope: ' +
+                scopeLabel + ' (' + scopedCount + ') • Generated ' + generatedDate;
+        }
+
+        function onScopeModeChange() {
+            var el = document.getElementById('scope-mode');
+            var next = el ? String(el.value || 'enriched_only') : 'enriched_only';
+            if (!SCOPE_MODE_LABELS[next]) next = 'enriched_only';
+            scopeMode = next;
+            currentPage = 1;
+            updateHeaderStats();
+            render();
         }
 
         function onViewModeChange() {
@@ -1795,14 +1889,13 @@
             var as = document.getElementById('archetype-filter');
             Array.from(allArchetypes).sort().forEach(function(a) { var o = document.createElement('option'); o.value = a; o.textContent = a.replace(/_/g, ' '); as.appendChild(o); });
 
-            document.getElementById('stats-header').innerText =
-                users.size + ' profiles \u2022 ' + data.stats.psycho_count + ' enriched \u2022 Generated ' + data.stats.generated_at.split('T')[0];
-
             buildValueIndex();
             setupFieldCombo();
             setupValueCombo();
+            document.getElementById('scope-mode').value = scopeMode;
             document.getElementById('view-mode').value = viewMode;
             document.getElementById('page-size').value = String(pageSize);
+            updateHeaderStats();
             render();
         });
 
@@ -1815,7 +1908,7 @@
             var groupFilter = document.getElementById('group-filter').value;
             var archFilter = document.getElementById('archetype-filter').value;
 
-            var list = Array.from(users.values()).filter(function(u) { return u.psycho; });
+            var list = getScopedUsers(scopeMode);
 
             if (search) {
                 list = list.filter(function(u) {
@@ -1824,9 +1917,17 @@
                     var timelineRoles = getTimelineRoles(p);
                     var bioOrgCandidates = getBioOrgCandidates(p);
                     var orgScoreOrgs = getOrgScoreOrgs(p);
+                    var claimText = (u.claims || []).map(function(c) {
+                        return [
+                            c && c.predicate,
+                            c && c.object_value,
+                            c && c.notes,
+                            c && c.status
+                        ].filter(Boolean).join(' ');
+                    }).join(' ');
                     var haystack = [
                         u.display_name, u.handle, u.bio, p.generated_bio_professional, p.generated_bio_personal,
-                        p.primary_role, p.primary_company, p.based_in, p.commercial_archetype
+                        p.primary_role, p.primary_company, p.based_in, p.commercial_archetype, claimText
                     ].concat(timelineOrgs).concat(timelineRoles).concat(bioOrgCandidates).concat(orgScoreOrgs)
                      .concat(p.deep_skills || []).concat(p.fingerprint_tags || [])
                      .concat(p.tribe_affiliations || []).concat(p.group_tags || [])
@@ -1862,8 +1963,10 @@
 
             list.sort(function(a, b) {
                 var pa = a.psycho || {}, pb = b.psycho || {};
+                var aClaimCount = Array.isArray(a.claims) ? a.claims.length : 0;
+                var bClaimCount = Array.isArray(b.claims) ? b.claims.length : 0;
                 switch (sortBy) {
-                    case 'msgs': return (pb.total_msgs || pb.total_messages || 0) - (pa.total_msgs || pa.total_messages || 0);
+                    case 'msgs': return (pb.total_msgs || pb.total_messages || bClaimCount || 0) - (pa.total_msgs || pa.total_messages || aClaimCount || 0);
                     case 'reactions': return (pb.total_reactions || 0) - (pa.total_reactions || 0);
                     case 'engagement': return (Number(pb.engagement_rate) || 0) - (Number(pa.engagement_rate) || 0);
                     case 'recent': return (pa.last_active_days == null ? 9999 : pa.last_active_days) - (pb.last_active_days == null ? 9999 : pb.last_active_days);
@@ -1881,13 +1984,71 @@
             var end = Math.min(start + pageSize, totalCount);
             var pageList = list.slice(start, end);
 
-            if (totalCount === 0) document.getElementById('stats-count').innerText = 'Showing 0 profiles';
-            else document.getElementById('stats-count').innerText = 'Showing ' + (start + 1) + '–' + end + ' of ' + totalCount + ' profiles';
+            if (totalCount === 0) document.getElementById('stats-count').innerText = 'Showing 0 users';
+            else document.getElementById('stats-count').innerText = 'Showing ' + (start + 1) + '–' + end + ' of ' + totalCount + ' users';
             renderPagination(totalCount, totalPages, start, end);
 
             for (var idx = 0; idx < pageList.length; idx++) {
                 var u = pageList[idx];
                 var p = u.psycho;
+                if (!p) {
+                    var card = document.createElement('div');
+                    var claimCount = Array.isArray(u.claims) ? u.claims.length : 0;
+                    var claimStatusCounts = {};
+                    (u.claims || []).forEach(function(c) {
+                        var status = String((c && c.status) || 'unknown').toLowerCase();
+                        claimStatusCounts[status] = (claimStatusCounts[status] || 0) + 1;
+                    });
+                    var statusBadges = Object.keys(claimStatusCounts).sort().map(function(status) {
+                        return '<span class="tag bg-amber-50 text-amber-700 border-amber-200">' +
+                            esc(status) + ': ' + claimStatusCounts[status] +
+                            '</span>';
+                    }).join('');
+                    var claimLimit = isDetailed ? 8 : 4;
+                    var shownClaims = (u.claims || []).slice(0, claimLimit);
+                    var claimRows = shownClaims.map(function(c) {
+                        var pred = c && c.predicate ? String(c.predicate) : '(no predicate)';
+                        var obj = c && c.object_value ? String(c.object_value) : '';
+                        var note = c && c.notes ? String(c.notes) : '';
+                        var confidence = (c && c.confidence != null && Number.isFinite(Number(c.confidence)))
+                            ? Number(c.confidence).toFixed(2)
+                            : 'n/a';
+                        return '<div class="text-[11px] text-slate-600 border border-amber-100 rounded p-2 bg-white">' +
+                            '<div><strong>' + esc(pred) + '</strong>' +
+                            (obj ? ': ' + esc(obj) : '') + '</div>' +
+                            '<div class="text-[10px] text-slate-400 mt-0.5">status: ' + esc(String((c && c.status) || 'unknown')) +
+                            ' • conf: ' + esc(confidence) + '</div>' +
+                            (note ? '<div class="text-[10px] text-slate-500 mt-0.5">' + esc(note) + '</div>' : '') +
+                        '</div>';
+                    }).join('');
+                    var hiddenClaimCount = Math.max(0, claimCount - shownClaims.length);
+                    var userLabel = getUserLabel(u);
+                    card.className = 'bg-white rounded-lg shadow-sm border border-amber-200 border-l-4 border-l-amber-400 overflow-hidden';
+                    card.innerHTML =
+                        '<div class="p-4">' +
+                            '<div class="flex justify-between items-start mb-2">' +
+                                '<div class="flex-1 min-w-0">' +
+                                    '<div class="flex items-center gap-2 flex-wrap">' +
+                                        '<h3 class="text-base font-bold text-slate-900 truncate">' + esc(userLabel) + '</h3>' +
+                                        '<span class="tag bg-amber-100 text-amber-800 border-amber-300">Not enriched yet</span>' +
+                                        '<span class="tag bg-slate-50 text-slate-600 border-slate-200">Claim-only profile</span>' +
+                                    '</div>' +
+                                    (u.bio ? '<p class="text-xs text-slate-500 mt-1">' + esc(u.bio) + '</p>' : '') +
+                                '</div>' +
+                                '<div class="flex flex-col items-end ml-3 shrink-0 text-right">' +
+                                    '<div class="text-xs font-mono text-slate-400">#' + esc(u.id) + '</div>' +
+                                '</div>' +
+                            '</div>' +
+                            '<div class="flex gap-4 text-[11px] text-slate-500 mb-2 border-b border-slate-100 pb-2 flex-wrap">' +
+                                '<strong>' + claimCount + '</strong> claims' +
+                            '</div>' +
+                            (statusBadges ? '<div class="mb-2 flex flex-wrap gap-1">' + statusBadges + '</div>' : '') +
+                            (claimRows ? '<div class="space-y-1.5">' + claimRows + '</div>' : '<div class="text-[11px] text-slate-400">No claim rows.</div>') +
+                            (hiddenClaimCount > 0 ? '<div class="text-[11px] text-slate-400 mt-2">+' + hiddenClaimCount + ' more claims</div>' : '') +
+                        '</div>';
+                    feed.appendChild(card);
+                    continue;
+                }
                 var currentTimeline = getCurrentTimelineEntry(p);
                 var headlineRole = (currentTimeline && currentTimeline.role) ? currentTimeline.role : p.primary_role;
                 var headlineCompany = (currentTimeline && currentTimeline.org) ? currentTimeline.org : p.primary_company;
@@ -2122,7 +2283,7 @@
             }
 
             if (totalCount === 0) {
-                feed.innerHTML = '<div class="text-center text-slate-400 py-10">No profiles match your filters.</div>';
+                feed.innerHTML = '<div class="text-center text-slate-400 py-10">No users match your current scope and filters.</div>';
             }
         }
     </script>

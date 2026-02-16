@@ -1,6 +1,6 @@
 # ── Makefile — convenience commands ──────────────────────
 .PHONY: db-up db-down db-migrate db-rollback db-reset db-status \
-        env-remote env-remote-ip env-local db-smoke \
+        env-remote env-remote-ip env-local db-smoke serve-viewer \
         build pipeline
 
 # ── Environment helpers ──────────────────────────────────
@@ -47,3 +47,7 @@ build:
 # ── Pipeline ─────────────────────────────────────────────
 pipeline:
 	npm run pipeline
+
+# ── Static viewer ───────────────────────────────────────
+serve-viewer:
+	python3 -m http.server 4173 --bind 127.0.0.1 --directory .

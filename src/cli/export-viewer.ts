@@ -3,6 +3,11 @@ import { db } from '../db/index.js';
 import fs from 'fs';
 import path from 'path';
 
+const DEFAULT_MODEL_VERSION = 'v0.6.0';
+const DEFAULT_SCOPE_MODE = 'enriched_only';
+const VALID_SCOPE_MODES = ['enriched_only', 'profiles_only', 'all_data'] as const;
+type ScopeMode = typeof VALID_SCOPE_MODES[number];
+
 function keyOf(id: unknown): string {
   if (typeof id === 'string') return id;
   if (typeof id === 'number') return String(id);
@@ -10,9 +15,78 @@ function keyOf(id: unknown): string {
   return String(id);
 }
 
+function parsePositiveInt(raw: string | undefined): number | null {
+  if (!raw) return null;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n;
+}
+
+function parseStatuses(raw: string | undefined): string[] {
+  const src = raw && raw.trim() ? raw : 'supported';
+  return Array.from(
+    new Set(
+      src
+        .split(',')
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean),
+    ),
+  );
+}
+
+function parseScopeMode(raw: string | undefined): ScopeMode {
+  if (!raw) return DEFAULT_SCOPE_MODE;
+  const normalized = raw.trim().toLowerCase();
+  if ((VALID_SCOPE_MODES as readonly string[]).includes(normalized)) {
+    return normalized as ScopeMode;
+  }
+  return DEFAULT_SCOPE_MODE;
+}
+
+function sortUserIds(ids: Iterable<string>): string[] {
+  return Array.from(ids).sort((a, b) => {
+    const an = Number(a);
+    const bn = Number(b);
+    const aNum = Number.isFinite(an);
+    const bNum = Number.isFinite(bn);
+    if (aNum && bNum) return an - bn;
+    return a.localeCompare(b);
+  });
+}
+
+function withLimit(ids: string[], limit: number | null): string[] {
+  if (!limit || ids.length <= limit) return ids;
+  return ids.slice(0, limit);
+}
+
+function union(...sets: Set<string>[]): Set<string> {
+  const out = new Set<string>();
+  for (const s of sets) {
+    for (const v of s) out.add(v);
+  }
+  return out;
+}
+
+function difference(a: Set<string>, b: Set<string>): Set<string> {
+  const out = new Set<string>();
+  for (const v of a) {
+    if (!b.has(v)) out.add(v);
+  }
+  return out;
+}
+
 async function main() {
-  const version = 'v0.6.0';
+  const version = process.env.VIEWER_MODEL_VERSION?.trim() || DEFAULT_MODEL_VERSION;
+  const qualifyingClaimStatuses = parseStatuses(process.env.VIEWER_QUALIFYING_CLAIM_STATUSES);
+  const scopeUserLimit = parsePositiveInt(process.env.VIEWER_SCOPE_USER_LIMIT);
+  const defaultScopeMode = parseScopeMode(process.env.VIEWER_DEFAULT_SCOPE_MODE);
+
   console.log(`Exporting data for version ${version}...`);
+  console.log(`Qualifying claim statuses: ${qualifyingClaimStatuses.join(', ')}`);
+  console.log(`Default scope mode: ${defaultScopeMode}`);
+  if (scopeUserLimit) {
+    console.log(`Applying scope user limit: ${scopeUserLimit}`);
+  }
 
   // 1. Get Claims
   console.log('Fetching claims...');
@@ -73,6 +147,37 @@ async function main() {
     JOIN users u ON u.id = p.user_id
     ORDER BY p.user_id, p.created_at DESC
   `);
+
+  const claimUserIds = new Set<string>();
+  const qualifyingClaimUserIds = new Set<string>();
+  for (const row of claimsRes.rows as any[]) {
+    const uid = keyOf(row.subject_user_id);
+    claimUserIds.add(uid);
+    const status = String(row.status || '').toLowerCase();
+    if (qualifyingClaimStatuses.includes(status)) {
+      qualifyingClaimUserIds.add(uid);
+    }
+  }
+
+  const psychoUserIds = new Set<string>();
+  for (const row of psychoRes.rows as any[]) {
+    psychoUserIds.add(keyOf(row.user_id));
+  }
+
+  const scopeRaw = {
+    enriched_only: sortUserIds(psychoUserIds),
+    profiles_only: sortUserIds(union(psychoUserIds, qualifyingClaimUserIds)),
+    all_data: sortUserIds(union(psychoUserIds, claimUserIds)),
+  } as const;
+
+  const scopeVisible = {
+    enriched_only: withLimit(scopeRaw.enriched_only, scopeUserLimit),
+    profiles_only: withLimit(scopeRaw.profiles_only, scopeUserLimit),
+    all_data: withLimit(scopeRaw.all_data, scopeUserLimit),
+  } as const;
+
+  const claimOnlyAll = difference(claimUserIds, psychoUserIds);
+  const claimOnlyQualifying = difference(qualifyingClaimUserIds, psychoUserIds);
 
   // 4b. Build evidence lookup from psychographics
   console.log('Building evidence lookup...');
@@ -200,16 +305,50 @@ async function main() {
 
   // 7. Stats
   const stats = {
+     generated_at: new Date().toISOString(),
+     model_version: version,
      total_claims: claimsRes.rows.length,
-     supported_claims: claimsRes.rows.filter(r => r.status === 'supported').length,
+     supported_claims: claimsRes.rows.filter(r => String(r.status).toLowerCase() === 'supported').length,
      total_abstentions: abstentionRes.rows.length,
      enrichment_count: enrichmentsRes.rows.length,
      psycho_count: psychoRes.rows.length,
-     generated_at: new Date().toISOString()
+     psycho_users: psychoUserIds.size,
+     claim_users: claimUserIds.size,
+     qualifying_claim_users: qualifyingClaimUserIds.size,
+     claim_only_users: claimOnlyAll.size,
+     qualifying_claim_only_users: claimOnlyQualifying.size,
+     qualifying_claim_statuses: qualifyingClaimStatuses,
+     scope_default_mode: defaultScopeMode,
+     scope_limit_env: scopeUserLimit,
+     scope_limit_applied: Boolean(scopeUserLimit),
+     scope_raw_counts: {
+      enriched_only: scopeRaw.enriched_only.length,
+      profiles_only: scopeRaw.profiles_only.length,
+      all_data: scopeRaw.all_data.length,
+     },
+     scope_visible_counts: {
+      enriched_only: scopeVisible.enriched_only.length,
+      profiles_only: scopeVisible.profiles_only.length,
+      all_data: scopeVisible.all_data.length,
+     },
+     scope_visible_size_used: scopeVisible[defaultScopeMode].length,
   };
 
   const data = {
       stats,
+      scope: {
+        default_mode: defaultScopeMode,
+        available_modes: VALID_SCOPE_MODES,
+        qualifying_claim_statuses: qualifyingClaimStatuses,
+        user_limit: scopeUserLimit,
+        raw_counts: stats.scope_raw_counts,
+        visible_counts: stats.scope_visible_counts,
+        modes: {
+          enriched_only: { user_ids: scopeVisible.enriched_only },
+          profiles_only: { user_ids: scopeVisible.profiles_only },
+          all_data: { user_ids: scopeVisible.all_data },
+        },
+      },
       claims: claimsRes.rows,
       abstentions: abstentionRes.rows,
       enrichments: enrichmentsRes.rows,
