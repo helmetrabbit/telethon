@@ -116,19 +116,37 @@ def serialize_message(msg, sender, peer, account_external_id: str | None = None)
     sender_name = _display_name(sender)
     peer_name = _display_name(peer)
 
+    sender_id = None
+    sender_username = None
+    sender_is_bot = False
+    if isinstance(sender, int):
+        sender_id = f"user{sender}"
+    elif sender:
+        sender_id = f"user{sender.id}"
+        sender_username = getattr(sender, "username", None)
+        sender_is_bot = bool(getattr(sender, "bot", False))
+
+    peer_id = None
+    peer_username = None
+    if isinstance(peer, int):
+        peer_id = f"user{peer}"
+    elif peer:
+        peer_id = f"user{peer.id}"
+        peer_username = getattr(peer, "username", None)
+
     return {
         "message_id": msg.id,
         "chat_id": msg.chat_id,
         "account_id": account_external_id,
         "chat_type": "private",
         "direction": "outbound" if msg.out else "inbound",
-        "sender_id": f"user{sender.id}" if sender else None,
+        "sender_id": sender_id,
         "sender_name": sender_name,
-        "sender_username": sender.username if sender else None,
-        "sender_is_bot": bool(getattr(sender, "bot", False)),
-        "peer_id": f"user{peer.id}" if peer else None,
+        "sender_username": sender_username,
+        "sender_is_bot": sender_is_bot,
+        "peer_id": peer_id,
         "peer_name": peer_name,
-        "peer_username": peer.username if peer else None,
+        "peer_username": peer_username,
         "text": msg.message,
         "text_len": len(msg.message or ""),
         "date": msg.date.astimezone(timezone.utc).isoformat(),
@@ -205,15 +223,16 @@ async def main() -> None:
             return
 
         # Keep only private DMs
-        if not isinstance(getattr(msg, "to_id", None), PeerUser):
+        if not hasattr(getattr(msg, "to_id", None), "user_id") and not isinstance(getattr(msg, "to_id", None), PeerUser):
             return
 
         if args.skip_outgoing and msg.out:
             return
 
         sender = await event.get_sender()
+        sender = sender or getattr(msg.from_id, "user_id", None)
         if sender is None:
-            return
+            print("[warn] received message without sender", msg.id)
 
         peer = None
         try:
@@ -221,7 +240,7 @@ async def main() -> None:
         except Exception:
             peer = None
 
-        row = serialize_message(msg, sender, peer, f"user{me.id}" if me else None)
+        row = serialize_message(msg, getattr(sender, "id", sender), peer, f"user{me.id}" if me else None)
         row["captured_at"] = datetime.now(timezone.utc).isoformat()
 
         # Persist one JSON object per line
