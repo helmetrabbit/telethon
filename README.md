@@ -73,10 +73,20 @@ make tg-ingest-dm-jsonl file=data/exports/telethon_dms_live.jsonl
 # or: npm run ingest-dm-jsonl -- --file data/exports/telethon_dms_live.jsonl
 ```
 
-For continuous context, run ingest in a loop while you keep the listener on in another terminal:
+Start fully automatic live DM ingestion (listener + periodic ingest loop):
 
 ```bash
-make tg-listen-ingest-dm file=data/exports/telethon_dms_live.jsonl interval=30
+make tg-live-start
+# optional overrides:
+#   FILE=data/exports/telethon_dms_live.jsonl
+#   INTERVAL=10
+```
+
+Check and stop:
+
+```bash
+make tg-live-status
+make tg-live-stop
 ```
 
 If this is your first DM ingest, run migrations first:

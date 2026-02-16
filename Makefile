@@ -1,7 +1,7 @@
 # ── Makefile — convenience commands ──────────────────────
 .PHONY: db-up db-down db-migrate db-rollback db-reset db-status \
         env-remote env-remote-ip env-local db-smoke serve-viewer \
-        tg-listen-dm tg-ingest-dm-jsonl tg-listen-ingest-dm build pipeline
+        tg-listen-dm tg-ingest-dm-jsonl tg-listen-ingest-dm tg-live-start tg-live-stop tg-live-status build pipeline
 
 # ── Environment helpers ──────────────────────────────────
 env-remote:
@@ -70,3 +70,24 @@ tg-listen-ingest-dm:
 		npm run ingest-dm-jsonl -- --file "$$FILE" || true; \
 		sleep $$INTERVAL; \
 	done
+
+# ── One-shot always-running DM pipeline (listener + periodic ingest) ──
+# Usage:
+#   make tg-live-start FILE=data/exports/telethon_dms_live.jsonl INTERVAL=30
+tg-live-start:
+	@FILE=$${FILE:-data/exports/telethon_dms_live.jsonl}; \
+	INTERVAL=$${INTERVAL:-30}; \
+	bash tools/telethon_collector/run-dm-live.sh "$$FILE" "$$INTERVAL"
+
+# Show/stop helpers for the one-shot pipeline
+tg-live-status:
+	@LISTENER=$$(cat data/.pids/tg-listen-dm.pid 2>/dev/null || true); \
+	INGEST=$$(cat data/.pids/tg-ingest-dm.pid 2>/dev/null || true); \
+	echo "Listener pid: $$LISTENER"; \
+	echo "Ingest pid: $$INGEST"; \
+	[ -n "$$LISTENER" ] && kill -0 "$$LISTENER" 2>/dev/null && echo "  listener: running" || echo "  listener: stopped"; \
+	[ -n "$$INGEST" ] && kill -0 "$$INGEST" 2>/dev/null && echo "  ingest: running" || echo "  ingest: stopped"
+
+tg-live-stop:
+	@bash -lc 'function stop_one() {     pid_file=$$1;     label=$$2;     PID=$$(cat "$$pid_file");     kill "$$PID" 2>/dev/null || true;     rm -f "$$pid_file";     echo "$$label $$PID"; }; if [ -f data/.pids/tg-listen-dm.pid ]; then stop_one data/.pids/tg-listen-dm.pid "stopped listener"; fi; if [ -f data/.pids/tg-ingest-dm.pid ]; then stop_one data/.pids/tg-ingest-dm.pid "stopped ingest"; fi'
+
