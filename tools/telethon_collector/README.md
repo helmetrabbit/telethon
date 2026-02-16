@@ -45,6 +45,30 @@ Edit `tools/telethon_collector/.env` and fill in:
 
 On the first run, Telethon will prompt you for a verification code sent to your Telegram app. This creates a session file so subsequent runs are automatic.
 
+## 4. Stream mode (recommended)
+
+`listen_telegram.py` keeps a long-lived Telethon session and streams:
+- new messages from groups/channels into existing `messages`/`memberships` tables
+- private DMs into dedicated tables: `dm_conversations`, `dm_messages`, `dm_interpretations`, `dm_followups`
+
+Start it with:
+
+```bash
+make tg:listen
+```
+
+Keep it running in tmux/systemd to keep live synchronization on your server.
+
+### Optional env
+
+You can point the listener directly at a DSN with:
+
+```bash
+PG_DSN=postgresql://user:pass@host:5432/db
+```
+
+If omitted, it uses `DATABASE_URL` from the repo root `.env`.
+
 ## Usage
 
 ### List your dialogs (find group IDs)
@@ -140,3 +164,4 @@ This is expected for many large groups. The ingest pipeline will still work — 
 | `*.checkpoint.json` | In-progress collection checkpoint (gitignored, auto-deleted on completion) |
 | `list_dialogs.py` | List all your Telegram chats |
 | `collect_group_export.py` | Main collector script |
+| `listen_telegram.py` | Long-lived listener for group + DM message streaming |

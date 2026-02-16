@@ -1,7 +1,7 @@
 # ── Makefile — convenience commands ──────────────────────
 .PHONY: db-up db-down db-migrate db-rollback db-reset db-status \
         build ingest compute-features infer-claims export-profiles pipeline \
-        tg\:venv tg\:list-dialogs tg\:collect
+        tg\:venv tg\:list-dialogs tg\:collect tg\:listen
 
 # ── Database ─────────────────────────────────────────────
 db-up:
@@ -70,6 +70,10 @@ tg\:collect: | $(TG_VENV)
 		--out "$(OUT)" \
 		$(if $(LIMIT),--limit $(LIMIT),) \
 		$(if $(SINCE),--since $(SINCE),)
+
+tg\:listen: | $(TG_VENV)
+	@echo "\n▶ Streaming listener starting (group + DM)..."
+	$(TG_PY) tools/telethon_collector/listen_telegram.py
 
 $(TG_VENV):
 	@echo "❌ Venv not found. Run 'make tg:venv' first." && exit 1
