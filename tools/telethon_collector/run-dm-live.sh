@@ -185,7 +185,7 @@ start_listener() {
     DM_AUTO_ACK="${DM_AUTO_ACK:-0}" \
     DM_AUTO_ACK_TEXT="${DM_AUTO_ACK_TEXT:-Got it — I captured this message and will process it now.}" \
     TG_SESSION_PATH="$SESSION_PATH" \
-    python3 listen-dms.py --out "$JSONL_PATH"
+    .venv/bin/python3 listen-dms.py --out "$JSONL_PATH"
   ) >> "$LOG_DIR/dm-listener.log" 2>&1 &
   listener_pid=$!
   echo "$listener_pid" > "$LISTENER_PID_FILE"
