@@ -25,7 +25,8 @@
     "env:remote": "bash tools/use-remote-db.sh",
     "env:remote:ip": "bash tools/use-remote-db.sh --ip",
     "env:local": "bash tools/use-local-db.sh",
-    "db:smoke": "npm run build && node dist/db/smoke-test.js"
+    "db:smoke": "npm run build && node dist/db/smoke-test.js",
+    "ingest-dm-jsonl": "node dist/cli/ingest-dm-jsonl.js"
   },
   "engines": {
     "node": ">=18"

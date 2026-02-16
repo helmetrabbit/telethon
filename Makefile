@@ -1,7 +1,7 @@
 # ── Makefile — convenience commands ──────────────────────
 .PHONY: db-up db-down db-migrate db-rollback db-reset db-status \
         env-remote env-remote-ip env-local db-smoke serve-viewer \
-        build pipeline
+        tg-listen-dm tg-ingest-dm-jsonl build pipeline
 
 # ── Environment helpers ──────────────────────────────────
 env-remote:
@@ -51,3 +51,12 @@ pipeline:
 # ── Static viewer ───────────────────────────────────────
 serve-viewer:
 	python3 -m http.server 4173 --bind 127.0.0.1 --directory .
+
+# ── DM-only live listener (private chats only) ───────────
+tg-listen-dm:
+	cd tools/telethon_collector && python3 listen-dms.py --out ../../data/exports/telethon_dms_live.jsonl
+
+# ── DM JSONL to Postgres (requires dm tables migration) ───────────
+tg-ingest-dm-jsonl:
+	@FILE=$${file:-data/exports/telethon_dms_live.jsonl}; \
+	npm run ingest-dm-jsonl -- --file "$$FILE"

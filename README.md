@@ -47,13 +47,45 @@ make db-migrate
 ```
 
 
-### 3. Put a Telegram JSON export in place
+### 3. Data collection strategy (important)
+
+- **Groups:** manual export is the reliable path (historical coverage, no group-access surprises).
+- **DMs:** can use live collection safely, private chats only.
+
+Manual group export:
+
+```bash
+source tools/telethon_collector/.venv/bin/activate
+python tools/telethon_collector/collect_group_export.py --group "<group name or @username>" --out data/exports/<group>.json
+```
+
+Live DM capture:
+
+```bash
+make tg-listen-dm
+# Writes to: data/exports/telethon_dms_live.jsonl
+```
+
+Ingest live DM stream into Postgres (separate from group tables):
+
+```bash
+make tg-ingest-dm-jsonl file=data/exports/telethon_dms_live.jsonl
+# or: npm run ingest-dm-jsonl -- --file data/exports/telethon_dms_live.jsonl
+```
+
+If this is your first DM ingest, run migrations first:
+
+```bash
+make db-migrate
+```
+
+### 4. Put a Telegram JSON export in place
 
 ```
 data/exports/your_chat.json
 ```
 
-### 4. Run the pipeline
+### 5. Run the pipeline
 
 ```bash
 # One-shot pipeline
@@ -82,6 +114,7 @@ npm run backfill-message-names # Name backfill from Telegram export sender strin
 npm run backfill-telethon-names # Telethon-based display-name backfill
 npm run compute-features # Per-user daily aggregates
 npm run scrape-bios      # Scrape public bios from t.me
+npm run ingest-dm-jsonl # Ingest DM JSONL from live/private collector
 npm run enrich-psycho    # LLM psychographic profiling
 npm run export-viewer    # Export viewer/data.js
 ```
