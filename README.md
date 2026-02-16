@@ -73,13 +73,27 @@ make tg-ingest-dm-jsonl file=data/exports/telethon_dms_live.jsonl
 # or: npm run ingest-dm-jsonl -- --file data/exports/telethon_dms_live.jsonl
 ```
 
-Start fully automatic live DM ingestion (listener + periodic ingest loop):
+The live ingest supports resumable checkpoints so repeated runs only process new rows:
+
+```bash
+# explicit checkpoint path (optional; defaults to <jsonl>.checkpoint.json)
+npm run ingest-dm-jsonl -- --file data/exports/telethon_dms_live.jsonl --state-file data/.state/dm-live.state.json
+```
+
+Start fully automatic live DM pipeline (listener + periodic ingest + reconciler):
 
 ```bash
 make tg-live-start
 # optional overrides:
 #   FILE=data/exports/telethon_dms_live.jsonl
 #   INTERVAL=10
+#   STATE_FILE=data/.state/dm-live.state.json
+```
+
+For ingest-only automation (no profile reconciliation):
+
+```bash
+make tg-live-start-ingest
 ```
 
 For automatic *DM profile correction reconciliation* (company/role corrections from inbound chat):
@@ -89,6 +103,19 @@ make tg-listen-ingest-dm-profile FILE=data/exports/telethon_dms_live.jsonl INTER
 # or one-off reconcile run:
 make tg-reconcile-dm-psych
 # optionally: make tg-reconcile-dm-psych userIds=1,2011 limit=5
+```
+
+Health and lifecycle:
+
+```bash
+make tg-live-status
+make tg-live-stop
+```
+
+If you need a clean replay (reprocess full file), reset checkpoints:
+
+```bash
+make tg-live-state-reset FILE=data/exports/telethon_dms_live.jsonl STATE_FILE=data/.state/dm-live.state.json
 ```
 
 Check and stop:
@@ -220,3 +247,34 @@ Core tables used by code:
 - `app-config.ts` exists but is unused.
 
 If you want these filled in, ask and I’ll implement them.
+
+## Automated DM Pipeline (recommended)
+
+For 24/7 unattended enrichment, use the long-running supervisor:
+
+```bash
+# Start once (runs listener, resumable ingestion, and optional reconcile)
+make tg-live-start
+
+# Check health
+make tg-live-status
+
+# Stop cleanly
+make tg-live-stop
+```
+
+Supervisor semantics:
+- keeps a single listener process alive and restarts it if it exits
+- ingests new DM lines with a checkpoint file (`.checkpoint.json` or `STATE_FILE` override)
+- runs reconciliation in the same cycle when started with `tg-live-start`
+- uses exponential-ish backoff after failures
+
+To run under systemd, call `make tg-live-start` from a service that stays running; logs are written to `data/logs/` and state is persisted in `data/.state/`.
+
+Example systemd unit bootstrap (adjust paths/user):
+
+```bash
+sudo cp tools/telethon_collector/systemd/tg-dm-live.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now tg-dm-live
+```

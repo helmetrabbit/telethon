@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 import crypto from 'node:crypto';
-import fs from 'fs';
+import fs from 'node:fs';
+import { promises as fsp } from 'node:fs';
 import readline from 'node:readline';
-import path from 'path';
+import path from 'node:path';
 import { db } from '../db/index.js';
 import { parseArgs } from '../utils.js';
 
@@ -40,6 +41,14 @@ interface ProfileEvent {
   confidence: number;
 }
 
+interface IngestState {
+  version: 1;
+  file: string;
+  lastLine: number;
+  fileSize: number;
+  updatedAt: string;
+}
+
 const HANDLE_RE = /@([A-Za-z0-9_]+)/g;
 
 function parseLine(raw: string): DmEvent | null {
@@ -48,6 +57,50 @@ function parseLine(raw: string): DmEvent | null {
   } catch {
     return null;
   }
+}
+
+function isTruthyNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+async function loadIngestState(statePath: string | null): Promise<IngestState | null> {
+  if (!statePath) return null;
+  try {
+    const raw = await fsp.readFile(statePath, 'utf8');
+    const parsed = JSON.parse(raw) as Partial<IngestState>;
+    const parsedLastLine = parsed.lastLine;
+    const parsedFileSize = parsed.fileSize;
+
+    if (
+      parsed
+      && typeof parsed.file === 'string'
+      && typeof parsedLastLine === 'number'
+      && Number.isInteger(parsedLastLine)
+      && parsedLastLine >= 0
+      && typeof parsedFileSize === 'number'
+      && Number.isInteger(parsedFileSize)
+      && parsedFileSize >= 0
+      && typeof parsed.updatedAt === 'string'
+    ) {
+      return {
+        version: 1,
+        file: parsed.file,
+        lastLine: parsedLastLine,
+        fileSize: parsedFileSize,
+        updatedAt: parsed.updatedAt,
+      };
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
+async function writeIngestState(statePath: string | null, state: IngestState): Promise<void> {
+  if (!statePath) return;
+  await fsp.mkdir(path.dirname(statePath), { recursive: true });
+  await fsp.writeFile(statePath, JSON.stringify(state, null, 2), 'utf8');
 }
 
 function validDmDirection(v: unknown): v is 'inbound' | 'outbound' {
@@ -392,19 +445,54 @@ async function main() {
   const filePath = args['file'];
 
   if (!filePath) {
-    console.error('Usage: npm run ingest-dm-jsonl -- --file <data/exports/telethon_dms_live.jsonl>');
+    console.error(
+      'Usage: npm run ingest-dm-jsonl -- --file <data/exports/telethon_dms_live.jsonl> [--state-file <path>]',
+    );
     process.exit(1);
   }
 
   const abs = path.resolve(process.cwd(), filePath);
+  const statePath = args['state-file']
+    ? path.resolve(process.cwd(), args['state-file'])
+    : `${abs}.checkpoint.json`;
+
+  const existingState = await loadIngestState(statePath);
+  const fileStats = await fsp.stat(abs);
+
+  const shouldResetState = !(
+    existingState
+    && existingState.file === abs
+    && existingState.lastLine >= 0
+    && existingState.fileSize <= fileStats.size
+  );
+
+  const startLine = shouldResetState ? 0 : existingState?.lastLine || 0;
+
+  if (existingState && shouldResetState) {
+    console.log(
+      `⚠️  DM state reset for ${abs}; detected file rollover/size reset (checkpoint at ${existingState.fileSize} bytes, current ${fileStats.size} bytes).`,
+    );
+  }
+
+  console.log(`📥 Ingesting DM JSONL from: ${abs}`);
+  if (startLine > 0) {
+    console.log(`   Resuming from line ${startLine + 1} (state: ${statePath}).`);
+  } else {
+    console.log('   Full scan mode (no resumable state).');
+  }
+
   const readStream = fs.createReadStream(abs, { encoding: 'utf8' });
   const rl = readline.createInterface({ input: readStream });
 
-  console.log(`📥 Ingesting DM JSONL from: ${abs}`);
-
   const start = Date.now();
   const rows: string[] = [];
-  for await (const line of rl) rows.push(line);
+  let lineNo = 0;
+
+  for await (const line of rl) {
+    lineNo += 1;
+    if (lineNo <= startLine) continue;
+    rows.push(line);
+  }
 
   const { inserted, skipped, malformed, users, psychEvents } = await db.transaction(async (client) => {
     return ingestBatch(client, rows);
@@ -412,12 +500,21 @@ async function main() {
 
   const elapsedSec = ((Date.now() - start) / 1000).toFixed(1);
   console.log(`\n✅ DM JSONL ingest finished`);
+  console.log(`   File lines processed: ${lineNo - startLine}`);
   console.log(`   Inserted messages: ${inserted}`);
   console.log(`   Skipped/Duplicates: ${skipped}`);
   console.log(`   Malformed lines: ${malformed}`);
   console.log(`   Profile signal events: ${psychEvents}`);
   console.log(`   Upserted users: ${users}`);
   console.log(`   Time: ${elapsedSec}s`);
+
+  await writeIngestState(statePath, {
+    version: 1,
+    file: abs,
+    lastLine: lineNo,
+    fileSize: fileStats.size,
+    updatedAt: new Date().toISOString(),
+  });
 
   await db.close();
 }

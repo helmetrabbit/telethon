@@ -1,7 +1,7 @@
 # ── Makefile — convenience commands ──────────────────────
 .PHONY: db-up db-down db-migrate db-rollback db-reset db-status \
         env-remote env-remote-ip env-local db-smoke serve-viewer \
-        tg-listen-dm tg-ingest-dm-jsonl tg-listen-ingest-dm tg-listen-ingest-dm-profile tg-reconcile-dm-psych tg-live-start tg-live-stop tg-live-status build pipeline
+        tg-listen-dm tg-ingest-dm-jsonl tg-listen-ingest-dm tg-listen-ingest-dm-profile tg-reconcile-dm-psych tg-live-start tg-live-start-ingest tg-live-stop tg-live-status tg-live-state-reset build pipeline
 
 # ── Environment helpers ──────────────────────────────────
 env-remote:
@@ -54,30 +54,34 @@ serve-viewer:
 
 # ── DM-only live listener (private chats only) ───────────
 tg-listen-dm:
-	cd tools/telethon_collector && . .venv/bin/activate && python3 listen-dms.py --out ../../data/exports/telethon_dms_live.jsonl
+	@OUT=$${out:-../../data/exports/telethon_dms_live.jsonl}; \
+	cd tools/telethon_collector && . .venv/bin/activate && python3 listen-dms.py --out "$$OUT"
 
 # ── DM JSONL to Postgres (requires dm tables migration) ───────────
 tg-ingest-dm-jsonl:
 	@FILE=$${file:-data/exports/telethon_dms_live.jsonl}; \
-	npm run ingest-dm-jsonl -- --file "$$FILE"
+	STATE_FILE=$${state_file:-$${FILE}.checkpoint.json}; \
+	npm run ingest-dm-jsonl -- --file "$$FILE" --state-file "$$STATE_FILE"
 
-# ── Continuous DM live loop (capture + periodic ingest) ───────────
+# ── Continuous DM live loop (capture + periodic ingest only) ───────────
 tg-listen-ingest-dm:
 	@FILE=$${file:-data/exports/telethon_dms_live.jsonl}; \
+	STATE_FILE=$${state_file:-$${FILE}.checkpoint.json}; \
 	INTERVAL=$${interval:-30}; \
 	while true; do \
 		echo "[$$(date -Is)] ingesting $$FILE"; \
-		npm run ingest-dm-jsonl -- --file "$$FILE" || true; \
+		npm run ingest-dm-jsonl -- --file "$$FILE" --state-file "$$STATE_FILE" || true; \
 		sleep $$INTERVAL; \
 	done
 
 # ── Continuous DM live loop + automatic profile correction merge ───
 tg-listen-ingest-dm-profile:
 	@FILE=$${file:-data/exports/telethon_dms_live.jsonl}; \
+	STATE_FILE=$${state_file:-$${FILE}.checkpoint.json}; \
 	INTERVAL=$${interval:-30}; \
 	while true; do \
 		echo "[$$(date -Is)] ingesting $$FILE + reconciliation"; \
-		npm run ingest-dm-jsonl -- --file "$$FILE" || true; \
+		npm run ingest-dm-jsonl -- --file "$$FILE" --state-file "$$STATE_FILE" || true; \
 		npm run reconcile-dm-psych || true; \
 		sleep $$INTERVAL; \
 	done
@@ -93,22 +97,41 @@ tg-reconcile-dm-psych:
 		npm run reconcile-dm-psych -- --limit $$LIMIT; \
 	fi
 
-# One-shot always-running DM pipeline (listener + periodic ingest) ──
+# One-shot always-running DM pipeline (listener + periodic ingest + reconcile) ──
 # Usage:
 #   make tg-live-start FILE=data/exports/telethon_dms_live.jsonl INTERVAL=30
+#   make tg-live-start [STATE_FILE=data/.state/dm-live.state.json]
+
 tg-live-start:
 	@FILE=$${FILE:-data/exports/telethon_dms_live.jsonl}; \
 	INTERVAL=$${INTERVAL:-30}; \
-	bash tools/telethon_collector/run-dm-live.sh "$$FILE" "$$INTERVAL"
+	STATE_FILE=$${STATE_FILE:-data/.state/dm-live.state.json}; \
+	bash tools/telethon_collector/run-dm-live.sh "$$FILE" "$$INTERVAL" profile "$$STATE_FILE"
 
-# Show/stop helpers for the one-shot pipeline
+# Keep legacy naming for old behavior: full ingest loop only
+
+tg-live-start-ingest:
+	@FILE=$${FILE:-data/exports/telethon_dms_live.jsonl}; \
+	INTERVAL=$${INTERVAL:-30}; \
+	STATE_FILE=$${STATE_FILE:-data/.state/dm-live.state.json}; \
+	bash tools/telethon_collector/run-dm-live.sh "$$FILE" "$$INTERVAL" ingest "$$STATE_FILE"
+
+# Show/stop helpers for the live pipeline
 tg-live-status:
-	@LISTENER=$$(cat data/.pids/tg-listen-dm.pid 2>/dev/null || true); \
-	INGEST=$$(cat data/.pids/tg-ingest-dm.pid 2>/dev/null || true); \
+	@SUPERVISOR=$$(cat data/.pids/tg-live-supervisor.pid 2>/dev/null || true); \
+	LISTENER=$$(cat data/.pids/tg-listen-dm.pid 2>/dev/null || true); \
+	echo "Supervisor pid: $$SUPERVISOR"; \
 	echo "Listener pid: $$LISTENER"; \
-	echo "Ingest pid: $$INGEST"; \
-	[ -n "$$LISTENER" ] && kill -0 "$$LISTENER" 2>/dev/null && echo "  listener: running" || echo "  listener: stopped"; \
-	[ -n "$$INGEST" ] && kill -0 "$$INGEST" 2>/dev/null && echo "  ingest: running" || echo "  ingest: stopped"
+	[ -n "$$SUPERVISOR" ] && kill -0 "$$SUPERVISOR" 2>/dev/null && echo "  supervisor: running" || echo "  supervisor: stopped"; \
+	[ -n "$$LISTENER" ] && kill -0 "$$LISTENER" 2>/dev/null && echo "  listener: running" || echo "  listener: stopped"
 
 tg-live-stop:
-	@bash -lc 'function stop_one() {     pid_file=$$1;     label=$$2;     PID=$$(cat "$$pid_file");     kill "$$PID" 2>/dev/null || true;     rm -f "$$pid_file";     echo "$$label $$PID"; }; if [ -f data/.pids/tg-listen-dm.pid ]; then stop_one data/.pids/tg-listen-dm.pid "stopped listener"; fi; if [ -f data/.pids/tg-ingest-dm.pid ]; then stop_one data/.pids/tg-ingest-dm.pid "stopped ingest"; fi'
+	@bash -lc 'function stop_one() {     pid_file=$$1;     label=$$2;     if [ -f "$$pid_file" ]; then PID=$$(cat "$$pid_file"); kill "$$PID" 2>/dev/null || true; rm -f "$$pid_file"; echo "$$label $$PID"; fi }; \
+	stop_one data/.pids/tg-live-supervisor.pid "stopped supervisor"; \
+	stop_one data/.pids/tg-listen-dm.pid "stopped listener"'
+
+# Clean persisted checkpoint state when you want a clean resync
+tg-live-state-reset:
+	@FILE=$${FILE:-data/exports/telethon_dms_live.jsonl}; \
+	STATE_FILE=$${STATE_FILE:-$${FILE}.checkpoint.json}; \
+	rm -f "$$STATE_FILE" "data/.state/dm-live.state.json"

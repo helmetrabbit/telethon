@@ -1,0 +1,20 @@
+[Unit]
+Description=Telegram DM live profile pipeline (listener + ingest + reconcile)
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/node/.openclaw/workspace/telethon
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/make tg-live-start
+# Optional custom vars:
+# Environment=FILE=/path/to/data/exports/telethon_dms_live.jsonl
+# Environment=INTERVAL=30
+# Environment=STATE_FILE=/home/node/.openclaw/workspace/telethon/data/.state/dm-live.state.json
+Restart=always
+RestartSec=20
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target
