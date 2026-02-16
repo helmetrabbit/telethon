@@ -17,7 +17,7 @@ import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -122,6 +122,14 @@ _OPTION_ONLY_RE = re.compile(
 )
 _NON_TEXT_MARKER_RE = re.compile(
     r"^\s*(?:voice\s+message|gif|sticker|photo|video|audio|file)\s*$",
+    re.IGNORECASE,
+)
+_ONBOARDING_START_RE = re.compile(
+    r"\b(?:onboard|onboarding|set\s+up\s+my\s+profile|setup\s+my\s+profile|initialize\s+my\s+profile|update\s+my\s+profile)\b",
+    re.IGNORECASE,
+)
+_ONBOARDING_ACK_RE = re.compile(
+    r"^\s*(?:yes|yep|yeah|sure|ok|okay|start|go\s+ahead|lets\s+go|let's\s+go)\s*[.!?]*\s*$",
     re.IGNORECASE,
 )
 _LLM_FORBIDDEN_CLAIM_RE = re.compile(
@@ -265,6 +273,26 @@ PROFILE_QUERY_CANDIDATE_COLUMNS = [
     'role_company_timeline',
 ]
 _PROFILE_QUERY_COLUMNS_CACHE: Optional[List[str]] = None
+ONBOARDING_REQUIRED_FIELDS = ['primary_role', 'primary_company', 'notable_topics', 'preferred_contact_style']
+ONBOARDING_SLOT_QUESTIONS: Dict[str, List[str]] = {
+    'primary_role': [
+        "What title should I store for you right now?",
+        "What role best describes your day-to-day right now?",
+    ],
+    'primary_company': [
+        "What company or project should I map you to currently?",
+        "What org/project are you currently focused on?",
+    ],
+    'notable_topics': [
+        "What are your top 2 priorities right now?",
+        "What 2-3 topics should I tag as your current focus?",
+    ],
+    'preferred_contact_style': [
+        "How should I communicate with you: concise, detailed, or quick back-and-forth?",
+        "What response style do you prefer from me?",
+    ],
+}
+_ONBOARDING_STATE_COLUMNS_CACHE: Optional[Set[str]] = None
 
 
 def _fetch_profile_query_columns(conn) -> List[str]:
@@ -287,6 +315,185 @@ def _fetch_profile_query_columns(conn) -> List[str]:
         col for col in PROFILE_QUERY_CANDIDATE_COLUMNS if col in available
     ]
     return _PROFILE_QUERY_COLUMNS_CACHE
+
+
+def _fetch_dm_profile_state_columns(conn) -> Set[str]:
+    global _ONBOARDING_STATE_COLUMNS_CACHE
+    if _ONBOARDING_STATE_COLUMNS_CACHE is not None:
+        return _ONBOARDING_STATE_COLUMNS_CACHE
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'dm_profile_state'
+            """,
+        )
+        _ONBOARDING_STATE_COLUMNS_CACHE = {row[0] for row in cur.fetchall()}
+    return _ONBOARDING_STATE_COLUMNS_CACHE
+
+
+def _default_onboarding_state() -> Dict[str, Any]:
+    return {
+        'status': 'not_started',
+        'required_fields': list(ONBOARDING_REQUIRED_FIELDS),
+        'missing_fields': list(ONBOARDING_REQUIRED_FIELDS),
+        'last_prompted_field': None,
+        'started_at': None,
+        'completed_at': None,
+        'turns': 0,
+    }
+
+
+def _json_list_to_fields(value: Any, fallback: List[str], allow_empty: bool = False) -> List[str]:
+    items = _to_string_list(value, max_items=12)
+    if not items:
+        return [] if allow_empty else list(fallback)
+    valid = [item for item in items if item in ONBOARDING_REQUIRED_FIELDS]
+    if not valid:
+        return [] if allow_empty else list(fallback)
+    # Preserve order from ONBOARDING_REQUIRED_FIELDS.
+    ordered = [slot for slot in ONBOARDING_REQUIRED_FIELDS if slot in set(valid)]
+    return ordered or list(fallback)
+
+
+def _slot_has_value(profile: Dict[str, Any], slot: str) -> bool:
+    value = profile.get(slot)
+    if slot == 'notable_topics':
+        return isinstance(value, list) and len(value) > 0
+    return bool(_as_text(value))
+
+
+def _compute_missing_onboarding_fields(profile: Dict[str, Any], required_fields: List[str]) -> List[str]:
+    return [slot for slot in required_fields if not _slot_has_value(profile, slot)]
+
+
+def _count_core_profile_slots(profile: Dict[str, Any]) -> int:
+    return sum(1 for slot in ONBOARDING_REQUIRED_FIELDS if _slot_has_value(profile, slot))
+
+
+def fetch_onboarding_state(conn, sender_db_id: Optional[int]) -> Dict[str, Any]:
+    state = _default_onboarding_state()
+    if not sender_db_id:
+        return state
+
+    available_columns = _fetch_dm_profile_state_columns(conn)
+    if not available_columns:
+        return state
+
+    expected = {
+        'onboarding_status',
+        'onboarding_required_fields',
+        'onboarding_missing_fields',
+        'onboarding_last_prompted_field',
+        'onboarding_started_at',
+        'onboarding_completed_at',
+        'onboarding_turns',
+    }
+    if not expected.issubset(available_columns):
+        return state
+
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """
+            SELECT onboarding_status, onboarding_required_fields, onboarding_missing_fields,
+                   onboarding_last_prompted_field, onboarding_started_at, onboarding_completed_at,
+                   onboarding_turns
+            FROM dm_profile_state
+            WHERE user_id = %s
+            LIMIT 1
+            """,
+            [sender_db_id],
+        )
+        row = cur.fetchone()
+
+    if not row:
+        return state
+
+    status = _as_text(row.get('onboarding_status'))
+    if status in ('not_started', 'collecting', 'completed', 'paused'):
+        state['status'] = status
+    state['required_fields'] = _json_list_to_fields(row.get('onboarding_required_fields'), ONBOARDING_REQUIRED_FIELDS)
+    state['missing_fields'] = _json_list_to_fields(
+        row.get('onboarding_missing_fields'),
+        state['required_fields'],
+        allow_empty=True,
+    )
+    state['last_prompted_field'] = _as_text(row.get('onboarding_last_prompted_field'))
+    state['started_at'] = row.get('onboarding_started_at')
+    state['completed_at'] = row.get('onboarding_completed_at')
+    turns = row.get('onboarding_turns')
+    try:
+        state['turns'] = max(0, int(turns)) if turns is not None else 0
+    except Exception:
+        state['turns'] = 0
+    return state
+
+
+def persist_onboarding_state(conn, sender_db_id: Optional[int], state: Dict[str, Any]) -> None:
+    if not sender_db_id:
+        return
+    available_columns = _fetch_dm_profile_state_columns(conn)
+    expected = {
+        'onboarding_status',
+        'onboarding_required_fields',
+        'onboarding_missing_fields',
+        'onboarding_last_prompted_field',
+        'onboarding_started_at',
+        'onboarding_completed_at',
+        'onboarding_turns',
+    }
+    if not expected.issubset(available_columns):
+        return
+
+    required_fields = _json_list_to_fields(state.get('required_fields'), ONBOARDING_REQUIRED_FIELDS)
+    missing_fields = _json_list_to_fields(state.get('missing_fields'), required_fields, allow_empty=True)
+    status = str(state.get('status') or 'not_started')
+    if status not in ('not_started', 'collecting', 'completed', 'paused'):
+        status = 'not_started'
+    last_prompted = _as_text(state.get('last_prompted_field'))
+    turns = max(0, int(state.get('turns') or 0))
+    started_at = state.get('started_at')
+    completed_at = state.get('completed_at')
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO dm_profile_state (
+              user_id,
+              onboarding_status,
+              onboarding_required_fields,
+              onboarding_missing_fields,
+              onboarding_last_prompted_field,
+              onboarding_started_at,
+              onboarding_completed_at,
+              onboarding_turns
+            )
+            VALUES (%s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s)
+            ON CONFLICT (user_id)
+            DO UPDATE SET
+              onboarding_status = EXCLUDED.onboarding_status,
+              onboarding_required_fields = EXCLUDED.onboarding_required_fields,
+              onboarding_missing_fields = EXCLUDED.onboarding_missing_fields,
+              onboarding_last_prompted_field = EXCLUDED.onboarding_last_prompted_field,
+              onboarding_started_at = EXCLUDED.onboarding_started_at,
+              onboarding_completed_at = EXCLUDED.onboarding_completed_at,
+              onboarding_turns = EXCLUDED.onboarding_turns,
+              updated_at = now()
+            """,
+            [
+                sender_db_id,
+                status,
+                json.dumps(required_fields, ensure_ascii=True),
+                json.dumps(missing_fields, ensure_ascii=True),
+                last_prompted,
+                started_at,
+                completed_at,
+                turns,
+            ],
+        )
 
 
 def _empty_profile() -> Dict[str, Any]:
@@ -788,6 +995,53 @@ def _collect_current_message_updates(
     return updates
 
 
+def _format_captured_updates_summary(captured_updates: Dict[str, str]) -> str:
+    parts: List[str] = []
+    company = captured_updates.get('primary_company')
+    role = captured_updates.get('primary_role')
+    contact_style = captured_updates.get('preferred_contact_style')
+    topic = captured_updates.get('notable_topics')
+
+    if company:
+        if company.lower() == 'unemployed':
+            parts.append("company/status -> unemployed")
+        else:
+            parts.append(f"company -> {company}")
+    if role:
+        parts.append(f"role -> {role}")
+    if contact_style:
+        parts.append(f"communication style -> {contact_style}")
+    if topic:
+        parts.append(f"priority/topic -> {topic}")
+
+    return "; ".join(parts) if parts else "profile updates"
+
+
+def _onboarding_slot_prompt(slot: str, seed: int) -> str:
+    options = ONBOARDING_SLOT_QUESTIONS.get(slot) or ONBOARDING_SLOT_QUESTIONS['primary_role']
+    return _pick(options, seed)
+
+
+def _onboarding_intro(sender: str, done_count: int, total_count: int) -> str:
+    if done_count <= 0:
+        return (
+            f"I don't have a usable profile for {sender} yet. "
+            f"Let's onboard in {total_count} quick fields."
+        )
+    return f"Onboarding progress: {done_count}/{total_count} fields captured."
+
+
+def is_onboarding_start_request(text: Optional[str]) -> bool:
+    source = _clean_text(text)
+    if not source:
+        return False
+    return bool(_ONBOARDING_START_RE.search(source))
+
+
+def is_onboarding_acknowledgement(text: Optional[str]) -> bool:
+    return bool(_ONBOARDING_ACK_RE.search(text or ''))
+
+
 def _truncate(value: Optional[str], limit: int = 180) -> Optional[str]:
     clean = _clean_text(value)
     if not clean:
@@ -881,6 +1135,119 @@ def render_profile_request_reply(row: Dict[str, Any], profile: Dict[str, Any], p
         f"Current profile context for {sender}:\n{bullets}\n"
         "If anything changed (role/company/priorities/communication), send the correction and I'll keep this in sync."
     )
+
+
+def render_onboarding_flow_reply(
+    row: Dict[str, Any],
+    profile: Dict[str, Any],
+    pending_events: List[Dict[str, Any]],
+    onboarding_state: Dict[str, Any],
+) -> Tuple[Optional[str], Dict[str, Any]]:
+    state = dict(onboarding_state or _default_onboarding_state())
+    now = datetime.now(timezone.utc)
+    msg_id = int(row.get('id') or 0)
+    sender = row.get('display_name') or row.get('sender_handle') or 'you'
+    latest_text = _clean_text(row.get('text'))
+    captured_updates = _collect_current_message_updates(row, pending_events)
+
+    required_fields = _json_list_to_fields(state.get('required_fields'), ONBOARDING_REQUIRED_FIELDS)
+    state['required_fields'] = required_fields
+    missing_fields = _compute_missing_onboarding_fields(profile, required_fields)
+    state['missing_fields'] = missing_fields
+
+    raw_status = _as_text(state.get('status')) or 'not_started'
+    status = raw_status if raw_status in ('not_started', 'collecting', 'completed', 'paused') else 'not_started'
+    state['status'] = status
+
+    core_slots_known = _count_core_profile_slots(profile)
+    is_new_user_profile = core_slots_known == 0
+    full_profile_start = is_full_profile_request(latest_text) and is_new_user_profile
+    start_requested = (
+        is_onboarding_start_request(latest_text)
+        or full_profile_start
+        or is_onboarding_acknowledgement(latest_text)
+        or bool(captured_updates)
+    )
+
+    if status in ('not_started', 'paused') and is_new_user_profile:
+        state['status'] = 'collecting'
+        state['started_at'] = state.get('started_at') or now
+        status = 'collecting'
+    elif status in ('not_started', 'paused') and start_requested and missing_fields:
+        state['status'] = 'collecting'
+        state['started_at'] = state.get('started_at') or now
+        status = 'collecting'
+
+    if not missing_fields:
+        state['missing_fields'] = []
+        state['last_prompted_field'] = None
+        should_announce_completion = status == 'collecting' or is_new_user_profile or bool(captured_updates)
+        if status != 'completed':
+            state['status'] = 'completed'
+            state['completed_at'] = now
+            state['turns'] = int(state.get('turns') or 0) + 1
+            if should_announce_completion:
+                lines = format_profile_snapshot_lines(profile)
+                if lines:
+                    bullets = "\n".join(f"- {line}" for line in lines[:6])
+                    return (
+                        "Onboarding complete. Here’s your saved profile context:\n"
+                        f"{bullets}\n"
+                        "Ask \"What do you know about me?\" anytime to see this snapshot.",
+                        state,
+                    )
+                return (
+                    "Onboarding complete. I’ve stored your profile context. "
+                    "Ask \"What do you know about me?\" anytime for a snapshot.",
+                    state,
+                )
+        return None, state
+
+    if status != 'collecting':
+        return None, state
+
+    total_fields = len(required_fields)
+    done_count = max(0, total_fields - len(missing_fields))
+    next_slot = missing_fields[0]
+    last_prompted = _as_text(state.get('last_prompted_field'))
+    if is_onboarding_acknowledgement(latest_text) and last_prompted in missing_fields:
+        next_slot = str(last_prompted)
+    prompt = _onboarding_slot_prompt(next_slot, msg_id + done_count + int(state.get('turns') or 0))
+
+    if captured_updates:
+        summary = _format_captured_updates_summary(captured_updates)
+        body = (
+            f"Captured: {summary}. "
+            f"Onboarding progress: {done_count}/{total_fields} fields captured.\n"
+            f"Step {done_count + 1}/{total_fields}: {prompt}"
+        )
+    elif state.get('turns') in (None, 0) or start_requested:
+        intro = _onboarding_intro(str(sender), done_count, total_fields)
+        if done_count == 0:
+            body = (
+                f"{intro}\n"
+                f"Step 1/{total_fields}: {prompt}\n"
+                "Fast format you can paste:\n"
+                "role: ...\ncompany: ...\npriorities: ...\ncommunication: ..."
+            )
+        else:
+            body = (
+                f"{intro}\n"
+                f"Step {done_count + 1}/{total_fields}: {prompt}"
+            )
+    else:
+        body = (
+            f"Quick onboarding check ({done_count}/{total_fields} captured).\n"
+            f"Step {done_count + 1}/{total_fields}: {prompt}"
+        )
+
+    state['status'] = 'collecting'
+    state['started_at'] = state.get('started_at') or now
+    state['completed_at'] = None
+    state['last_prompted_field'] = next_slot
+    state['turns'] = int(state.get('turns') or 0) + 1
+    state['missing_fields'] = missing_fields
+    return body, state
 
 
 def render_third_party_profile_reply(lookup: Dict[str, Any]) -> str:
@@ -1206,25 +1573,7 @@ def render_conversational_reply(
 
     captured_updates = _collect_current_message_updates(row, pending_events)
     if captured_updates:
-        parts: List[str] = []
-        company = captured_updates.get('primary_company')
-        role = captured_updates.get('primary_role')
-        contact_style = captured_updates.get('preferred_contact_style')
-        topic = captured_updates.get('notable_topics')
-
-        if company:
-            if company.lower() == 'unemployed':
-                parts.append("company/status -> unemployed")
-            else:
-                parts.append(f"company -> {company}")
-        if role:
-            parts.append(f"role -> {role}")
-        if contact_style:
-            parts.append(f"communication style -> {contact_style}")
-        if topic:
-            parts.append(f"priority/topic -> {topic}")
-
-        summary = "; ".join(parts) if parts else "profile updates"
+        summary = _format_captured_updates_summary(captured_updates)
         follow_up = "If you want, ask \"What do you know about me?\" and I’ll show the updated snapshot."
         return f"{ack_line} I captured: {summary}. {follow_up}"
 
@@ -1284,6 +1633,7 @@ def render_response(args: argparse.Namespace, conn, row: Dict[str, Any]) -> str:
     profile = fetch_latest_profile(conn, row.get('sender_db_id'))
     pending_events = fetch_pending_profile_events(conn, row.get('sender_db_id'))
     profile = apply_pending_profile_events(profile, pending_events)
+    onboarding_state = fetch_onboarding_state(conn, row.get('sender_db_id'))
     recent_messages = fetch_recent_conversation_messages(conn, row.get('conversation_id'))
     third_party_lookup = _lookup_third_party_user(conn, row.get('text'))
     if third_party_lookup:
@@ -1304,6 +1654,18 @@ def render_response(args: argparse.Namespace, conn, row: Dict[str, Any]) -> str:
         return render_capabilities_reply()
     if is_unsupported_action_request(latest_text):
         return render_unsupported_action_reply()
+
+    onboarding_reply, next_onboarding_state = render_onboarding_flow_reply(
+        row,
+        profile,
+        pending_events,
+        onboarding_state,
+    )
+    if next_onboarding_state != onboarding_state:
+        persist_onboarding_state(conn, row.get('sender_db_id'), next_onboarding_state)
+    if onboarding_reply:
+        return onboarding_reply
+
     selected_option = extract_option_selection(latest_text)
     if selected_option:
         return render_option_selection_reply(selected_option, profile, recent_messages)

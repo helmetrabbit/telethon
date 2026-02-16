@@ -29,6 +29,8 @@ interface DbEvent {
   created_at: string;
 }
 
+const ONBOARDING_REQUIRED_FIELDS = ['primary_role', 'primary_company', 'notable_topics', 'preferred_contact_style'] as const;
+
 function sanitizeCompany(value: string | null): string {
   return (value || '').replace(/[\t\n\r]+/g, ' ').replace(/[.]$/, '').trim();
 }
@@ -150,6 +152,20 @@ function makePromptHash(text: string): string {
   return crypto.createHash('sha256').update(text).digest('hex');
 }
 
+function computeMissingOnboardingFields(next: {
+  primary_company: string | null;
+  primary_role: string | null;
+  preferred_contact_style: string | null;
+  notable_topics: string[];
+}): string[] {
+  const missing: string[] = [];
+  if (!sanitizeRole(next.primary_role)) missing.push('primary_role');
+  if (!sanitizeCompany(next.primary_company)) missing.push('primary_company');
+  if (!Array.isArray(next.notable_topics) || next.notable_topics.length === 0) missing.push('notable_topics');
+  if (!sanitizeContactStyle(next.preferred_contact_style)) missing.push('preferred_contact_style');
+  return missing;
+}
+
 async function reconcileUsers(targetUserIds: string[] = [], limit = 0): Promise<number> {
   const criteria = targetUserIds.length > 0
     ? 'e.user_id = ANY($1) AND e.processed = false'
@@ -219,6 +235,10 @@ async function reconcileUsers(targetUserIds: string[] = [], limit = 0): Promise<
 
     const reasoningText = patch.reasoning || `Auto-reconciled from ${eventsRes.rows.length} DM profile correction events.`;
     const promptHash = makePromptHash(JSON.stringify(snapshot));
+    const onboardingMissingFields = computeMissingOnboardingFields(patch);
+    const onboardingStatus = onboardingMissingFields.length === 0 ? 'completed' : 'collecting';
+    const onboardingCompletedAt = onboardingStatus === 'completed' ? new Date().toISOString() : null;
+    const onboardingLastPromptedField = onboardingMissingFields[0] || null;
 
     const insertedProfile = await db.query<{ id: string }>(
       `INSERT INTO user_psychographics (
@@ -243,22 +263,76 @@ async function reconcileUsers(targetUserIds: string[] = [], limit = 0): Promise<
     const newProfileId = insertedProfile.rows[0]?.id;
     const eventIds = eventsRes.rows.map((r) => r.id);
 
-    await db.query(
-      `INSERT INTO dm_profile_state (user_id, last_profile_event_id, user_psychographics_id, snapshot)
-       VALUES ($1, $2, $3, $4::jsonb)
-       ON CONFLICT (user_id)
-       DO UPDATE SET
-         last_profile_event_id = EXCLUDED.last_profile_event_id,
-         user_psychographics_id = EXCLUDED.user_psychographics_id,
-         snapshot = EXCLUDED.snapshot,
-         updated_at = now()`,
-      [
-        userId,
-        eventsRes.rows[eventsRes.rows.length - 1].id,
-        newProfileId,
-        JSON.stringify(snapshot),
-      ],
-    );
+    try {
+      await db.query(
+        `INSERT INTO dm_profile_state (
+           user_id,
+           last_profile_event_id,
+           user_psychographics_id,
+           snapshot,
+           onboarding_status,
+           onboarding_required_fields,
+           onboarding_missing_fields,
+           onboarding_last_prompted_field,
+           onboarding_started_at,
+           onboarding_completed_at,
+           onboarding_turns
+         )
+         VALUES ($1, $2, $3, $4::jsonb, $5, $6::jsonb, $7::jsonb, $8, now(), $9, 0)
+         ON CONFLICT (user_id)
+         DO UPDATE SET
+           last_profile_event_id = EXCLUDED.last_profile_event_id,
+           user_psychographics_id = EXCLUDED.user_psychographics_id,
+           snapshot = EXCLUDED.snapshot,
+           onboarding_status = EXCLUDED.onboarding_status,
+           onboarding_required_fields = EXCLUDED.onboarding_required_fields,
+           onboarding_missing_fields = EXCLUDED.onboarding_missing_fields,
+           onboarding_last_prompted_field = EXCLUDED.onboarding_last_prompted_field,
+           onboarding_started_at = COALESCE(dm_profile_state.onboarding_started_at, EXCLUDED.onboarding_started_at),
+           onboarding_completed_at = CASE
+             WHEN EXCLUDED.onboarding_status = 'completed' THEN COALESCE(dm_profile_state.onboarding_completed_at, EXCLUDED.onboarding_completed_at)
+             ELSE NULL
+           END,
+           onboarding_turns = CASE
+             WHEN EXCLUDED.onboarding_status = 'completed' THEN 0
+             ELSE dm_profile_state.onboarding_turns
+           END,
+           updated_at = now()`,
+        [
+          userId,
+          eventsRes.rows[eventsRes.rows.length - 1].id,
+          newProfileId,
+          JSON.stringify(snapshot),
+          onboardingStatus,
+          JSON.stringify(ONBOARDING_REQUIRED_FIELDS),
+          JSON.stringify(onboardingMissingFields),
+          onboardingLastPromptedField,
+          onboardingCompletedAt,
+        ],
+      );
+    } catch (err: any) {
+      const isMissingOnboardingColumns =
+        err?.code === '42703'
+        || (typeof err?.message === 'string' && err.message.includes('onboarding_'));
+      if (!isMissingOnboardingColumns) throw err;
+
+      await db.query(
+        `INSERT INTO dm_profile_state (user_id, last_profile_event_id, user_psychographics_id, snapshot)
+         VALUES ($1, $2, $3, $4::jsonb)
+         ON CONFLICT (user_id)
+         DO UPDATE SET
+           last_profile_event_id = EXCLUDED.last_profile_event_id,
+           user_psychographics_id = EXCLUDED.user_psychographics_id,
+           snapshot = EXCLUDED.snapshot,
+           updated_at = now()`,
+        [
+          userId,
+          eventsRes.rows[eventsRes.rows.length - 1].id,
+          newProfileId,
+          JSON.stringify(snapshot),
+        ],
+      );
+    }
 
     await db.query(
       `UPDATE dm_profile_update_events

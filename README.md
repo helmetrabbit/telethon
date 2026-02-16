@@ -284,6 +284,8 @@ Important behavior:
 - This pipeline handles capture, ingest, profile reconciliation, and **automated pending-response handling**.
 - Inbound messages are queued as `pending` when first ingested.
 - Outbound workers can send a lightweight response template and mark messages as `responded`.
+- First-contact DM users are auto-onboarded with persisted state in `dm_profile_state`
+  (`onboarding_status`, required/missing fields, last prompted field, started/completed timestamps).
 - `DM_AUTO_ACK` defaults to off (`0`) and is optional; enable it with `DM_AUTO_ACK=1` only when you want an immediate acknowledgement on each inbound DM.
 - If you stop getting listener output and see `EOFError: EOF when reading a line` or repeated
   "Please enter your phone", the Telegram session needs interactive re-auth once.
@@ -302,6 +304,7 @@ Responder variables:
 - `DM_RESPONSE_MODEL=deepseek/deepseek-chat`
 - `DM_RESPONSE_MAX_TOKENS=420`
 - `DM_RESPONSE_TEMPERATURE=0.15`
+- Onboarding is deterministic and LLM-independent for new/collecting users until core profile fields are captured.
 
 To run under systemd, call `make tg-live-start` from a service that stays running; logs are written to `data/logs/` and state is persisted in `data/.state/`.
 

@@ -21,7 +21,8 @@ All of the following are true:
 2. deterministic fixture ingest creates DM rows and profile events.
 3. reconcile writes updated `primary_role`, `primary_company`, and at least one of `preferred_contact_style` or `notable_topics`.
 4. responder run (dry-run) marks at least 2 fixture inbound rows as `response_status='responded'`.
-5. no command in this runbook fails.
+5. onboarding state is persisted for fixture users in `dm_profile_state`.
+6. no command in this runbook fails.
 
 ---
 
@@ -150,6 +151,19 @@ WHERE source_external_message_id IN ('910001','910002','910003','920001')
 GROUP BY 1,2
 ORDER BY 1,2;
 "
+
+psql "$DB_URL" -v ON_ERROR_STOP=1 -c "
+SELECT u.external_id,
+       s.onboarding_status,
+       s.onboarding_missing_fields,
+       s.onboarding_last_prompted_field,
+       s.onboarding_started_at,
+       s.onboarding_completed_at
+FROM users u
+JOIN dm_profile_state s ON s.user_id = u.id
+WHERE u.external_id IN ('user111111','user222222')
+ORDER BY u.external_id;
+"
 ```
 
 Hard checks:
@@ -201,6 +215,16 @@ echo "STYLE_OR_TOPICS_COUNT=$STYLE_OR_TOPICS_COUNT"
 test "${RESPONDED_COUNT}" -ge 2
 test "${ROLE_COMPANY_COUNT}" -ge 1
 test "${STYLE_OR_TOPICS_COUNT}" -ge 1
+
+ONBOARDING_ROWS=$(psql "$DB_URL" -Atc "
+SELECT count(*)
+FROM users u
+JOIN dm_profile_state s ON s.user_id = u.id
+WHERE u.external_id IN ('user111111','user222222')
+  AND s.onboarding_status IN ('collecting','completed');
+")
+echo "ONBOARDING_ROWS=$ONBOARDING_ROWS"
+test "${ONBOARDING_ROWS}" -ge 1
 ```
 
 If all three tests pass, deterministic pipeline behavior is validated.

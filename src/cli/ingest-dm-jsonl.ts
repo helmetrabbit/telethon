@@ -53,6 +53,7 @@ interface IngestState {
 }
 
 const HANDLE_RE = /@([A-Za-z0-9_]+)/g;
+const ONBOARDING_REQUIRED_FIELDS = ['primary_role', 'primary_company', 'notable_topics', 'preferred_contact_style'] as const;
 const DM_PROFILE_LLM_MODEL = process.env.DM_PROFILE_LLM_MODEL || 'deepseek/deepseek-chat';
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '';
 const DM_PROFILE_LLM_FLAG = (process.env.DM_PROFILE_LLM_EXTRACTION || 'auto').trim().toLowerCase();
@@ -61,6 +62,7 @@ const DM_PROFILE_LLM_ENABLED = (() => {
   if (['0', 'false', 'no', 'off'].includes(DM_PROFILE_LLM_FLAG)) return false;
   return Boolean(OPENROUTER_API_KEY);
 })();
+let dmProfileStateSupportsOnboarding: boolean | null = null;
 
 const dmLlmClient = (() => {
   if (!DM_PROFILE_LLM_ENABLED || !OPENROUTER_API_KEY) return null;
@@ -802,6 +804,50 @@ async function upsertUser(
   return res.rows[0].id as number;
 }
 
+async function ensureDmProfileState(client: any, userId: number): Promise<void> {
+  if (dmProfileStateSupportsOnboarding == null) {
+    const columns = await client.query(
+      `SELECT column_name
+       FROM information_schema.columns
+       WHERE table_schema = 'public'
+         AND table_name = 'dm_profile_state'
+         AND column_name IN (
+           'onboarding_status',
+           'onboarding_required_fields',
+           'onboarding_missing_fields',
+           'onboarding_turns'
+         )`,
+    );
+    dmProfileStateSupportsOnboarding = columns.rows.length >= 4;
+  }
+
+  if (dmProfileStateSupportsOnboarding) {
+    await client.query(
+      `INSERT INTO dm_profile_state (
+         user_id,
+         onboarding_status,
+         onboarding_required_fields,
+         onboarding_missing_fields,
+         onboarding_turns
+       )
+       VALUES ($1, 'not_started', $2::jsonb, $2::jsonb, 0)
+       ON CONFLICT (user_id) DO NOTHING`,
+      [
+        userId,
+        JSON.stringify(ONBOARDING_REQUIRED_FIELDS),
+      ],
+    );
+    return;
+  }
+
+  await client.query(
+    `INSERT INTO dm_profile_state (user_id)
+     VALUES ($1)
+     ON CONFLICT (user_id) DO NOTHING`,
+    [userId],
+  );
+}
+
 async function addProfileEvents(
   client: any,
   userId: number,
@@ -877,6 +923,7 @@ async function ingestBatch(client: any, events: string[]): Promise<{
       const hit = userCache.get(key);
       if (hit) return hit;
       const id = await upsertUser(client, extId, handle, name);
+      await ensureDmProfileState(client, id);
       userCache.set(key, id);
       return id;
     };
