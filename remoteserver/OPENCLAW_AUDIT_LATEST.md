@@ -1,6 +1,6 @@
 # OpenClaw Audit Snapshot
 
-- Generated (UTC): 2026-02-16T06:15:04Z
+- Generated (UTC): 2026-02-16T07:22:35Z
 - Remote: `cat@96.43.135.91`
 
 ## Host and Runtime
@@ -8,10 +8,10 @@
 ```text
 hostname: litterbox
 user: cat
-time: 2026-02-16T06:15:08+00:00
+time: 2026-02-16T07:22:39+00:00
 os: Ubuntu 24.04.2 LTS
 kernel: 6.8.0-90-generic
-uptime: 06:15:08 up 24 days, 14:51,  1 user,  load average: 0.17, 0.21, 0.14
+uptime: 07:22:39 up 24 days, 15:58,  1 user,  load average: 0.24, 0.31, 0.23
 docker: Docker version 28.3.2, build 578ccf6
 compose: Docker Compose version v2.38.2
 tailscale: 1.94.2
@@ -31,8 +31,9 @@ openclaw_version: 2026.2.15
 
 ```text
 NAMES                         IMAGE                  STATUS                  PORTS
-openclaw-openclaw-gateway-1   openclaw:local         Up 15 hours             100.110.29.6:18789-18790->18789-18790/tcp
-tgprofile-postgres            postgres:16-alpine     Up 16 hours (healthy)   100.110.29.6:5433->5432/tcp
+telethon-viewer               python:3.11-alpine     Up 6 minutes            100.110.29.6:4173->4173/tcp
+openclaw-openclaw-gateway-1   openclaw:local         Up 16 hours             100.110.29.6:18789-18790->18789-18790/tcp
+tgprofile-postgres            postgres:16-alpine     Up 17 hours (healthy)   100.110.29.6:5433->5432/tcp
 timescaledb                   explorer-timescaledb   Up 3 weeks              0.0.0.0:5432->5432/tcp, [::]:5432->5432/tcp
 ```
 
@@ -41,6 +42,7 @@ timescaledb                   explorer-timescaledb   Up 3 weeks              0.0
 ```text
 tcp   LISTEN 0      4096                       0.0.0.0:22         0.0.0.0:*          
 tcp   LISTEN 0      4096                  100.110.29.6:5433       0.0.0.0:*          
+tcp   LISTEN 0      4096                  100.110.29.6:4173       0.0.0.0:*          
 tcp   LISTEN 0      4096                       0.0.0.0:5432       0.0.0.0:*          
 tcp   LISTEN 0      4096                  100.110.29.6:18790      0.0.0.0:*          
 tcp   LISTEN 0      4096                  100.110.29.6:18789      0.0.0.0:*          
@@ -88,9 +90,9 @@ OPENCLAW_WORKSPACE_DIR
 
 ```text
 uid=1000(node) gid=1000(node) groups=1000(node)
-drwx------  5 node node 4096 Feb 15 11:34 /home/node/.openclaw/workspace
-drwxr-xr-x 12 node node 4096 Feb 16 06:11 /home/node/.openclaw/workspace/telethon
--rw-r--r-- 1 node node 6 Feb 16 06:15 /home/node/.openclaw/workspace/telethon/.openclaw_rw_probe_5593
+drwx------  6 node node 4096 Feb 16 06:55 /home/node/.openclaw/workspace
+drwxr-xr-x 13 node node 4096 Feb 16 07:20 /home/node/.openclaw/workspace/telethon
+-rw-r--r-- 1 node node 6 Feb 16 07:22 /home/node/.openclaw/workspace/telethon/.openclaw_rw_probe_6914
 workspace_write_test=PASS
 ```
 
@@ -102,7 +104,7 @@ drwx------  3 cat cat 4096 Feb 15 09:50 /home/cat/.openclaw/agents
 drwx------  2 cat cat 4096 Feb 15 09:54 /home/cat/.openclaw/canvas
 drwx------  2 cat cat 4096 Feb 15 09:53 /home/cat/.openclaw/completions
 drwx------  2 cat cat 4096 Feb 15 15:35 /home/cat/.openclaw/cron
-drwxr-xr-x  2 cat cat 4096 Feb 16 06:14 /home/cat/.openclaw/devices
+drwxr-xr-x  2 cat cat 4096 Feb 16 07:20 /home/cat/.openclaw/devices
 -rw-------  1 cat cat  176 Feb 16 05:27 /home/cat/.openclaw/exec-approvals.json
 drwxr-xr-x  3 cat cat 4096 Feb 15 15:35 /home/cat/.openclaw/gateway
 drwx------  2 cat cat 4096 Feb 15 10:00 /home/cat/.openclaw/identity
@@ -110,7 +112,7 @@ drwx------  2 cat cat 4096 Feb 15 09:51 /home/cat/.openclaw/logs
 -rw-------  1 cat cat 1510 Feb 15 15:34 /home/cat/.openclaw/openclaw.json
 -rw-------  1 cat cat 1235 Feb 15 09:52 /home/cat/.openclaw/openclaw.json.bak
 -rw-------  1 cat cat   49 Feb 15 09:54 /home/cat/.openclaw/update-check.json
-drwx------  5 cat cat 4096 Feb 15 11:34 /home/cat/.openclaw/workspace
+drwx------  6 cat cat 4096 Feb 16 06:55 /home/cat/.openclaw/workspace
 ```
 
 ## Host Tooling
@@ -158,7 +160,7 @@ go: MISSING
 Agents: main (default)
 Heartbeat interval: 30m (main)
 Session store (main): /home/node/.openclaw/agents/main/sessions/sessions.json (1 entries)
-- agent:main:main (13m ago)
+- agent:main:main (10m ago)
 ```
 
 ## tgprofile DB Access
@@ -174,10 +176,10 @@ schema_privs_ok
 t
 (1 row)
 total_tables	rw_tables
-15	15
+19	19
 (1 row)
 total_sequences	rw_sequences
-8	8
+12	12
 (1 row)
 defaclobjtype	definer	schema	defaclacl
 S	tgprofile	public	{tgprofile=rwU/tgprofile}
@@ -192,17 +194,24 @@ r	tgprofile	public	{tgprofile=arwdDxt/tgprofile}
 telethon_collector=present
 telethon_venv=present
 telethon_import=PASS version=1.42.0
-TG_API_ID=empty
-TG_API_HASH=empty
-TG_PHONE=empty
+TG_API_ID=set
+TG_API_HASH=set
+TG_PHONE=set
 TG_SESSION_PATH=set
 telethon_session=missing
 telegram_egress=PASS
 ```
 
+## Viewer Check
+
+```text
+viewer_url=http://100.110.29.6:4173/viewer/
+HTTP/1.0 200 OK
+```
+
 ## tgprofile DB Stats
 
 ```text
-tgprofile|tgprofile|374 MB
+tgprofile|tgprofile|375 MB
 ```
 

@@ -26,6 +26,23 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+### Secure bootstrap (recommended if OpenClaw must not see API creds)
+
+Run this directly in your SSH shell (not via OpenClaw chat command execution):
+
+```bash
+bash tools/telethon_collector/bootstrap_secure_login.sh
+```
+
+What it does:
+
+- Prompts for `TG_API_ID` / `TG_API_HASH` interactively (hash hidden)
+- Does **not** write API credentials to `tools/telethon_collector/.env`
+- Writes session to `~/.telethon-secrets/<label>.session` (outside workspace mount)
+- Keeps a non-secret profile file at `~/.telethon-secrets/<label>.profile`
+
+This is the safest path if you want Telethon account credentials kept out of the OpenClaw workspace.
+
 ### 2. Configure credentials
 
 ```bash

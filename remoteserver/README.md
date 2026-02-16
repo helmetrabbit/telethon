@@ -32,3 +32,4 @@ The generated audit now includes:
 - workspace read/write probe from inside OpenClaw runtime
 - Postgres access/privilege checks for `tgprofile`
 - Telethon runtime readiness (venv/import/env/session/Telegram egress)
+- viewer endpoint health check (`http://<tailnet-ip>:4173/viewer/`)

@@ -62,7 +62,7 @@ containers() {
 }
 
 ports() {
-  ss -tulpn | grep -E '(:22|:18789|:18790|:5432|:5433)' || true
+  ss -tulpn | grep -E '(:22|:4173|:18789|:18790|:5432|:5433)' || true
 }
 
 openclaw_json_summary() {
@@ -214,9 +214,24 @@ PY
 
 db_stats() {
   if docker ps --format '{{.Names}}' | grep -qx 'tgprofile-postgres'; then
-    docker exec -e PGPASSWORD=localdev -i tgprofile-postgres psql -U tgprofile -d tgprofile -Atc "select current_database(), current_user, pg_size_pretty(pg_database_size(current_database()));"
+    docker exec -e PGPASSWORD=localdev -i tgprofile-postgres psql -U tgprofile -d tgprofile -Atc "select current_database(), current_user, pg_size_pretty(pg_database_size(current_database()));" || true
   else
     echo "tgprofile-postgres not running"
+  fi
+}
+
+viewer_check() {
+  local ip
+  ip="$(tailscale ip -4 2>/dev/null | head -n1 || true)"
+  if [ -z "$ip" ]; then
+    echo "viewer_url=unknown (no tailscale ip)"
+    return
+  fi
+  echo "viewer_url=http://${ip}:4173/viewer/"
+  if command -v curl >/dev/null 2>&1; then
+    (curl -sS -I --max-time 5 "http://${ip}:4173/viewer/" | head -n1) || echo "viewer_http_check=FAIL"
+  else
+    echo "viewer_http_check=skipped (curl missing)"
   fi
 }
 
@@ -234,6 +249,7 @@ print_block "OpenClaw Container Tooling" container_tools
 print_block "Gateway Health" gateway_health
 print_block "tgprofile DB Access" db_access
 print_block "Telethon Readiness" telethon_readiness
+print_block "Viewer Check" viewer_check
 print_block "tgprofile DB Stats" db_stats
 REMOTE
 } >"$OUT_FILE"

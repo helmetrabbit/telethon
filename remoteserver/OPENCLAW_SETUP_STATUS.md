@@ -30,6 +30,10 @@ Last audited: **2026-02-16 06:15 UTC** via SSH.
 - `openclaw-openclaw-gateway-1`
   - Ports: `100.110.29.6:18789->18789`, `100.110.29.6:18790->18790`
   - Network: `openclaw_default`
+- `telethon-viewer`
+  - Purpose: static viewer host for this workspace (`/home/cat/.openclaw/workspace/telethon`)
+  - Port: `100.110.29.6:4173->4173`
+  - URL: `http://100.110.29.6:4173/viewer/`
 - `tgprofile-postgres`
   - Port: `100.110.29.6:5433->5432`
   - Health: `healthy`
@@ -43,6 +47,7 @@ Last audited: **2026-02-16 06:15 UTC** via SSH.
 
 - OpenClaw UI: `https://100.110.29.6:18789/` or `https://litterbox:18789/`
 - Gateway WS in Control UI settings: `wss://100.110.29.6:18790`
+- Viewer UI: `http://100.110.29.6:4173/viewer/`
 
 ## Runtime-Specific Postgres Endpoint (Do Not Mix)
 
