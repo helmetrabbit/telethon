@@ -112,13 +112,14 @@ def _display_name(user) -> str | None:
     return display or user.username
 
 
-def serialize_message(msg, sender, peer):
+def serialize_message(msg, sender, peer, account_external_id: str | None = None):
     sender_name = _display_name(sender)
     peer_name = _display_name(peer)
 
     return {
         "message_id": msg.id,
         "chat_id": msg.chat_id,
+        "account_id": account_external_id,
         "chat_type": "private",
         "direction": "outbound" if msg.out else "inbound",
         "sender_id": f"user{sender.id}" if sender else None,
@@ -186,8 +187,10 @@ async def main() -> None:
     session_parent.mkdir(parents=True, exist_ok=True)
 
     client = TelegramClient(session_path, int(API_ID), API_HASH)
+    me = None
 
     async def on_startup(_: TelegramClient):
+        nonlocal me
         me = await client.get_me()
         print(f"✅ DM listener connected as {me.first_name} ({me.id})")
         print("ℹ️  Filtering to private chats only (no groups/channels).")
@@ -218,7 +221,7 @@ async def main() -> None:
         except Exception:
             peer = None
 
-        row = serialize_message(msg, sender, peer)
+        row = serialize_message(msg, sender, peer, f"user{me.id}" if me else None)
         row["captured_at"] = datetime.now(timezone.utc).isoformat()
 
         # Persist one JSON object per line

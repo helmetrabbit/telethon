@@ -15,6 +15,7 @@ interface DmEvent {
   sender_name: string | null;
   sender_username: string | null;
   peer_id: string | null;
+  account_id?: string | null;
   peer_name: string | null;
   peer_username: string | null;
   text: string | null;
@@ -336,6 +337,7 @@ async function ingestBatch(client: any, events: string[]): Promise<{
 
     const senderExt = row.sender_id;
     const peerExt = row.peer_id;
+    const accountExtFromRow = row.account_id || null;
 
     const getUserId = async (extId: string, handle: string | null, name: string | null): Promise<number> => {
       const key = extId.toLowerCase();
@@ -352,8 +354,22 @@ async function ingestBatch(client: any, events: string[]): Promise<{
     const sentAt = new Date(row.date || Date.now()).toISOString();
     const chatId = String(row.chat_id);
 
-    const accountUserId = row.direction === 'outbound' ? senderUserId : peerUserId;
-    const subjectUserId = row.direction === 'outbound' ? peerUserId : senderUserId;
+    const accountUserExt = accountExtFromRow || (row.direction === 'outbound' ? senderExt : peerExt);
+    let subjectUserExt = row.direction === 'outbound' ? peerExt : senderExt;
+
+    if (subjectUserExt === accountUserExt) {
+      // Fallback when source payload doesn't include an explicit account_id.
+      subjectUserExt = row.direction === 'outbound'
+        ? senderExt
+        : peerExt;
+    }
+
+    const accountUserId = await getUserId(accountUserExt, row.sender_username, row.sender_name);
+    let subjectUserId = await getUserId(subjectUserExt, row.sender_username, row.sender_name);
+
+    if (subjectUserId === accountUserId) {
+      subjectUserId = accountUserId === senderUserId ? peerUserId : senderUserId;
+    }
 
     const convRes = await client.query(
       `INSERT INTO dm_conversations (

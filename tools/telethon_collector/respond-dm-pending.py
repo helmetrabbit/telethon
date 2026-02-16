@@ -104,24 +104,37 @@ def claim_pending(conn, limit: int, max_retries: int) -> List[Dict[str, Any]]:
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
             """
+            WITH pending AS (
+              SELECT id
+              FROM dm_messages
+              WHERE direction = 'inbound'
+                AND response_status = 'pending'
+                AND response_attempts < %s
+              ORDER BY sent_at ASC
+              LIMIT %s
+              FOR UPDATE SKIP LOCKED
+            ),
+            claimed AS (
+              UPDATE dm_messages
+              SET response_status = 'sending',
+                  response_attempted_at = now(),
+                  response_attempts = response_attempts + 1,
+                  response_last_error = NULL
+              WHERE id IN (SELECT id FROM pending)
+              RETURNING id, conversation_id, external_message_id, text, sender_id, response_attempts, response_status
+            )
             SELECT
-              m.id,
-              m.conversation_id,
-              m.external_message_id,
-              m.text,
-              m.response_attempts,
-              m.response_status,
+              c.id,
+              c.conversation_id,
+              c.external_message_id,
+              c.text,
+              c.response_attempts,
+              c.response_status,
               u.external_id AS sender_external_id,
               u.handle AS sender_handle,
               u.display_name
-            FROM dm_messages m
-            JOIN users u ON u.id = m.sender_id
-            WHERE m.direction = 'inbound'
-              AND m.response_status = 'pending'
-              AND m.response_attempts < %s
-            ORDER BY m.sent_at ASC
-            LIMIT %s
-            FOR UPDATE SKIP LOCKED
+            FROM claimed c
+            JOIN users u ON u.id = (SELECT sender_id FROM dm_messages WHERE id = c.id)
             """,
             [max_retries, limit],
         )
@@ -132,8 +145,6 @@ def claim_pending(conn, limit: int, max_retries: int) -> List[Dict[str, Any]]:
         return []
 
     return rows
-
-
 def mark_responded(conn, msg_id: int, outgoing_external_id: str) -> None:
     with conn.cursor() as cur:
         cur.execute(
@@ -199,20 +210,6 @@ async def main() -> None:
     try:
         for row in pending:
             try:
-                with conn.cursor() as _cur:
-                    _cur.execute(
-                        """
-                        UPDATE dm_messages
-                        SET response_status = 'sending',
-                            response_attempted_at = now(),
-                            response_attempts = response_attempts + 1,
-                            response_last_error = NULL
-                        WHERE id = %s
-                        """,
-                        [row['id']],
-                    )
-                conn.commit()
-
                 peer_id = parse_external_id(row['sender_external_id'])
                 if not peer_id:
                     raise ValueError('unparseable recipient id')
