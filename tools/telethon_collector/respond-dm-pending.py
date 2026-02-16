@@ -131,21 +131,6 @@ def claim_pending(conn, limit: int, max_retries: int) -> List[Dict[str, Any]]:
         conn.commit()
         return []
 
-    with conn.cursor() as cur:
-        for row in rows:
-            cur.execute(
-                """
-                UPDATE dm_messages
-                SET response_status = 'sending',
-                    response_attempted_at = now(),
-                    response_attempts = response_attempts + 1,
-                    response_last_error = NULL
-                WHERE id = %s
-                """,
-                [row['id']],
-            )
-
-    conn.commit()
     return rows
 
 
@@ -202,8 +187,11 @@ async def main() -> None:
         print(f"No pending DM responses to send. (auto-responded={auto_responded})")
         return
 
-    client = TelegramClient(str(session_path), int(API_ID), API_HASH)
-    await client.start()
+    if args.dry_run:
+        client = None
+    else:
+        client = TelegramClient(str(session_path), int(API_ID), API_HASH)
+        await client.start()
 
     sent = 0
     failed = 0
@@ -211,6 +199,20 @@ async def main() -> None:
     try:
         for row in pending:
             try:
+                with conn.cursor() as _cur:
+                    _cur.execute(
+                        """
+                        UPDATE dm_messages
+                        SET response_status = 'sending',
+                            response_attempted_at = now(),
+                            response_attempts = response_attempts + 1,
+                            response_last_error = NULL
+                        WHERE id = %s
+                        """,
+                        [row['id']],
+                    )
+                conn.commit()
+
                 peer_id = parse_external_id(row['sender_external_id'])
                 if not peer_id:
                     raise ValueError('unparseable recipient id')
@@ -259,7 +261,8 @@ async def main() -> None:
                 conn.commit()
                 print(f"⚠️  failed to respond to inbound dm id={row['id']}: {exc}")
     finally:
-        await client.disconnect()
+        if client is not None:
+            await client.disconnect()
 
     conn.close()
 
