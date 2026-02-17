@@ -20,6 +20,35 @@ export DM_CONTACT_STYLE_AUTO_APPLY_THRESHOLD="${DM_CONTACT_STYLE_AUTO_APPLY_THRE
 export DM_CONTACT_STYLE_CONFIRM_THRESHOLD="${DM_CONTACT_STYLE_CONFIRM_THRESHOLD:-0.55}"
 ```
 
+## 0.5) Preflight: Confirm You’re Running The New Policy System
+
+If your deployed reconciler is out of date, it can overwrite `dm_profile_state.snapshot` without `style_preference`
+and/or auto-apply contact style updates that should be confirmation-gated.
+
+Run these checks before tuning thresholds:
+
+```bash
+psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 <<'SQL'
+SELECT
+  count(*) AS total_state_rows,
+  count(*) FILTER (WHERE snapshot ? 'style_preference') AS with_style_preference
+FROM dm_profile_state;
+
+SELECT
+  COALESCE(snapshot->'style_preference'->>'resolution_rule', '<missing>') AS resolution_rule,
+  count(*) AS rows
+FROM dm_profile_state
+GROUP BY 1
+ORDER BY rows DESC;
+SQL
+```
+
+Expected:
+- `with_style_preference` should be non-zero once users start interacting.
+- `resolution_rule` should include `confidence_gated_last_write_wins`.
+
+If not, **update/restart the server worker(s)** so reconciler + responder are running the latest `main`.
+
 ## 1) Current Log Queries (exact current format)
 
 Current responder summaries are line-based in `data/logs/dm-respond.log`.

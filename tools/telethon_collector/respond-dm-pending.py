@@ -1378,7 +1378,9 @@ def apply_pending_profile_events(profile: Dict[str, Any], events: List[Dict[str,
             elif field == 'primary_role':
                 merged['primary_role'] = new_value
             elif field == 'preferred_contact_style':
-                merged['preferred_contact_style'] = new_value
+                # Contact style is confirmation-gated via dm_profile_state.snapshot.style_preference.
+                # Do not apply raw extracted facts here, or we can accidentally flip style before user confirms.
+                continue
             elif field == 'notable_topics':
                 key = new_value.lower()
                 if key not in topic_set:
