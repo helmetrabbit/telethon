@@ -132,6 +132,10 @@ _ONBOARDING_ACK_RE = re.compile(
     r"^\s*(?:yes|yep|yeah|sure|ok|okay|start|go\s+ahead|lets\s+go|let's\s+go)\s*[.!?]*\s*$",
     re.IGNORECASE,
 )
+_GREETING_RE = re.compile(
+    r"^\s*(?:hi|hello|hey|yo|gm|good\s+(?:morning|afternoon|evening)|what'?s\s+up|sup)\b[!. ]*$",
+    re.IGNORECASE,
+)
 _PROFILE_UPDATE_MODE_RE = re.compile(
     r"\b(?:i\s+was\s+giving\s+you\s+info\s+to\s+update\s+my\s+profile|focus\s+(?:only|solely)\s+on\s+profile\s+updates?|"
     r"not\s+for\s+(?:advice|recommendations?)|no\s+advice\s+unless\s+i\s+ask|just\s+update\s+my\s+profile)\b",
@@ -412,18 +416,18 @@ ONBOARDING_REQUIRED_FIELDS = ['primary_role', 'primary_company', 'notable_topics
 ONBOARDING_SLOT_QUESTIONS: Dict[str, List[str]] = {
     'primary_role': [
         "What title should I store for you right now?",
-        "What role best describes your day-to-day right now?",
+        "What role best describes what you do day to day right now?",
     ],
     'primary_company': [
-        "What company or project should I map you to currently?",
+        "What company, project, or current status should I map you to?",
         "What org/project are you currently focused on?",
     ],
     'notable_topics': [
         "What are your top 2 priorities right now?",
-        "What 2-3 topics should I tag as your current focus?",
+        "What 2-3 focus areas should I tag (for example: grants, partnerships, pre-TGE chains)?",
     ],
     'preferred_contact_style': [
-        "How should I communicate with you: concise, detailed, or quick back-and-forth?",
+        "How should I communicate with you: concise bullets, detailed notes, or quick back-and-forth?",
         "What response style do you prefer from me?",
     ],
 }
@@ -1323,13 +1327,14 @@ def _onboarding_slot_prompt(slot: str, seed: int) -> str:
     return _pick(options, seed)
 
 
-def _onboarding_intro(sender: str, done_count: int, total_count: int) -> str:
+def _onboarding_intro(sender: str, persona_name: str, done_count: int, total_count: int) -> str:
     if done_count <= 0:
         return (
-            f"I don't have a usable profile for {sender} yet. "
-            f"Let's onboard in {total_count} quick fields."
+            f"Hey {sender} — I’m {persona_name}, an AI assistant (not a human).\n"
+            f"I help you keep your profile accurate so responses and suggestions stay relevant.\n"
+            f"Let’s do a quick {total_count}-step onboarding."
         )
-    return f"Onboarding progress: {done_count}/{total_count} fields captured."
+    return f"Great, quick profile check-in: {done_count}/{total_count} fields captured."
 
 
 def is_onboarding_start_request(text: Optional[str]) -> bool:
@@ -1341,6 +1346,10 @@ def is_onboarding_start_request(text: Optional[str]) -> bool:
 
 def is_onboarding_acknowledgement(text: Optional[str]) -> bool:
     return bool(_ONBOARDING_ACK_RE.search(text or ''))
+
+
+def is_greeting_message(text: Optional[str]) -> bool:
+    return bool(_GREETING_RE.search(text or ''))
 
 
 def _truncate(value: Optional[str], limit: int = 180) -> Optional[str]:
@@ -1533,7 +1542,7 @@ def render_profile_request_reply(row: Dict[str, Any], profile: Dict[str, Any], p
 
 def render_profile_update_mode_reply() -> str:
     return (
-        "Understood. I’ll treat your next messages as profile updates unless you explicitly ask for advice.\n"
+        "Understood. I’m an AI profile assistant, and I’ll treat your next messages as profile updates unless you explicitly ask for advice.\n"
         "Quick format (works best):\n"
         "role: ...\ncompany: ...\npriorities: ...\ncommunication: ..."
     )
@@ -1673,7 +1682,7 @@ def render_interview_style_reply(profile: Dict[str, Any]) -> str:
     prompts = _build_profile_gap_prompts(profile, count=1)
     first = prompts[0] if prompts else "What role/title should I store for you right now?"
     return (
-        "Absolutely. Let’s do interview mode: one question at a time.\n"
+        "Absolutely. I’ll run interview mode and store updates as you answer.\n"
         f"Q1: {first}"
     )
 
@@ -1702,12 +1711,14 @@ def render_onboarding_flow_reply(
     profile: Dict[str, Any],
     pending_events: List[Dict[str, Any]],
     onboarding_state: Dict[str, Any],
+    persona_name: str,
 ) -> Tuple[Optional[str], Dict[str, Any]]:
     state = dict(onboarding_state or _default_onboarding_state())
     now = datetime.now(timezone.utc)
     msg_id = int(row.get('id') or 0)
     sender = row.get('display_name') or row.get('sender_handle') or 'you'
     latest_text = _clean_text(row.get('text'))
+    is_greeting = is_greeting_message(latest_text)
     captured_updates = _collect_current_message_updates(row, pending_events)
 
     required_fields = _json_list_to_fields(state.get('required_fields'), ONBOARDING_REQUIRED_FIELDS)
@@ -1773,7 +1784,9 @@ def render_onboarding_flow_reply(
                     return (
                         "Onboarding complete. Here’s your saved profile context:\n"
                         f"{bullets}\n"
-                        "Ask \"What do you know about me?\" anytime to see this snapshot.",
+                        "You can now:\n"
+                        "- Ask \"What do you know about me?\" for your snapshot\n"
+                        "- Send updates in plain text (for example: \"No longer at X, now at Y\")",
                         state,
                     )
                 return (
@@ -1797,18 +1810,21 @@ def render_onboarding_flow_reply(
     if captured_updates:
         summary = _format_captured_updates_summary(captured_updates)
         body = (
-            f"Captured: {summary}. "
-            f"Onboarding progress: {done_count}/{total_fields} fields captured.\n"
+            f"Captured: {summary}.\n"
+            f"Progress: {done_count}/{total_fields} fields captured.\n"
             f"Step {done_count + 1}/{total_fields}: {prompt}"
         )
     elif state.get('turns') in (None, 0) or start_requested:
-        intro = _onboarding_intro(str(sender), done_count, total_fields)
+        intro = _onboarding_intro(str(sender), persona_name, done_count, total_fields)
         if done_count == 0:
+            header = "Nice to meet you." if is_greeting else "Let’s get you set up."
             body = (
                 f"{intro}\n"
+                f"{header}\n"
                 f"Step 1/{total_fields}: {prompt}\n"
-                "Fast format you can paste:\n"
-                "role: ...\ncompany: ...\npriorities: ...\ncommunication: ..."
+                "Quick format you can paste:\n"
+                "role: ...\ncompany: ...\npriorities: ...\ncommunication: ...\n"
+                "Tip: You can also type naturally, like \"I moved to X\" or \"My focus is Y\"."
             )
         else:
             body = (
@@ -1898,6 +1914,7 @@ def render_control_plane_reply(persona_name: str) -> str:
 
 def render_capabilities_reply() -> str:
     return (
+        "I’m an AI assistant (not a human teammate).\n"
         "Capabilities in this chat:\n"
         "- Profile snapshot and update capture (role/company/priorities/communication style)\n"
         "- First-contact onboarding flow for users with sparse profile data\n"
@@ -2232,6 +2249,7 @@ def render_conversational_reply(
             has_value = bool(value)
         if not has_value and slot not in observed_slots:
             missing.append(slot)
+    is_greeting = is_greeting_message(latest_text)
 
     role_questions = [
         "What title best matches what you do day to day right now?",
@@ -2259,9 +2277,19 @@ def render_conversational_reply(
             'preferred_contact_style': contact_questions,
         }
         next_question = _pick(question_map[slot], msg_id + 1)
+        if is_greeting:
+            return (
+                f"Hey — I’m {persona_name}, an AI assistant for keeping your profile up to date.\n"
+                f"{next_question}"
+            )
         return f"{next_question}"
 
     source = _clean_text(latest_text)
+    if is_greeting:
+        return (
+            f"Hey — I’m {persona_name}, an AI assistant for profile upkeep.\n"
+            "You can ask \"What do you know about me?\" for a snapshot, or send any change in role/company/focus and I’ll sync it."
+        )
     if "?" in source:
         return (
             "I can handle this either as a profile update or as advice.\n"
@@ -2329,6 +2357,7 @@ def render_response(args: argparse.Namespace, conn, row: Dict[str, Any]) -> str:
         profile,
         pending_events,
         onboarding_state,
+        args.persona_name,
     )
     if next_onboarding_state != onboarding_state:
         persist_onboarding_state(conn, row.get('sender_db_id'), next_onboarding_state)
