@@ -10,6 +10,14 @@
       ]
     },
     {
+      "id": "third-party-query-does-not-update-self-profile",
+      "text": "What do you know about Jaack from Routescan?",
+      "forbid_any_facts": [
+        { "field": "primary_role" },
+        { "field": "primary_company" }
+      ]
+    },
+    {
       "id": "freeform-role-company-is-statement",
       "text": "My role is Ecosystem Growth and the company is Lava Foundation.",
       "expect_any_facts": [
@@ -19,4 +27,3 @@
     }
   ]
 }
-

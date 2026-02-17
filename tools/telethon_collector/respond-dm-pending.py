@@ -175,6 +175,10 @@ _NON_TEXT_MARKER_RE = re.compile(
     r"^\s*(?:voice\s+message|gif|sticker|photo|video|audio|file)\s*$",
     re.IGNORECASE,
 )
+_QUESTION_LIKE_RE = re.compile(
+    r"^\s*(?:who|what|where|when|why|how|can|could|would|should|do|does|did|is|are|am|will|may|might|tell\s+me|explain)\b",
+    re.IGNORECASE,
+)
 _ONBOARDING_START_RE = re.compile(
     r"\b(?:onboard|onboarding|set\s+up\s+my\s+profile|setup\s+my\s+profile|initialize\s+my\s+profile|update\s+my\s+profile|"
     r"pretend\s+it'?s\s+my\s+first\s+message|pretend\s+this\s+is\s+my\s+first\s+message|"
@@ -3426,7 +3430,7 @@ def render_conversational_reply(
             f"Hey — I’m {persona_name}, an AI assistant for profile upkeep.\n"
             "You can ask \"What do you know about me?\" for a snapshot, or send any change in role/company/focus and I’ll sync it."
         )
-    if "?" in source:
+    if "?" in source or _QUESTION_LIKE_RE.search(source):
         return (
             "I can either answer questions about your stored profile (and where it came from), or capture an update.\n"
             "If you’re updating, just tell me the change in plain English. If you want a snapshot, ask: “What do you know about me?”"
