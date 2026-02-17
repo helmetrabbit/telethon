@@ -127,11 +127,13 @@ _CAPABILITIES_QUERY_RE = re.compile(
     r"\b(?:what\s+skills\s+do\s+you\s+have|what\s+can\s+you\s+do|your\s+capabilities|"
     r"who\s+are\s+you|"
     r"what\s+is\s+this\s+chat\s+for|what\s+is\s+this\s+for|what\s+do\s+you\s+do|"
+    r"what\s+is\s+this\s+used\s+for|for\s+what\s+purpose|"
     r"what\s+is\s+(?:this|my)\s+profile\s+for|what\s+is\s+(?:this|my)\s+profile\s+used\s+for|"
     r"how\s+is\s+(?:this|my)\s+profile\s+(?:being\s+)?used|how\s+will\s+(?:this|my)\s+(?:profile|data)\s+be\s+used|"
     r"why\s+are\s+you\s+(?:messaging|message(?:ing)?|dm(?:ing)?|contacting)\s+me|"
     r"why\s+did\s+you\s+(?:message|dm|reach\s+out)(?:\s+to\s+me)?|"
     r"(?:is\s+this\s+a\s+scam|you\s+sound\s+like\s+(?:a\s+)?scam|u\s+sound\s+like\s+(?:a\s+)?scam)|"
+    r"can\s+i\s+(?:ask\s+about|look\s+up|query)\s+other\s+(?:users|people|members)|"
     r"what\s+can\s+i\s+use\s+this\s+for|how\s+does\s+this\s+work|how\s+do\s+i\s+use\s+this|"
     r"what\s+is\s+the\s+process|interview\s+process|"
     r"what\s+is\s+the\s+purpose|purpose\s+of\s+this|"
@@ -203,7 +205,8 @@ _PROFILE_UPDATE_MODE_RE = re.compile(
     re.IGNORECASE,
 )
 _PROFILE_DATA_PROVENANCE_RE = re.compile(
-    r"\b(?:where\s+does\s+(?:this|the)\s+data\s+come\s+from|"
+    r"\b(?:where\s+(?:does|did)\s+(?:this|the|my)\s+data\s+come\s+from|"
+    r"where\s+did\s+(?:this|the|my)\s+(?:info|information)\s+come\s+from|"
     r"where\s+did\s+you\s+get\s+(?:this|that)\s+(?:information|info|data)\s+from|"
     r"where\s+did\s+you\s+get\s+this\s+from|"
     r"how\s+did\s+you\s+get\s+this\s+(?:information|info|data)|"
@@ -2878,6 +2881,7 @@ def render_capabilities_reply(profile: Dict[str, Any], persona_name: str) -> str
         "This chat is for keeping your profile dataset current and letting you query it.\n"
         "How to use it:\n"
         "- Ask: \"What do you know about me?\" (snapshot)\n"
+        "- Ask about someone else: \"What do you know about @handle?\" (lookup only, won’t change your profile)\n"
         "- Send updates in plain English or `field: value` (role/company/priorities/communication)\n"
         "- Say: \"interview mode\" (I ask one question at a time)\n"
         "Safety: I won’t ask you for money, seed phrases, or API keys.\n"
