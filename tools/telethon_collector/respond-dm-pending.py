@@ -128,6 +128,8 @@ _CAPABILITIES_QUERY_RE = re.compile(
     r"who\s+are\s+you|"
     r"what\s+is\s+this\s+chat\s+for|what\s+is\s+this\s+for|what\s+do\s+you\s+do|"
     r"what\s+is\s+this\s+used\s+for|for\s+what\s+purpose|"
+    r"where\s+does\s+(?:this|my)\s+data\s+go|"
+    r"what\s+is\s+(?:this\s+bot|this\s+assistant|this\s+ai|lobster\s+llama)|"
     r"what\s+is\s+(?:this|my)\s+profile\s+for|what\s+is\s+(?:this|my)\s+profile\s+used\s+for|"
     r"how\s+is\s+(?:this|my)\s+profile\s+(?:being\s+)?used|how\s+will\s+(?:this|my)\s+(?:profile|data)\s+be\s+used|"
     r"why\s+are\s+you\s+(?:messaging|message(?:ing)?|dm(?:ing)?|contacting)\s+me|"
@@ -217,7 +219,8 @@ _PROFILE_DATA_PROVENANCE_RE = re.compile(
 )
 _ACTIVITY_ANALYTICS_RE = re.compile(
     r"\b(?:how\s+many\s+messages\s+have\s+i\s+sent|message\s+count|total\s+messages?|most\s+active\s+(?:time|times|day|days)|"
-    r"peak\s+hours?|active\s+hours?|popular\s+times?|when\s+am\s+i\s+most\s+active|what\s+groups?\s+am\s+i\s+in|groups?\s+i'?m\s+in|"
+    r"peak\s+hours?|active\s+hours?|popular\s+times?|when\s+am\s+i\s+most\s+active|what\s+groups?\b|which\s+groups?\b|"
+    r"what\s+groups?\s+am\s+i\s+in|groups?\s+i'?m\s+in|"
     r"group\s+chats?|top\s+conversation\s+partners?)\b",
     re.IGNORECASE,
 )
