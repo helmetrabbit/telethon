@@ -176,7 +176,12 @@ _NON_TEXT_MARKER_RE = re.compile(
     re.IGNORECASE,
 )
 _QUESTION_LIKE_RE = re.compile(
-    r"^\s*(?:who|what|where|when|why|how|can|could|would|should|do|does|did|is|are|am|will|may|might|tell\s+me|explain)\b",
+    r"^\s*(?:"
+    r"(?:what|who|where|when|why|how)\s+(?:is|are|was|were|do|does|did|can|could|would|should|will|may|might|about|else|other|many|much)\b"
+    r"|(?:can|could|would|should|do|does|did|is|are|am|will|may|might)\b"
+    r"|tell\s+me\b"
+    r"|explain\b"
+    r")",
     re.IGNORECASE,
 )
 _ONBOARDING_START_RE = re.compile(
