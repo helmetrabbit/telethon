@@ -222,6 +222,11 @@ function isLikelyRole(raw: string): boolean {
   const value = normalizeRole(raw);
   if (!value) return false;
   const lower = value.toLowerCase();
+  // Avoid corrupting role/company on negative affiliation statements like:
+  // "I am not affiliated with X" / "I'm not associated with Y".
+  if (/\bnot\s+(?:affiliated|associated|connected|involved|part\s+of)\b/iu.test(lower)) {
+    return false;
+  }
   const roleKeywordRe = /(?:\b)(?:head|lead|director|manager|analyst|engineer|developer|founder|co-?founder|advisor|consultant|partnerships?|growth|marketing|sales|operations?|product|design|qa|cto|ceo|coo|cfo|vp|principal|owner|student|freelance|devrel|bd|bizdev|business development|ecosystem|community|research|investor)(?:\b)/iu;
   const verbLeadHardRe = /^(?:currently\s+)?(?:discovering|exploring|pursuing|seeking|finding|researching|learning|helping|assisting|supporting|driving|building|working|growing|scaling)\b/iu;
   if (/(?:^|\b)(?:unemployed|not working|between jobs|job hunting|looking for work)(?:\b|$)/iu.test(lower)) {
@@ -520,7 +525,24 @@ function parseLabeledProfileUpdates(source: string): ProfileEvent[] {
   return events;
 }
 
-async function extractProfileEventsFromText(text: string | null): Promise<ProfileEvent[]> {
+function dedupeProfileEvents(events: ProfileEvent[]): ProfileEvent[] {
+  // dedupe by event type + fact values
+  const keySet = new Set<string>();
+  const deduped: ProfileEvent[] = [];
+  for (const evt of events) {
+    const factKey = (evt.extracted_facts || [])
+      .map((fact) => `${fact.field}:${fact.new_value || ''}:${fact.old_value || ''}`)
+      .sort()
+      .join('|');
+    const k = `${evt.event_type}|${factKey}`;
+    if (keySet.has(k)) continue;
+    keySet.add(k);
+    deduped.push(evt);
+  }
+  return deduped;
+}
+
+export function extractProfileEventsFromTextHeuristic(text: string | null): ProfileEvent[] {
   if (!text) return [];
   const source = text;
   if (isThirdPartyProfileQuery(source) && !hasExplicitSelfProfileUpdate(source)) {
@@ -888,6 +910,18 @@ async function extractProfileEventsFromText(text: string | null): Promise<Profil
     });
   }
 
+  return dedupeProfileEvents(events);
+}
+
+export async function extractProfileEventsFromText(text: string | null): Promise<ProfileEvent[]> {
+  if (!text) return [];
+  const source = text;
+  if (isThirdPartyProfileQuery(source) && !hasExplicitSelfProfileUpdate(source)) {
+    return [];
+  }
+
+  const events: ProfileEvent[] = [...extractProfileEventsFromTextHeuristic(source)];
+
   const extractedFields = new Set<string>();
   for (const evt of events) {
     for (const fact of evt.extracted_facts || []) extractedFields.add(fact.field);
@@ -902,22 +936,7 @@ async function extractProfileEventsFromText(text: string | null): Promise<Profil
     events.push(...llmEvents);
   }
 
-
-  // dedupe by event type + fact values
-  const keySet = new Set<string>();
-  const deduped: ProfileEvent[] = [];
-  for (const evt of events) {
-    const factKey = evt.extracted_facts
-      .map((fact) => `${fact.field}:${fact.new_value || ''}:${fact.old_value || ''}`)
-      .sort()
-      .join('|');
-    const k = `${evt.event_type}|${factKey}`;
-    if (keySet.has(k)) continue;
-    keySet.add(k);
-    deduped.push(evt);
-  }
-
-  return deduped;
+  return dedupeProfileEvents(events);
 }
 
 async function upsertUser(
@@ -1255,8 +1274,10 @@ async function main() {
   await db.close();
 }
 
-main().catch(async (err) => {
-  console.error('❌ DM JSONL ingest failed:', err);
-  await db.close();
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch(async (err) => {
+    console.error('❌ DM JSONL ingest failed:', err);
+    await db.close();
+    process.exit(1);
+  });
+}

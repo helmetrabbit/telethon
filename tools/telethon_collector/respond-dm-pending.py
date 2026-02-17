@@ -985,6 +985,54 @@ def merge_contact_style_state_into_profile(profile: Dict[str, Any], style_state:
     return merged
 
 
+def _parse_profile_overrides_from_snapshot(snapshot: Dict[str, Any]) -> Dict[str, Any]:
+    raw = snapshot.get('profile_overrides')
+    if not isinstance(raw, dict):
+        return {}
+    overrides: Dict[str, Any] = {}
+    role = _as_text(raw.get('primary_role'))
+    company = _as_text(raw.get('primary_company'))
+    topics = _to_string_list(raw.get('notable_topics'), max_items=10)
+    if role:
+        overrides['primary_role'] = role
+    if company:
+        overrides['primary_company'] = company
+    if topics:
+        overrides['notable_topics'] = topics
+    return overrides
+
+
+def merge_profile_overrides_into_profile(profile: Dict[str, Any], overrides: Dict[str, Any]) -> Dict[str, Any]:
+    if not overrides:
+        return profile
+    merged = dict(profile)
+    role = _as_text(overrides.get('primary_role'))
+    company = _as_text(overrides.get('primary_company'))
+    topics = overrides.get('notable_topics')
+    if role:
+        merged['primary_role'] = role
+    if company:
+        merged['primary_company'] = company
+    if isinstance(topics, list) and topics:
+        base = [str(item) for item in (merged.get('notable_topics') or []) if isinstance(item, str)]
+        base_set = {item.lower() for item in base}
+        for topic in topics:
+            if not isinstance(topic, str):
+                continue
+            t = _clean_text(topic)
+            if not t:
+                continue
+            key = t.lower()
+            if key in base_set:
+                continue
+            base.append(t[:80])
+            base_set.add(key)
+            if len(base) >= 10:
+                break
+        merged['notable_topics'] = base[:10]
+    return merged
+
+
 def style_confidence_band(confidence: Optional[float]) -> str:
     value = 0.0 if confidence is None else float(confidence)
     if value >= DM_CONTACT_STYLE_AUTO_APPLY_THRESHOLD:
@@ -1362,10 +1410,13 @@ def fetch_latest_profile(conn, sender_db_id: Optional[int]) -> Dict[str, Any]:
         return _empty_profile()
 
     select_sql = ", ".join(columns)
+    # Prefer the "real" psychographic profile rows as a base.
+    # DM reconciler rows can be sparse and should act like an overlay (see dm_profile_state.snapshot.profile_overrides).
     query = f"""
         SELECT {select_sql}
         FROM user_psychographics
         WHERE user_id = %s
+          AND model_name != 'dm-event-reconciler'
         ORDER BY created_at DESC, id DESC
         LIMIT 1
     """
@@ -1373,6 +1424,18 @@ def fetch_latest_profile(conn, sender_db_id: Optional[int]) -> Dict[str, Any]:
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(query, [sender_db_id])
         row = cur.fetchone()
+
+    if not row:
+        query = f"""
+        SELECT {select_sql}
+        FROM user_psychographics
+        WHERE user_id = %s
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+    """
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(query, [sender_db_id])
+            row = cur.fetchone()
 
     if not row:
         return _empty_profile()
@@ -1412,6 +1475,39 @@ def fetch_latest_profile(conn, sender_db_id: Optional[int]) -> Dict[str, Any]:
     profile['fifo'] = _as_text(row.get('fifo'))
     profile['role_company_timeline'] = row.get('role_company_timeline') if isinstance(row.get('role_company_timeline'), list) else []
     return profile
+
+
+def fetch_latest_dm_reconciler_overrides(conn, sender_db_id: Optional[int]) -> Dict[str, Any]:
+    """Back-compat overlay for older deployments that wrote sparse DM reconciler rows into user_psychographics."""
+    if not sender_db_id:
+        return {}
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """
+            SELECT primary_role, primary_company, preferred_contact_style, notable_topics
+            FROM user_psychographics
+            WHERE user_id = %s
+              AND model_name = 'dm-event-reconciler'
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            [sender_db_id],
+        )
+        row = cur.fetchone()
+    if not row:
+        return {}
+    overrides: Dict[str, Any] = {}
+    role = _as_text(row.get('primary_role'))
+    company = _as_text(row.get('primary_company'))
+    if role:
+        overrides['primary_role'] = role
+    if company:
+        overrides['primary_company'] = company
+    topics = _to_string_list(row.get('notable_topics'), max_items=10)
+    if topics:
+        overrides['notable_topics'] = topics
+    # preferred_contact_style is handled via dm_profile_state.snapshot.style_preference (confirmation-gated).
+    return overrides
 
 
 def fetch_pending_profile_events(conn, sender_db_id: Optional[int], limit: int = 20) -> List[Dict[str, Any]]:
@@ -1888,6 +1984,9 @@ def _split_plain_topics_answer(text: str) -> List[str]:
         return []
     lowered = source.lower().strip(" .,!?:;\"'`")
     if lowered in ("yes", "yep", "yeah", "no", "nah", "nope", "ok", "okay", "sure", "k", "cool"):
+        return []
+    # Avoid treating complaints/UX feedback as topics.
+    if re.search(r"\b(?:you\s+asked|asked\s+me|same\s+question|same\s+questions|again|repeat|repeating|stop\s+asking)\b", lowered):
         return []
 
     parts = re.split(r",|;|\n|\band\b|&", source, flags=re.IGNORECASE)
@@ -2462,11 +2561,15 @@ def render_onboarding_flow_reply(
 
     # If we're mid-onboarding and we asked for a specific missing slot, treat the next plain reply as the answer.
     last_prompted = _as_text(state.get('last_prompted_field'))
+    target_slot: Optional[str] = None
+    if last_prompted and last_prompted in required_fields and last_prompted in missing_fields:
+        target_slot = last_prompted
+    elif len(missing_fields) == 1 and missing_fields[0] in required_fields:
+        # Fallback: if only one slot is missing, treat the next reply as that answer even if last_prompted_field drifted.
+        target_slot = missing_fields[0]
     if (
         status == 'collecting'
-        and last_prompted
-        and last_prompted in required_fields
-        and last_prompted in missing_fields
+        and target_slot
         and not captured_updates
         and latest_text
         and not is_onboarding_acknowledgement(latest_text)
@@ -2478,7 +2581,7 @@ def render_onboarding_flow_reply(
         source_message_id = _to_int(row.get('id'))
         source_external_message_id = _as_text(row.get('external_message_id'))
 
-        if last_prompted == 'notable_topics':
+        if target_slot == 'notable_topics':
             topics = _split_plain_topics_answer(latest_text)
             if topics:
                 inferred['notable_topics'] = ", ".join(topics)
@@ -2515,7 +2618,7 @@ def render_onboarding_flow_reply(
                         existing_set.add(topic.lower())
                 profile['notable_topics'] = existing[:10]
 
-        elif last_prompted == 'primary_company':
+        elif target_slot == 'primary_company':
             company_value = latest_text.strip(" \"'`").strip(" .,!?:;")
             if company_value and not re.match(
                 r"^(?:launching|building|making|doing|working|growing|scaling|helping|assisting|supporting|pursuing|seeking|discovering)\b",
@@ -2549,7 +2652,7 @@ def render_onboarding_flow_reply(
                     )
                 profile['primary_company'] = normalized
 
-        elif last_prompted == 'primary_role':
+        elif target_slot == 'primary_role':
             role_value = latest_text.strip(" \"'`").strip(" .,!?:;")
             if role_value and not re.match(
                 r"^(?:currently\s+)?(?:discovering|exploring|pursuing|seeking|finding|researching|learning|helping|assisting|supporting|driving|building|working|growing|scaling)\b",
@@ -2752,24 +2855,11 @@ def render_third_party_profile_reply(lookup: Dict[str, Any]) -> str:
 
 
 def render_indecision_reply(profile: Dict[str, Any]) -> str:
-    company = (profile.get('primary_company') or '').lower()
-    role = profile.get('primary_role') or 'your strongest role'
-    topics = profile.get('notable_topics') or []
-    top_topic = topics[0] if isinstance(topics, list) and topics else None
-
-    if company == 'unemployed':
-        options = [
-            f"1) Positioning sprint: write a 5-line pitch around your {role} experience and post it to 5 targeted contacts today.",
-            "2) Pipeline sprint: shortlist 10 roles, send 3 tailored outreach messages, and ask for 1 warm intro.",
-            "3) Skill sprint: pick one in-demand workflow, build a small proof-of-work, and share it publicly this week.",
-        ]
-    else:
-        options = [
-            f"1) Pipeline: pick one clear objective tied to {top_topic or 'your current priorities'} and set a 7-day target.",
-            "2) Network: send 3 concrete asks (intro, feedback, or collab) to people most likely to unlock momentum.",
-            "3) Output: publish one useful update/case-study this week so opportunities come inbound.",
-        ]
-    return "Let's make it concrete. Pick one path:\n" + "\n".join(options) + "\nReply with 1, 2, or 3 and I'll draft the exact next steps."
+    return (
+        "Totally fine — this chat is just for keeping your profile up to date.\n"
+        "Send one quick answer and I’ll store it. You can also paste:\n"
+        "role: ...\ncompany: ...\npriorities: ...\ncommunication: ..."
+    )
 
 
 def render_control_plane_reply(persona_name: str) -> str:
@@ -2889,8 +2979,8 @@ def render_option_selection_reply(
         return mapping[selected_option]
 
     return (
-        f"Selected option {selected_option}.\n"
-        "Now send the exact task in one sentence so I can execute the next step."
+        f"I saw \"{selected_option}\", but I don’t have a menu open right now.\n"
+        "If you meant a profile update, just send it (role/company/priorities/communication)."
     )
 
 
@@ -3170,7 +3260,7 @@ def render_llm_conversational_reply(
         "7) If user asks for top 3 things to share, give exactly three profile-focused prompts.\n"
         "8) If user says you missed their ask, apologize once and answer directly.\n"
         "8.5) Honor preferred_response_style_mode when possible (concise, bullets, detailed, conversational).\n"
-        "9) If user says they are unsure what to do, provide 3 concrete next-step options tailored to their context.\n"
+        "9) If user says they are unsure what to do, keep it inside profile-upkeep: ask one onboarding question or suggest 3 profile fields to update (role/company/priorities/style).\n"
         "10) If the message is about another person, answer as a third-party lookup and do NOT treat it as a profile update for the sender.\n"
         "11) Never claim to execute tools, shell commands, HTTP requests, profile-picture changes, reboots, or system-prompt edits.\n"
         "12) If asked for unavailable actions, state limits and give a practical alternative.\n"
@@ -3354,10 +3444,22 @@ def render_response(args: argparse.Namespace, conn, row: Dict[str, Any]) -> str:
 
     sender_db_id = row.get('sender_db_id')
     profile = fetch_latest_profile(conn, sender_db_id)
+
+    # DM profile state snapshot provides:
+    # - confirmation-gated style preference (style_preference)
+    # - durable role/company/priorities overrides (profile_overrides)
+    snapshot = _fetch_profile_snapshot(conn, sender_db_id)
+    style_state = _parse_contact_style_state_from_snapshot(snapshot)
+    profile = merge_contact_style_state_into_profile(profile, style_state)
+
+    profile_overrides = _parse_profile_overrides_from_snapshot(snapshot)
+    if not profile_overrides:
+        # Back-compat: fall back to latest dm-event-reconciler row if snapshot overlay isn't present yet.
+        profile_overrides = fetch_latest_dm_reconciler_overrides(conn, sender_db_id)
+    profile = merge_profile_overrides_into_profile(profile, profile_overrides)
+
     pending_events = fetch_pending_profile_events(conn, sender_db_id)
     profile = apply_pending_profile_events(profile, pending_events)
-    style_state = fetch_contact_style_state(conn, sender_db_id)
-    profile = merge_contact_style_state_into_profile(profile, style_state)
 
     current_updates = _collect_current_message_updates(row, pending_events)
     latest_text = row.get('text')

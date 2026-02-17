@@ -340,23 +340,38 @@ async function reconcileUsers(targetUserIds: string[] = [], limit = 0): Promise<
       : {};
 
     const latestProfileRes = await db.query<PsychRow>(
-      `SELECT primary_company, reasoning, generated_bio_professional, generated_bio_personal, primary_role, preferred_contact_style, notable_topics
+      `SELECT id::text, primary_company, reasoning, generated_bio_professional, generated_bio_personal, primary_role, preferred_contact_style, notable_topics
        FROM user_psychographics
        WHERE user_id = $1
-       ORDER BY created_at DESC
+         AND model_name != 'dm-event-reconciler'
+       ORDER BY created_at DESC, id DESC
        LIMIT 1`,
       [userId],
     );
 
-    const latest = latestProfileRes.rows[0] || {
-      primary_company: null,
-      reasoning: null,
-      generated_bio_professional: null,
-      generated_bio_personal: null,
-      primary_role: null,
-      preferred_contact_style: null,
-      notable_topics: [],
-    };
+    let latest = latestProfileRes.rows[0];
+    if (!latest) {
+      const fallbackRes = await db.query<PsychRow>(
+        `SELECT id::text, primary_company, reasoning, generated_bio_professional, generated_bio_personal, primary_role, preferred_contact_style, notable_topics
+         FROM user_psychographics
+         WHERE user_id = $1
+         ORDER BY created_at DESC, id DESC
+         LIMIT 1`,
+        [userId],
+      );
+      latest = fallbackRes.rows[0];
+    }
+    if (!latest) {
+      latest = {
+        primary_company: null,
+        reasoning: null,
+        generated_bio_professional: null,
+        generated_bio_personal: null,
+        primary_role: null,
+        preferred_contact_style: null,
+        notable_topics: [],
+      };
+    }
 
     const patch = applyProfilePatch(latest, eventsRes.rows);
 
@@ -462,6 +477,14 @@ async function reconcileUsers(targetUserIds: string[] = [], limit = 0): Promise<
         payload: e.event_payload,
         created_at: e.created_at,
       })),
+      profile_overrides: {
+        primary_role: patch.primary_role,
+        primary_company: patch.primary_company,
+        notable_topics: patch.notable_topics,
+        // preferred_contact_style is confirmation-gated (see style_preference below).
+        updated_at: new Date().toISOString(),
+        source_event_id: eventsRes.rows[eventsRes.rows.length - 1].id,
+      },
       style_preference: stylePreference,
       applied_at: new Date().toISOString(),
     };
@@ -473,27 +496,53 @@ async function reconcileUsers(targetUserIds: string[] = [], limit = 0): Promise<
     const onboardingCompletedAt = onboardingStatus === 'completed' ? new Date().toISOString() : null;
     const onboardingLastPromptedField = onboardingMissingFields[0] || null;
 
-    const insertedProfile = await db.query<{ id: string }>(
-      `INSERT INTO user_psychographics (
-         user_id, model_name, prompt_hash, primary_company, reasoning,
-         generated_bio_professional, generated_bio_personal, primary_role, preferred_contact_style, notable_topics, raw_response, latency_ms
-       ) VALUES ($1, 'dm-event-reconciler', $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, 0)
-       RETURNING id`,
-      [
-        userId,
-        promptHash,
-        patch.primary_company,
-        reasoningText,
-        patch.generated_bio_professional,
-        patch.generated_bio_personal,
-        patch.primary_role,
-        patch.preferred_contact_style,
-        JSON.stringify(patch.notable_topics),
-        `Applied ${eventsRes.rows.length} DM-derived profile correction(s).`,
-      ],
-    );
-
-    const newProfileId = insertedProfile.rows[0]?.id;
+    let newProfileId = latest.id || null;
+    if (newProfileId) {
+      // Important: do not create a new sparse user_psychographics row here.
+      // Doing so would wipe richer psychometry fields (tone, deep skills, etc.) in any "latest row" lookups.
+      await db.query(
+        `UPDATE user_psychographics
+         SET primary_company = $2,
+             reasoning = $3,
+             generated_bio_professional = $4,
+             generated_bio_personal = $5,
+             primary_role = $6,
+             preferred_contact_style = $7,
+             notable_topics = $8::jsonb
+         WHERE id = $1`,
+        [
+          newProfileId,
+          patch.primary_company,
+          reasoningText,
+          patch.generated_bio_professional,
+          patch.generated_bio_personal,
+          patch.primary_role,
+          patch.preferred_contact_style,
+          JSON.stringify(patch.notable_topics),
+        ],
+      );
+    } else {
+      const insertedProfile = await db.query<{ id: string }>(
+        `INSERT INTO user_psychographics (
+           user_id, model_name, prompt_hash, primary_company, reasoning,
+           generated_bio_professional, generated_bio_personal, primary_role, preferred_contact_style, notable_topics, raw_response, latency_ms
+         ) VALUES ($1, 'dm-event-reconciler', $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, 0)
+         RETURNING id`,
+        [
+          userId,
+          promptHash,
+          patch.primary_company,
+          reasoningText,
+          patch.generated_bio_professional,
+          patch.generated_bio_personal,
+          patch.primary_role,
+          patch.preferred_contact_style,
+          JSON.stringify(patch.notable_topics),
+          `Applied ${eventsRes.rows.length} DM-derived profile correction(s).`,
+        ],
+      );
+      newProfileId = insertedProfile.rows[0]?.id || null;
+    }
     const eventIds = eventsRes.rows.map((r) => r.id);
 
     try {
