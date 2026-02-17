@@ -21,6 +21,7 @@ export interface LLMResponse {
   promptTokens?: number;
   completionTokens?: number;
   totalTokens?: number;
+  cost?: number;
   model?: string;
   requestId?: string;
 }
@@ -154,6 +155,7 @@ export function createLLMClient(config: LLMConfig) {
         const promptTokens = Number.isFinite(Number(usage.prompt_tokens)) ? Number(usage.prompt_tokens) : undefined;
         const completionTokens = Number.isFinite(Number(usage.completion_tokens)) ? Number(usage.completion_tokens) : undefined;
         const totalTokens = Number.isFinite(Number(usage.total_tokens)) ? Number(usage.total_tokens) : undefined;
+        const cost = Number.isFinite(Number(usage.cost)) ? Number(usage.cost) : undefined;
 
         return {
           content,
@@ -161,6 +163,7 @@ export function createLLMClient(config: LLMConfig) {
           promptTokens,
           completionTokens,
           totalTokens,
+          cost,
           model: typeof data.model === 'string' ? data.model : cfg.model,
           requestId,
         };

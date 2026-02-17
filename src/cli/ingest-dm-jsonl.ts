@@ -332,6 +332,7 @@ Message: ${source}
         ` prompt_tokens=${completion.promptTokens ?? 'n/a'}` +
         ` completion_tokens=${completion.completionTokens ?? 'n/a'}` +
         ` total_tokens=${completion.totalTokens}` +
+        ` cost=${completion.cost ?? 'n/a'}` +
         ` latency_ms=${completion.latencyMs}`,
       );
     }

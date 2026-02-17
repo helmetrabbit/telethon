@@ -2667,13 +2667,14 @@ def call_openrouter_chat(system_prompt: str, user_prompt: str) -> Optional[str]:
         prompt_tokens = usage.get('prompt_tokens')
         completion_tokens = usage.get('completion_tokens')
         total_tokens = usage.get('total_tokens')
+        cost = usage.get('cost')
         model_used = body.get('model') if isinstance(body.get('model'), str) else DM_RESPONSE_MODEL
         if total_tokens is not None:
             rid = request_id if 'request_id' in locals() else ''
             rid_part = f" request_id={rid}" if rid else ""
             print(
                 f"🧾 openrouter model={model_used} prompt_tokens={prompt_tokens} completion_tokens={completion_tokens} "
-                f"total_tokens={total_tokens} max_tokens={DM_RESPONSE_MAX_TOKENS} latency_ms={latency_ms}{rid_part}"
+                f"total_tokens={total_tokens} cost={cost} max_tokens={DM_RESPONSE_MAX_TOKENS} latency_ms={latency_ms}{rid_part}"
             )
     return clean or None
 
