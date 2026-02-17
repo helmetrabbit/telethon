@@ -310,6 +310,8 @@ Responder variables:
 - `DM_CONTACT_STYLE_RECONFIRM_COOLDOWN_DAYS=14`: minimum spacing between stale-style reconfirm prompts.
 - Onboarding is deterministic and LLM-independent for new/collecting users until core profile fields are captured.
 
+Operational tuning runbook: `runbook.md` (includes copy/paste metric queries and threshold adjustment workflow).
+
 To run under systemd, call `make tg-live-start` from a service that stays running; logs are written to `data/logs/` and state is persisted in `data/.state/`.
 
 Example systemd unit bootstrap (adjust paths/user):
