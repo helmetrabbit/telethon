@@ -15,7 +15,7 @@ import asyncio
 import json
 import os
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 from urllib.error import HTTPError, URLError
@@ -63,6 +63,9 @@ def _env_float(name: str, default: float) -> float:
 
 DM_RESPONSE_MAX_TOKENS = _env_int('DM_RESPONSE_MAX_TOKENS', 300)
 DM_RESPONSE_TEMPERATURE = _env_float('DM_RESPONSE_TEMPERATURE', 0.2)
+DM_CONTACT_STYLE_TTL_DAYS = max(1, _env_int('DM_CONTACT_STYLE_TTL_DAYS', 45))
+DM_CONTACT_STYLE_RECONFIRM_COOLDOWN_DAYS = max(1, _env_int('DM_CONTACT_STYLE_RECONFIRM_COOLDOWN_DAYS', 14))
+STYLE_CONFLICT_RESOLUTION_RULE = 'last_write_wins'
 
 _PLACEHOLDER_RE = re.compile(r"\{([^{}]+)\}")
 _INDECISION_RE = re.compile(
@@ -182,7 +185,7 @@ _FREEFORM_PRIORITY_RE = re.compile(
 )
 _CONTACT_STYLE_KEYWORD_RE = re.compile(
     r"\b(?:concise|short|brief|detailed|long|deep|bullet(?:s)?|list|quick\s+back-and-forth|back-and-forth|"
-    r"conversational|casual|direct|formal|professional|playful|technical)\b",
+    r"conversational|casual|chatty|normal|direct|formal|professional|playful|technical)\b",
     re.IGNORECASE,
 )
 _FREEFORM_CONTACT_STYLE_RE = re.compile(
@@ -329,6 +332,42 @@ def _to_int(value: Any) -> Optional[int]:
             except Exception:
                 return None
     return None
+
+
+def _to_float(value: Any) -> Optional[float]:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        try:
+            return float(value)
+        except Exception:
+            return None
+    if isinstance(value, str):
+        clean = value.strip()
+        if not clean:
+            return None
+        try:
+            return float(clean)
+        except Exception:
+            return None
+    return None
+
+
+def _to_datetime(value: Any) -> Optional[datetime]:
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if not isinstance(value, str):
+        return None
+    raw = value.strip()
+    if not raw:
+        return None
+    if raw.endswith('Z'):
+        raw = raw[:-1] + '+00:00'
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except Exception:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
 def _to_int_list(value: Any, max_items: int = 8) -> List[int]:
@@ -646,6 +685,217 @@ def persist_onboarding_state(conn, sender_db_id: Optional[int], state: Dict[str,
         )
 
 
+def _default_contact_style_state() -> Dict[str, Any]:
+    return {
+        'preferred_contact_style': None,
+        'updated_at': None,
+        'confidence': None,
+        'source': None,
+        'source_message_id': None,
+        'resolution_rule': STYLE_CONFLICT_RESOLUTION_RULE,
+        'reconfirm_prompted_at': None,
+        'history': [],
+    }
+
+
+def _parse_contact_style_state_from_snapshot(snapshot: Dict[str, Any]) -> Dict[str, Any]:
+    state = _default_contact_style_state()
+    if not isinstance(snapshot, dict):
+        return state
+    style = snapshot.get('style_preference')
+    if not isinstance(style, dict):
+        return state
+
+    state['preferred_contact_style'] = _as_text(style.get('value'))
+    state['updated_at'] = _to_datetime(style.get('updated_at'))
+    state['confidence'] = _to_float(style.get('confidence'))
+    state['source'] = _as_text(style.get('source'))
+    state['source_message_id'] = _to_int(style.get('source_message_id'))
+    state['reconfirm_prompted_at'] = _to_datetime(style.get('reconfirm_prompted_at'))
+    resolution_rule = _as_text(style.get('resolution_rule'))
+    if resolution_rule:
+        state['resolution_rule'] = resolution_rule
+
+    history = style.get('history')
+    if isinstance(history, list):
+        cleaned_history: List[Dict[str, Any]] = []
+        for item in history[-12:]:
+            if not isinstance(item, dict):
+                continue
+            value = _as_text(item.get('value'))
+            if not value:
+                continue
+            cleaned_history.append(
+                {
+                    'value': value,
+                    'updated_at': _to_datetime(item.get('updated_at')),
+                    'confidence': _to_float(item.get('confidence')),
+                    'source': _as_text(item.get('source')),
+                    'source_message_id': _to_int(item.get('source_message_id')),
+                }
+            )
+        state['history'] = cleaned_history
+    return state
+
+
+def _fetch_profile_snapshot(conn, sender_db_id: Optional[int]) -> Dict[str, Any]:
+    if not sender_db_id:
+        return {}
+    available_columns = _fetch_dm_profile_state_columns(conn)
+    if 'snapshot' not in available_columns:
+        return {}
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """
+            SELECT snapshot
+            FROM dm_profile_state
+            WHERE user_id = %s
+            LIMIT 1
+            """,
+            [sender_db_id],
+        )
+        row = cur.fetchone()
+    snapshot = row.get('snapshot') if row else None
+    return snapshot if isinstance(snapshot, dict) else {}
+
+
+def _persist_profile_snapshot(conn, sender_db_id: Optional[int], snapshot: Dict[str, Any]) -> None:
+    if not sender_db_id:
+        return
+    available_columns = _fetch_dm_profile_state_columns(conn)
+    if 'snapshot' not in available_columns:
+        return
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO dm_profile_state (user_id, snapshot)
+            VALUES (%s, %s::jsonb)
+            ON CONFLICT (user_id)
+            DO UPDATE SET
+              snapshot = EXCLUDED.snapshot,
+              updated_at = now()
+            """,
+            [sender_db_id, json.dumps(snapshot, ensure_ascii=True)],
+        )
+
+
+def fetch_contact_style_state(conn, sender_db_id: Optional[int]) -> Dict[str, Any]:
+    snapshot = _fetch_profile_snapshot(conn, sender_db_id)
+    return _parse_contact_style_state_from_snapshot(snapshot)
+
+
+def persist_contact_style_state(
+    conn,
+    sender_db_id: Optional[int],
+    style_value: Optional[str],
+    *,
+    source: str,
+    confidence: Optional[float],
+    source_message_id: Optional[int],
+    observed_at: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    normalized_style = _as_text(style_value)
+    if not sender_db_id or not normalized_style:
+        return fetch_contact_style_state(conn, sender_db_id)
+
+    snapshot = _fetch_profile_snapshot(conn, sender_db_id)
+    style = snapshot.get('style_preference') if isinstance(snapshot.get('style_preference'), dict) else {}
+    previous_value = _as_text(style.get('value'))
+    now = observed_at or datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+
+    history = style.get('history') if isinstance(style.get('history'), list) else []
+    entry = {
+        'value': normalized_style,
+        'updated_at': now_iso,
+        'confidence': float(confidence) if confidence is not None else None,
+        'source': source,
+        'source_message_id': source_message_id,
+    }
+    history.append(entry)
+    style['history'] = history[-12:]
+
+    style['value'] = normalized_style
+    style['updated_at'] = now_iso
+    style['confidence'] = float(confidence) if confidence is not None else style.get('confidence')
+    style['source'] = source
+    style['source_message_id'] = source_message_id
+    style['resolution_rule'] = STYLE_CONFLICT_RESOLUTION_RULE
+    if previous_value and previous_value.lower() != normalized_style.lower():
+        # Style changed, so prompt can be asked again in the future after TTL.
+        style['reconfirm_prompted_at'] = None
+
+    snapshot['style_preference'] = style
+    _persist_profile_snapshot(conn, sender_db_id, snapshot)
+    return _parse_contact_style_state_from_snapshot(snapshot)
+
+
+def mark_contact_style_reconfirm_prompted(
+    conn,
+    sender_db_id: Optional[int],
+    prompted_at: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    if not sender_db_id:
+        return _default_contact_style_state()
+    snapshot = _fetch_profile_snapshot(conn, sender_db_id)
+    style = snapshot.get('style_preference')
+    if not isinstance(style, dict):
+        return _parse_contact_style_state_from_snapshot(snapshot)
+    style['reconfirm_prompted_at'] = (prompted_at or datetime.now(timezone.utc)).isoformat()
+    snapshot['style_preference'] = style
+    _persist_profile_snapshot(conn, sender_db_id, snapshot)
+    return _parse_contact_style_state_from_snapshot(snapshot)
+
+
+def merge_contact_style_state_into_profile(profile: Dict[str, Any], style_state: Dict[str, Any]) -> Dict[str, Any]:
+    merged = dict(profile)
+    preferred_style = _as_text(style_state.get('preferred_contact_style'))
+    if preferred_style:
+        merged['preferred_contact_style'] = preferred_style
+    merged['contact_style_updated_at'] = style_state.get('updated_at')
+    merged['contact_style_confidence'] = style_state.get('confidence')
+    merged['contact_style_source'] = style_state.get('source')
+    merged['contact_style_resolution_rule'] = style_state.get('resolution_rule') or STYLE_CONFLICT_RESOLUTION_RULE
+    merged['contact_style_reconfirm_prompted_at'] = style_state.get('reconfirm_prompted_at')
+    return merged
+
+
+def maybe_append_contact_style_reconfirm(
+    reply: str,
+    profile: Dict[str, Any],
+    style_state: Dict[str, Any],
+) -> Tuple[str, bool]:
+    preferred_style = _as_text(profile.get('preferred_contact_style'))
+    if not preferred_style:
+        return reply, False
+
+    updated_at = style_state.get('updated_at')
+    if not isinstance(updated_at, datetime):
+        updated_at = _to_datetime(profile.get('contact_style_updated_at'))
+    if not isinstance(updated_at, datetime):
+        return reply, False
+
+    now = datetime.now(timezone.utc)
+    if now - updated_at < timedelta(days=DM_CONTACT_STYLE_TTL_DAYS):
+        return reply, False
+
+    reconfirm_prompted_at = style_state.get('reconfirm_prompted_at')
+    if not isinstance(reconfirm_prompted_at, datetime):
+        reconfirm_prompted_at = _to_datetime(profile.get('contact_style_reconfirm_prompted_at'))
+    if isinstance(reconfirm_prompted_at, datetime) and (now - reconfirm_prompted_at < timedelta(days=DM_CONTACT_STYLE_RECONFIRM_COOLDOWN_DAYS)):
+        return reply, False
+
+    if "Quick style check:" in reply:
+        return reply, False
+
+    appended = (
+        f"{reply}\n"
+        f"Quick style check: I have your preference as \"{preferred_style}\". "
+        "Still good, or want to change it?"
+    )
+    return appended, True
+
+
 def _empty_profile() -> Dict[str, Any]:
     return {
         'primary_role': None,
@@ -677,6 +927,11 @@ def _empty_profile() -> Dict[str, Any]:
         'last_active_days': None,
         'top_conversation_partners': [],
         'fifo': None,
+        'contact_style_updated_at': None,
+        'contact_style_confidence': None,
+        'contact_style_source': None,
+        'contact_style_resolution_rule': STYLE_CONFLICT_RESOLUTION_RULE,
+        'contact_style_reconfirm_prompted_at': None,
         'role_company_timeline': [],
     }
 
@@ -813,7 +1068,7 @@ def _normalize_contact_style_text(raw: str) -> Optional[str]:
         return 'concise'
     if any(token in source for token in ('detailed', 'long', 'deep')):
         return 'detailed'
-    if any(token in source for token in ('quick back-and-forth', 'back-and-forth', 'conversational', 'casual')):
+    if any(token in source for token in ('quick back-and-forth', 'back-and-forth', 'conversational', 'casual', 'chatty', 'normal')):
         return 'quick back-and-forth'
     if 'direct' in source:
         return 'direct'
@@ -1086,6 +1341,14 @@ def summarize_profile_for_prompt(profile: Dict[str, Any]) -> Dict[str, Any]:
         'last_active_days': profile.get('last_active_days'),
         'top_conversation_partners': (profile.get('top_conversation_partners') or [])[:5],
         'fifo': profile.get('fifo'),
+        'contact_style_updated_at': (
+            profile.get('contact_style_updated_at').isoformat()
+            if isinstance(profile.get('contact_style_updated_at'), datetime)
+            else profile.get('contact_style_updated_at')
+        ),
+        'contact_style_confidence': profile.get('contact_style_confidence'),
+        'contact_style_source': profile.get('contact_style_source'),
+        'contact_style_resolution_rule': profile.get('contact_style_resolution_rule'),
     }
 
 
@@ -1360,6 +1623,38 @@ def _collect_current_message_updates(
         if key not in updates and value:
             updates[key] = value
     return updates
+
+
+def _collect_current_message_field_confidence(
+    row: Dict[str, Any],
+    pending_events: List[Dict[str, Any]],
+    field_name: str,
+) -> Optional[float]:
+    msg_id = row.get('id')
+    if not msg_id:
+        return None
+    best: Optional[float] = None
+    for evt in pending_events:
+        if evt.get('source_message_id') != msg_id:
+            continue
+        evt_conf = _to_float(evt.get('confidence'))
+        facts = evt.get('extracted_facts')
+        if not isinstance(facts, list):
+            continue
+        for fact in facts:
+            if not isinstance(fact, dict):
+                continue
+            field = str(fact.get('field') or '').strip()
+            value = _as_text(fact.get('new_value'))
+            if field != field_name or not value:
+                continue
+            confidence = _to_float(fact.get('confidence'))
+            if confidence is None:
+                confidence = evt_conf
+            if confidence is None:
+                continue
+            best = confidence if best is None else max(best, confidence)
+    return best
 
 
 def _format_captured_updates_summary(captured_updates: Dict[str, str]) -> str:
@@ -1686,6 +1981,22 @@ def render_profile_data_provenance_reply(profile: Dict[str, Any]) -> str:
 
     if known_fields:
         lines.append(f"Current stored categories for you: {', '.join(known_fields)}.")
+
+    preferred_style = _as_text(profile.get('preferred_contact_style'))
+    style_rule = _as_text(profile.get('contact_style_resolution_rule')) or STYLE_CONFLICT_RESOLUTION_RULE
+    style_updated_at = profile.get('contact_style_updated_at')
+    if preferred_style:
+        updated_label = (
+            style_updated_at.isoformat()
+            if isinstance(style_updated_at, datetime)
+            else _as_text(style_updated_at)
+        )
+        if updated_label:
+            lines.append(
+                f"Communication-style rule: {style_rule}. Current style=\"{preferred_style}\", last updated={updated_label}."
+            )
+        else:
+            lines.append(f"Communication-style rule: {style_rule}. Current style=\"{preferred_style}\".")
 
     lines.append("If anything looks wrong, send corrections and I’ll prioritize those updates.")
     return "\n".join(lines)
@@ -2339,12 +2650,12 @@ def render_conversational_reply(
             response = f"{ack_line} Saved: {summary}. Quick follow-up: what should I store for your {next_field}?"
             if 'preferred_contact_style' in captured_updates:
                 response += " I’ll use that style in future replies."
-            return apply_preferred_contact_style(response, profile)
+            return response
 
         response = f"{ack_line} Saved: {summary}. Ask \"What do you know about me?\" for a full snapshot."
         if 'preferred_contact_style' in captured_updates:
             response += " I’ll use that style in future replies."
-        return apply_preferred_contact_style(response, profile)
+        return response
 
     if is_likely_profile_update_message(latest_text):
         return (
@@ -2426,44 +2737,78 @@ def render_response(args: argparse.Namespace, conn, row: Dict[str, Any]) -> str:
     if args.mode == 'template':
         return render_template(args.template, row)
 
-    profile = fetch_latest_profile(conn, row.get('sender_db_id'))
-    pending_events = fetch_pending_profile_events(conn, row.get('sender_db_id'))
+    sender_db_id = row.get('sender_db_id')
+    profile = fetch_latest_profile(conn, sender_db_id)
+    pending_events = fetch_pending_profile_events(conn, sender_db_id)
     profile = apply_pending_profile_events(profile, pending_events)
-    onboarding_state = fetch_onboarding_state(conn, row.get('sender_db_id'))
+    style_state = fetch_contact_style_state(conn, sender_db_id)
+    profile = merge_contact_style_state_into_profile(profile, style_state)
+
+    current_updates = _collect_current_message_updates(row, pending_events)
+    current_style_update = _as_text(current_updates.get('preferred_contact_style'))
+    if current_style_update:
+        current_style_confidence = _collect_current_message_field_confidence(
+            row,
+            pending_events,
+            'preferred_contact_style',
+        )
+        if current_style_confidence is None:
+            current_style_confidence = 0.62
+        style_state = persist_contact_style_state(
+            conn,
+            sender_db_id,
+            current_style_update,
+            source='dm_responder',
+            confidence=current_style_confidence,
+            source_message_id=_to_int(row.get('id')),
+        )
+        profile = merge_contact_style_state_into_profile(profile, style_state)
+
+    onboarding_state = fetch_onboarding_state(conn, sender_db_id)
     recent_messages = fetch_recent_conversation_messages(conn, row.get('conversation_id'))
+
+    def finalize_reply(raw_reply: str) -> str:
+        nonlocal style_state, profile
+        styled_reply = apply_preferred_contact_style(raw_reply, profile)
+        final_reply, prompted = maybe_append_contact_style_reconfirm(styled_reply, profile, style_state)
+        if prompted:
+            style_state = mark_contact_style_reconfirm_prompted(conn, sender_db_id)
+            profile = merge_contact_style_state_into_profile(profile, style_state)
+        return final_reply
+
     third_party_lookup = _lookup_third_party_user(conn, row.get('text'))
     if third_party_lookup:
-        return render_third_party_profile_reply(third_party_lookup)
+        return finalize_reply(render_third_party_profile_reply(third_party_lookup))
 
     latest_text = row.get('text')
     if is_control_plane_request(latest_text):
-        return render_control_plane_reply(args.persona_name)
+        return finalize_reply(render_control_plane_reply(args.persona_name))
     if is_secret_request(latest_text):
-        return render_secret_request_reply()
+        return finalize_reply(render_secret_request_reply())
     if is_sexual_style_request(latest_text):
-        return render_sexual_style_reply()
+        return finalize_reply(render_sexual_style_reply())
     if is_disengage_request(latest_text):
-        return render_disengage_reply()
+        return finalize_reply(render_disengage_reply())
     if is_non_text_marker(latest_text):
-        return render_non_text_marker_reply()
+        return finalize_reply(render_non_text_marker_reply())
     if is_capabilities_request(latest_text):
-        return render_capabilities_reply()
+        return finalize_reply(render_capabilities_reply())
     if is_unsupported_action_request(latest_text):
-        return render_unsupported_action_reply()
+        return finalize_reply(render_unsupported_action_reply())
     if is_profile_update_mode_request(latest_text):
-        return render_profile_update_mode_reply()
+        return finalize_reply(render_profile_update_mode_reply())
     if is_interview_style_request(latest_text):
-        return render_interview_style_reply(profile)
+        return finalize_reply(render_interview_style_reply(profile))
     if is_top3_profile_prompt_request(latest_text):
-        return render_top3_profile_prompt_reply(profile)
+        return finalize_reply(render_top3_profile_prompt_reply(profile))
     if is_missed_intent_feedback(latest_text):
-        return render_missed_intent_reply(profile)
+        return finalize_reply(render_missed_intent_reply(profile))
     if is_activity_analytics_request(latest_text):
-        return render_activity_analytics_reply(profile)
+        return finalize_reply(render_activity_analytics_reply(profile))
     if is_profile_data_provenance_request(latest_text):
-        return render_profile_data_provenance_reply(profile)
+        return finalize_reply(render_profile_data_provenance_reply(profile))
     if is_profile_confirmation_request(latest_text):
-        return render_profile_confirmation_reply(row, profile, pending_events)
+        return finalize_reply(render_profile_confirmation_reply(row, profile, pending_events))
 
     onboarding_reply, next_onboarding_state = render_onboarding_flow_reply(
         row,
@@ -2473,15 +2818,14 @@ def render_response(args: argparse.Namespace, conn, row: Dict[str, Any]) -> str:
         args.persona_name,
     )
     if next_onboarding_state != onboarding_state:
-        persist_onboarding_state(conn, row.get('sender_db_id'), next_onboarding_state)
+        persist_onboarding_state(conn, sender_db_id, next_onboarding_state)
     if onboarding_reply:
-        return apply_preferred_contact_style(onboarding_reply, profile)
+        return finalize_reply(onboarding_reply)
 
     selected_option = extract_option_selection(latest_text)
     if selected_option:
-        return apply_preferred_contact_style(
-            render_option_selection_reply(selected_option, profile, recent_messages),
-            profile,
+        return finalize_reply(
+            render_option_selection_reply(selected_option, profile, recent_messages)
         )
 
     if (
@@ -2492,17 +2836,14 @@ def render_response(args: argparse.Namespace, conn, row: Dict[str, Any]) -> str:
         or is_missed_intent_feedback(latest_text)
         or is_likely_profile_update_message(latest_text)
     ):
-        return render_conversational_reply(row, profile, args.persona_name, pending_events)
-    if _collect_current_message_updates(row, pending_events):
-        return render_conversational_reply(row, profile, args.persona_name, pending_events)
+        return finalize_reply(render_conversational_reply(row, profile, args.persona_name, pending_events))
+    if current_updates:
+        return finalize_reply(render_conversational_reply(row, profile, args.persona_name, pending_events))
 
     llm_reply = render_llm_conversational_reply(row, profile, args.persona_name, recent_messages, pending_events)
     if llm_reply and not llm_reply_looks_untrusted(llm_reply):
-        return apply_preferred_contact_style(llm_reply, profile)
-    return apply_preferred_contact_style(
-        render_conversational_reply(row, profile, args.persona_name, pending_events),
-        profile,
-    )
+        return finalize_reply(llm_reply)
+    return finalize_reply(render_conversational_reply(row, profile, args.persona_name, pending_events))
 
 
 def mark_auto_responded(conn) -> int:

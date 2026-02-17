@@ -29,6 +29,25 @@ interface DbEvent {
   created_at: string;
 }
 
+interface ContactStyleAuditEntry {
+  value: string;
+  updated_at: string;
+  confidence: number | null;
+  source: string;
+  source_event_id: string;
+}
+
+interface ContactStyleAudit {
+  value: string | null;
+  updated_at: string | null;
+  confidence: number | null;
+  source: string | null;
+  source_event_id: string | null;
+  resolution_rule: 'last_write_wins';
+  reconfirm_prompted_at: string | null;
+  history: ContactStyleAuditEntry[];
+}
+
 const ONBOARDING_REQUIRED_FIELDS = ['primary_role', 'primary_company', 'notable_topics', 'preferred_contact_style'] as const;
 
 function sanitizeCompany(value: string | null): string {
@@ -85,6 +104,7 @@ function applyProfilePatch(base: PsychRow, events: DbEvent[]): {
   reasoning: string;
   generated_bio_professional: string | null;
   generated_bio_personal: string | null;
+  contact_style_audit: ContactStyleAudit;
 }
 {
   let nextCompany = base.primary_company;
@@ -94,6 +114,10 @@ function applyProfilePatch(base: PsychRow, events: DbEvent[]): {
   let reasoning = base.reasoning || '';
   let prof = base.generated_bio_professional;
   let personal = base.generated_bio_personal;
+  let styleLastUpdatedAt: string | null = null;
+  let styleSourceEventId: string | null = null;
+  let styleConfidence: number | null = null;
+  const styleHistory: ContactStyleAuditEntry[] = [];
 
   for (const evt of events) {
     for (const fact of evt.extracted_facts || []) {
@@ -120,8 +144,21 @@ function applyProfilePatch(base: PsychRow, events: DbEvent[]): {
       } else if (fact.field === 'preferred_contact_style') {
         const newContactStyle = sanitizeContactStyle(fact.new_value);
         if (!newContactStyle) continue;
+        const eventConfidence = Number.isFinite(Number(fact.confidence))
+          ? Number(fact.confidence)
+          : Number(evt.confidence);
+        styleHistory.push({
+          value: newContactStyle,
+          updated_at: evt.created_at || new Date().toISOString(),
+          confidence: Number.isFinite(eventConfidence) ? eventConfidence : null,
+          source: 'dm_profile_update_events',
+          source_event_id: evt.id,
+        });
+        styleLastUpdatedAt = evt.created_at || new Date().toISOString();
+        styleSourceEventId = evt.id;
+        styleConfidence = Number.isFinite(eventConfidence) ? eventConfidence : styleConfidence;
         if (nextContactStyle !== newContactStyle) {
-          reasoning += `\n[DM profile-correction ${new Date().toISOString()}] Updated preferred_contact_style -> '${newContactStyle}'.`;
+          reasoning += `\n[DM profile-correction ${new Date().toISOString()}] Updated preferred_contact_style -> '${newContactStyle}' via last_write_wins.`;
           nextContactStyle = newContactStyle;
         }
       } else if (fact.field === 'notable_topics') {
@@ -145,6 +182,16 @@ function applyProfilePatch(base: PsychRow, events: DbEvent[]): {
     reasoning,
     generated_bio_professional: prof || base.generated_bio_professional,
     generated_bio_personal: personal || base.generated_bio_personal,
+    contact_style_audit: {
+      value: nextContactStyle || base.preferred_contact_style || null,
+      updated_at: styleLastUpdatedAt,
+      confidence: styleConfidence,
+      source: styleSourceEventId ? 'dm_profile_update_events' : null,
+      source_event_id: styleSourceEventId,
+      resolution_rule: 'last_write_wins',
+      reconfirm_prompted_at: null,
+      history: styleHistory.slice(-12),
+    },
   };
 }
 
@@ -199,6 +246,24 @@ async function reconcileUsers(targetUserIds: string[] = [], limit = 0): Promise<
 
     if (!eventsRes.rows.length) continue;
 
+    const existingStateRes = await db.query<{ snapshot: Record<string, unknown> | null }>(
+      `SELECT snapshot::jsonb AS snapshot
+       FROM dm_profile_state
+       WHERE user_id = $1
+       LIMIT 1`,
+      [userId],
+    );
+    const existingSnapshot = (existingStateRes.rows[0]?.snapshot && typeof existingStateRes.rows[0].snapshot === 'object')
+      ? existingStateRes.rows[0].snapshot as Record<string, unknown>
+      : {};
+    const existingStylePreference = (
+      existingSnapshot.style_preference
+      && typeof existingSnapshot.style_preference === 'object'
+      && !Array.isArray(existingSnapshot.style_preference)
+    )
+      ? existingSnapshot.style_preference as Record<string, unknown>
+      : {};
+
     const latestProfileRes = await db.query<PsychRow>(
       `SELECT primary_company, reasoning, generated_bio_professional, generated_bio_personal, primary_role, preferred_contact_style, notable_topics
        FROM user_psychographics
@@ -220,6 +285,55 @@ async function reconcileUsers(targetUserIds: string[] = [], limit = 0): Promise<
 
     const patch = applyProfilePatch(latest, eventsRes.rows);
 
+    const existingStyleValue = typeof existingStylePreference.value === 'string' ? existingStylePreference.value : null;
+    const existingStyleUpdatedAt = typeof existingStylePreference.updated_at === 'string' ? existingStylePreference.updated_at : null;
+    const existingStyleConfidence = Number.isFinite(Number(existingStylePreference.confidence))
+      ? Number(existingStylePreference.confidence)
+      : null;
+    const existingStyleSource = typeof existingStylePreference.source === 'string' ? existingStylePreference.source : null;
+    const existingStyleSourceEventId = typeof existingStylePreference.source_event_id === 'string'
+      ? existingStylePreference.source_event_id
+      : null;
+    const existingReconfirmPromptedAt = typeof existingStylePreference.reconfirm_prompted_at === 'string'
+      ? existingStylePreference.reconfirm_prompted_at
+      : null;
+    const existingStyleHistory = Array.isArray(existingStylePreference.history)
+      ? existingStylePreference.history
+          .filter((item) => item && typeof item === 'object')
+          .map((item: any) => ({
+            value: typeof item.value === 'string' ? item.value : '',
+            updated_at: typeof item.updated_at === 'string' ? item.updated_at : new Date().toISOString(),
+            confidence: Number.isFinite(Number(item.confidence)) ? Number(item.confidence) : null,
+            source: typeof item.source === 'string' ? item.source : 'dm_profile_update_events',
+            source_event_id: typeof item.source_event_id === 'string' ? item.source_event_id : 'unknown',
+          }))
+          .filter((item) => item.value.length > 0)
+      : [];
+    const mergedStyleHistory = [...existingStyleHistory, ...patch.contact_style_audit.history].slice(-12);
+
+    const styleValue = patch.contact_style_audit.value || existingStyleValue;
+    const styleUpdatedAt = patch.contact_style_audit.updated_at || existingStyleUpdatedAt;
+    const styleConfidence = patch.contact_style_audit.confidence ?? existingStyleConfidence;
+    const styleSource = patch.contact_style_audit.source || existingStyleSource;
+    const styleSourceEventId = patch.contact_style_audit.source_event_id || existingStyleSourceEventId;
+    const styleReconfirmPromptedAt = (
+      styleValue
+      && existingStyleValue
+      && styleValue.toLowerCase() === existingStyleValue.toLowerCase()
+    )
+      ? existingReconfirmPromptedAt
+      : null;
+    const stylePreference: ContactStyleAudit = {
+      value: styleValue,
+      updated_at: styleUpdatedAt,
+      confidence: styleConfidence,
+      source: styleSource,
+      source_event_id: styleSourceEventId,
+      resolution_rule: 'last_write_wins',
+      reconfirm_prompted_at: styleReconfirmPromptedAt,
+      history: mergedStyleHistory,
+    };
+
     const snapshot = {
       source: 'dm_profile_reconciler',
       user_id: userId,
@@ -230,6 +344,7 @@ async function reconcileUsers(targetUserIds: string[] = [], limit = 0): Promise<
         payload: e.event_payload,
         created_at: e.created_at,
       })),
+      style_preference: stylePreference,
       applied_at: new Date().toISOString(),
     };
 

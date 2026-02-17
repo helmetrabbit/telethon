@@ -27,7 +27,8 @@
     "env:local": "bash tools/use-local-db.sh",
     "db:smoke": "npm run build && node dist/db/smoke-test.js",
     "ingest-dm-jsonl": "node dist/cli/ingest-dm-jsonl.js",
-    "reconcile-dm-psych": "node dist/cli/reconcile-dm-psychometry.js"
+    "reconcile-dm-psych": "node dist/cli/reconcile-dm-psychometry.js",
+    "dm-style-regress": "node dist/cli/run-dm-style-regression.js"
   },
   "engines": {
     "node": ">=18"

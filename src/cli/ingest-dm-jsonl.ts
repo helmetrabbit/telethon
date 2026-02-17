@@ -7,6 +7,7 @@ import path from 'node:path';
 import { db } from '../db/index.js';
 import { parseArgs } from '../utils.js';
 import { createLLMClient } from '../inference/llm-client.js';
+import { extractContactStyleDirectives, normalizeContactStyle } from '../lib/dm-contact-style.js';
 
 
 interface DmEvent {
@@ -217,25 +218,6 @@ function isThirdPartyProfileQuery(source: string): boolean {
 function hasExplicitSelfProfileUpdate(source: string): boolean {
   const s = source.toLowerCase();
   return /(?:\bmy role\b|\bmy title\b|\bi work as\b|\bno longer at\b|\bleft\b|\bjoined\b|\bunemployed\b|\bmy priorities are\b|\bmy current focus is\b|\bcurrent focus is\b|\bfocused on\b|\bi(?:'m| am)\s+looking for\b|\bcurrently\s+looking for\b|\bprefer(?:\s+to)? communicate\b|\bbest way to reach me\b|\btalk to me\b|\brespond to me\b|\breply to me\b|\bkeep (?:your )?(?:responses|replies|messages)\b|\b(?:role|title|position|company|project|priorities|priority|communication|style)\s*:|\b(?:update|set|change)\s+(?:my\s+)?(?:job\s+title|title|role|position|company|project|communication(?:\s+style)?)\s+(?:to|as)\b)/iu.test(s);
-}
-
-function normalizeContactStyle(raw: string): string {
-  const clean = sanitizeEntity(raw);
-  if (!clean) return '';
-  const lower = clean.toLowerCase();
-
-  if (lower.includes('bullet') || lower.includes('list')) return 'concise bullets';
-  if (lower.includes('email')) return 'email';
-  if (lower.includes('telegram') || lower.includes('dm')) return 'telegram dm';
-  if (lower.includes('text') || lower.includes('sms')) return 'text';
-  if (lower.includes('call') || lower.includes('phone')) return 'call';
-  if (lower.includes('voice')) return 'voice notes';
-  if (lower.includes('direct')) return 'direct';
-  if (lower.includes('formal') || lower.includes('professional')) return 'formal and professional';
-  if (lower.includes('conversational') || lower.includes('casual') || lower.includes('back-and-forth')) return 'quick back-and-forth';
-  if (lower.includes('short') || lower.includes('concise')) return 'short messages';
-  if (lower.includes('detailed') || lower.includes('long')) return 'detailed messages';
-  return clean.toLowerCase();
 }
 
 function parseUnemployedStatement(source: string): ProfileEvent[] {
@@ -690,12 +672,8 @@ async function extractProfileEventsFromText(text: string | null): Promise<Profil
     });
   }
 
-  const commStyleDirect = /(?:talk|speak|communicate|respond|reply)\s+(?:to\s+me\s+)?(?:in|with|using)?\s*([^.!?\n]{3,100})|(?:keep|make)\s+(?:your\s+)?(?:responses|replies|messages)\s+([^.!?\n]{3,100})/giu;
-  for (const m of source.matchAll(commStyleDirect)) {
-    const candidate = sanitizeEntity((m[1] || m[2] || '').trim());
-    if (!candidate) continue;
-    if (!/(?:concise|short|brief|detailed|long|bullet|list|direct|formal|professional|conversational|casual|back-and-forth)/iu.test(candidate)) continue;
-    const style = normalizeContactStyle(candidate);
+  const directStyles = extractContactStyleDirectives(source);
+  for (const style of directStyles) {
     if (!style) continue;
     events.push({
       event_type: 'profile.contact_style_update',

@@ -1,0 +1,30 @@
+{
+  "_comment": "Run with: npm run dm-style-regress",
+  "cases": [
+    {
+      "id": "bullets-please",
+      "text": "bullets please",
+      "expected_any": ["concise bullets"]
+    },
+    {
+      "id": "be-brief",
+      "text": "be brief",
+      "expected_any": ["short messages", "concise"]
+    },
+    {
+      "id": "go-deep",
+      "text": "go deep",
+      "expected_any": ["detailed messages", "detailed"]
+    },
+    {
+      "id": "professional-tone",
+      "text": "professional tone",
+      "expected_any": ["formal and professional"]
+    },
+    {
+      "id": "normal-chatty",
+      "text": "normal chatty is fine",
+      "expected_any": ["quick back-and-forth"]
+    }
+  ]
+}
