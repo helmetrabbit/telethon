@@ -126,6 +126,8 @@ _IDENTITY_OVERRIDE_RE = re.compile(
 _CAPABILITIES_QUERY_RE = re.compile(
     r"\b(?:what\s+skills\s+do\s+you\s+have|what\s+can\s+you\s+do|your\s+capabilities|"
     r"what\s+is\s+this\s+chat\s+for|what\s+is\s+this\s+for|what\s+do\s+you\s+do|"
+    r"what\s+is\s+(?:this|my)\s+profile\s+for|what\s+is\s+(?:this|my)\s+profile\s+used\s+for|"
+    r"how\s+is\s+(?:this|my)\s+profile\s+(?:being\s+)?used|how\s+will\s+(?:this|my)\s+(?:profile|data)\s+be\s+used|"
     r"what\s+can\s+i\s+use\s+this\s+for|how\s+does\s+this\s+work|how\s+do\s+i\s+use\s+this|"
     r"what\s+is\s+the\s+process|interview\s+process|"
     r"what\s+is\s+the\s+purpose|purpose\s+of\s+this|"
@@ -197,7 +199,12 @@ _PROFILE_UPDATE_MODE_RE = re.compile(
     re.IGNORECASE,
 )
 _PROFILE_DATA_PROVENANCE_RE = re.compile(
-    r"\b(?:where\s+does\s+(?:this|the)\s+data\s+come\s+from|data\s+source(?:s)?|how\s+did\s+you\s+get\s+this\s+data|"
+    r"\b(?:where\s+does\s+(?:this|the)\s+data\s+come\s+from|"
+    r"where\s+did\s+you\s+get\s+(?:this|that)\s+(?:information|info|data)\s+from|"
+    r"where\s+did\s+you\s+get\s+this\s+from|"
+    r"how\s+did\s+you\s+get\s+this\s+(?:information|info|data)|"
+    r"how\s+do\s+you\s+know\s+(?:this|that)|"
+    r"data\s+source(?:s)?|source\s+of\s+this|"
     r"what\s+(?:other\s+)?data\s+do\s+you\s+have(?:\s+on\s+me)?)\b",
     re.IGNORECASE,
 )
@@ -1167,6 +1174,34 @@ def _extract_inline_profile_updates(text: Optional[str]) -> Dict[str, str]:
             updates['notable_topics'] = value
         elif key in ('communication', 'style', 'communication style', 'preferred communication', 'contact style'):
             updates['preferred_contact_style'] = value
+
+    # Freeform self-updates (natural language) for role/company.
+    if 'primary_role' not in updates or 'primary_company' not in updates:
+        role_company_match = re.search(
+            r"\bmy\s+(?:current\s+)?(?:role|title|job\s+title|position)\s+is\s+([^.!?\n]{2,120}?)"
+            r"(?:\s+(?:and|&)\s+(?:the\s+)?(?:company|project|employer|org|organization)\s+is\s+([^.!?\n]{2,120}?))?"
+            r"(?:[.!?\n]|$)",
+            clean_source,
+            re.IGNORECASE,
+        )
+        if role_company_match:
+            role_value = _clean_text(role_company_match.group(1)).strip(" \"'`").strip(" .,!?:;")
+            company_value = _clean_text(role_company_match.group(2) or '').strip(" \"'`").strip(" .,!?:;")
+            if role_value and 'primary_role' not in updates:
+                updates['primary_role'] = role_value[:120]
+            if company_value and 'primary_company' not in updates:
+                updates['primary_company'] = 'unemployed' if 'unemployed' in company_value.lower() else company_value[:120]
+
+    if 'primary_company' not in updates:
+        company_only_match = re.search(
+            r"^(?:update\s*:\s*)?(?:my\s+)?(?:current\s+)?(?:company|project|employer|org|organization)\s+is\s+([^.!?\n]{2,120}?)(?:[.!?\n]|$)",
+            clean_source,
+            re.IGNORECASE,
+        )
+        if company_only_match:
+            company_value = _clean_text(company_only_match.group(1)).strip(" \"'`").strip(" .,!?:;")
+            if company_value and not re.match(r"^(?:launching|building|making|doing|working|growing|scaling|helping|assisting|supporting)\b", company_value, re.IGNORECASE):
+                updates['primary_company'] = 'unemployed' if 'unemployed' in company_value.lower() else company_value[:120]
 
     if re.search(r"\b(?:unemployed|between jobs|not working|job hunting)\b", clean_source, re.IGNORECASE):
         updates['primary_company'] = 'unemployed'
@@ -2999,8 +3034,9 @@ def render_conversational_reply(
 
     if is_likely_profile_update_message(latest_text):
         return (
-            "I read that as profile context, but I need one explicit field to store.\n"
-            "Send one line like `role: ...`, `company: ...`, `priorities: ...`, or `communication: ...`."
+            "I read that as a profile update, but I couldn’t confidently extract a specific field.\n"
+            "You can say it in plain English (example: “My role is X and my company is Y”), or use:\n"
+            "role: ...\ncompany: ...\npriorities: ...\ncommunication: ..."
         )
 
     missing_order = ['primary_role', 'primary_company', 'notable_topics', 'preferred_contact_style']
@@ -3056,8 +3092,8 @@ def render_conversational_reply(
         )
     if "?" in source:
         return (
-            "I can handle this either as a profile update or as advice.\n"
-            "Reply `update:` with what to store, or `advice:` with what you want help on."
+            "I can either answer questions about your stored profile (and where it came from), or capture an update.\n"
+            "If you’re updating, just tell me the change in plain English. If you want a snapshot, ask: “What do you know about me?”"
         )
 
     else:

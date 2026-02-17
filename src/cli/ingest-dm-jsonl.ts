@@ -256,7 +256,7 @@ function isThirdPartyProfileQuery(source: string): boolean {
 
 function hasExplicitSelfProfileUpdate(source: string): boolean {
   const s = source.toLowerCase();
-  return /(?:\bmy role\b|\bmy title\b|\bi work as\b|\bno longer at\b|\bleft\b|\bjoined\b|\bunemployed\b|\bmy priorities are\b|\bmy current focus is\b|\bcurrent focus is\b|\bfocused on\b|\bi(?:'m| am)\s+looking for\b|\bcurrently\s+looking for\b|\bi(?:'m| am)\s+pursuing\b|\bcurrently\s+pursuing\b|\bprefer(?:\s+to)? communicate\b|\bbest way to reach me\b|\btalk to me\b|\brespond to me\b|\breply to me\b|\bkeep (?:your )?(?:responses|replies|messages)\b|\b(?:role|title|position|company|project|priorities|priority|communication|style)\s*:|\b(?:update|set|change)\s+(?:my\s+)?(?:job\s+title|title|role|position|company|project|communication(?:\s+style)?)\s+(?:to|as)\b)/iu.test(s);
+  return /(?:\bmy role\b|\bmy title\b|\bi work as\b|\bmy company\b|\bno longer at\b|\bleft\b|\bjoined\b|\bunemployed\b|\bmy priorities are\b|\bmy current focus is\b|\bcurrent focus is\b|\bfocused on\b|\bi(?:'m| am)\s+looking for\b|\bcurrently\s+looking for\b|\bi(?:'m| am)\s+pursuing\b|\bcurrently\s+pursuing\b|\bprefer(?:\s+to)? communicate\b|\bbest way to reach me\b|\btalk to me\b|\brespond to me\b|\breply to me\b|\bkeep (?:your )?(?:responses|replies|messages)\b|\b(?:role|title|position|company|project|priorities|priority|communication|style)\s*:|\b(?:update|set|change)\s+(?:my\s+)?(?:job\s+title|title|role|position|company|project|communication(?:\s+style)?)\s+(?:to|as)\b)/iu.test(s);
 }
 
 function parseUnemployedStatement(source: string): ProfileEvent[] {
@@ -612,6 +612,71 @@ async function extractProfileEventsFromText(text: string | null): Promise<Profil
   }
 
   // Pattern: role/company declarations
+  // Pattern: "my role is X and the company is Y"
+  const roleCompanyIs =
+    /(?:^|[\s\n])my\s+(?:current\s+)?(?:role|title|job\s+title|position)\s+is\s+([^.!?\n]{2,120}?)\s+(?:and|&)\s+(?:the\s+)?(?:company|project|employer|org|organization)\s+is\s+([^.!?\n]{2,120}?)(?:[.;!?]|$)/giu;
+  for (const m of source.matchAll(roleCompanyIs)) {
+    const role = normalizeRole(m[1] || '');
+    const company = normalizeCompanyOrStatus(m[2] || '');
+    if (!(role && isLikelyRole(role))) continue;
+    if (!company) continue;
+    events.push({
+      event_type: 'profile.role_company_update',
+      confidence: 0.86,
+      event_payload: {
+        raw_text: text,
+        trigger: 'role_company_is_statement',
+        role,
+        company,
+      },
+      extracted_facts: [
+        {
+          field: 'primary_role',
+          old_value: null,
+          new_value: role,
+          confidence: 0.86,
+        },
+        {
+          field: 'primary_company',
+          old_value: null,
+          new_value: company,
+          confidence: 0.86,
+        },
+      ],
+    });
+  }
+
+  // Pattern: "my company is X" / "company is X"
+  const companyIs =
+    /(?:^|\n)\s*(?:update\s*:\s*)?(?:my\s+)?(?:current\s+)?(?:company|project|employer|org|organization)\s+is\s+([^.!?\n]{2,120}?)(?:[.;!?]|$)/giu;
+  for (const m of source.matchAll(companyIs)) {
+    const rawCompany = sanitizeEntity(m[1] || '');
+    if (!rawCompany) continue;
+    // Reject "company is <verb phrase>" style fragments.
+    if (/^(?:launching|building|making|doing|working|growing|scaling|helping|assisting|supporting)\b/iu.test(rawCompany)) {
+      continue;
+    }
+    const company = normalizeCompanyOrStatus(rawCompany);
+    if (!company) continue;
+    events.push({
+      event_type: 'profile.company_update',
+      confidence: 0.82,
+      event_payload: {
+        raw_text: text,
+        trigger: 'company_is_statement',
+        new_company: company,
+      },
+      extracted_facts: [
+        {
+          field: 'primary_company',
+          old_value: null,
+          new_value: company,
+          confidence: 0.82,
+        },
+      ],
+    });
+  }
+
   const roleAndCompany = /(?:^|[\s\n])(?:i(?:'m|’m| am)|my role(?:\s+is|[’']s)?|my title(?:\s+is|[’']s)?|i work as)\s+(?:(?:an|a|the)\s+)?([A-Za-z0-9/&+().,' -]{2,80}?)(?:\s+(?:at|with|for)\s+([A-Za-z0-9 .,'&-]{2,120}?))?(?:[.;!?]|$)/giu;
   for (const m of source.matchAll(roleAndCompany)) {
     const role = normalizeRole(m[1] || '');
@@ -619,6 +684,8 @@ async function extractProfileEventsFromText(text: string | null): Promise<Profil
     const company = maybeCompany ? cleanupCompanyName(maybeCompany) : null;
     const facts: ProfileFact[] = [];
     if (/^(?:asking|wondering|curious|trying|looking|tell(?:ing)?|what|who)\b/iu.test(role)) continue;
+    // Avoid mis-parsing "my role is X and the company is Y" as a single role string.
+    if (/\b(?:company|project|employer|org|organization)\s+is\b/iu.test(role)) continue;
 
     if (!(role && isLikelyRole(role))) continue;
 
