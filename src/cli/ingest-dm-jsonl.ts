@@ -222,7 +222,13 @@ function isLikelyRole(raw: string): boolean {
   const value = normalizeRole(raw);
   if (!value) return false;
   const lower = value.toLowerCase();
+  const roleKeywordRe = /(?:\b)(?:head|lead|director|manager|analyst|engineer|developer|founder|co-?founder|advisor|consultant|partnerships?|growth|marketing|sales|operations?|product|design|qa|cto|ceo|coo|cfo|vp|principal|owner|student|freelance|devrel|bd|bizdev|business development|ecosystem|community|research|investor)(?:\b)/iu;
+  const verbLeadHardRe = /^(?:currently\s+)?(?:discovering|exploring|pursuing|seeking|finding|researching|learning|helping|assisting|supporting|driving|building|working|growing|scaling)\b/iu;
   if (/(?:^|\b)(?:unemployed|not working|between jobs|job hunting|looking for work)(?:\b|$)/iu.test(lower)) {
+    return false;
+  }
+  // Reject action statements mis-parsed as job titles, e.g. "I'm pursuing X" or "I'm helping grow..."
+  if (verbLeadHardRe.test(lower)) {
     return false;
   }
   if (/(?:^|\b)(?:currently|now|last job|previously)(?:\b|$)/iu.test(lower) && value.length < 20) {
@@ -234,7 +240,8 @@ function isLikelyRole(raw: string): boolean {
   if (/(?:^|\b)(?:asking|wondering|curious|trying|looking|tell me|what(?: do)? you know|do you know|who is|hello|hi)\b/iu.test(lower)) {
     return false;
   }
-  if (value.split(/\s+/u).length > 8 && !/(?:\b)(?:head|lead|director|manager|analyst|engineer|developer|founder|co-?founder|advisor|consultant|partnerships|growth|marketing|sales|operations|product|design|qa|cto|ceo|coo|cfo|vp|principal|owner|student|freelance)(?:\b)/iu.test(lower)) {
+  const wordCount = value.split(/\s+/u).length;
+  if (wordCount > 4 && !roleKeywordRe.test(lower)) {
     return false;
   }
   return value.length >= 2;
@@ -249,7 +256,7 @@ function isThirdPartyProfileQuery(source: string): boolean {
 
 function hasExplicitSelfProfileUpdate(source: string): boolean {
   const s = source.toLowerCase();
-  return /(?:\bmy role\b|\bmy title\b|\bi work as\b|\bno longer at\b|\bleft\b|\bjoined\b|\bunemployed\b|\bmy priorities are\b|\bmy current focus is\b|\bcurrent focus is\b|\bfocused on\b|\bi(?:'m| am)\s+looking for\b|\bcurrently\s+looking for\b|\bprefer(?:\s+to)? communicate\b|\bbest way to reach me\b|\btalk to me\b|\brespond to me\b|\breply to me\b|\bkeep (?:your )?(?:responses|replies|messages)\b|\b(?:role|title|position|company|project|priorities|priority|communication|style)\s*:|\b(?:update|set|change)\s+(?:my\s+)?(?:job\s+title|title|role|position|company|project|communication(?:\s+style)?)\s+(?:to|as)\b)/iu.test(s);
+  return /(?:\bmy role\b|\bmy title\b|\bi work as\b|\bno longer at\b|\bleft\b|\bjoined\b|\bunemployed\b|\bmy priorities are\b|\bmy current focus is\b|\bcurrent focus is\b|\bfocused on\b|\bi(?:'m| am)\s+looking for\b|\bcurrently\s+looking for\b|\bi(?:'m| am)\s+pursuing\b|\bcurrently\s+pursuing\b|\bprefer(?:\s+to)? communicate\b|\bbest way to reach me\b|\btalk to me\b|\brespond to me\b|\breply to me\b|\bkeep (?:your )?(?:responses|replies|messages)\b|\b(?:role|title|position|company|project|priorities|priority|communication|style)\s*:|\b(?:update|set|change)\s+(?:my\s+)?(?:job\s+title|title|role|position|company|project|communication(?:\s+style)?)\s+(?:to|as)\b)/iu.test(s);
 }
 
 function parseUnemployedStatement(source: string): ProfileEvent[] {
@@ -790,7 +797,7 @@ async function extractProfileEventsFromText(text: string | null): Promise<Profil
   }
 
   // Pattern: priority statements
-  const priorities = /(?:my priorities are|my current focus is|current focus is|i(?:'m| am)\s+focused on|currently focused on|right now\s+i(?:'m| am)\s+focused on|i(?:'m| am)\s+looking for|currently\s+looking for|right now\s+i(?:'m| am)\s+looking for)\s+([^.!?\n]{3,180})/giu;
+  const priorities = /(?:my priorities are|my current focus is|current focus is|i(?:'m| am)\s+focused on|currently focused on|right now\s+i(?:'m| am)\s+focused on|i(?:'m| am)\s+looking for|currently\s+looking for|right now\s+i(?:'m| am)\s+looking for|i(?:'m| am)\s+pursuing|currently\s+pursuing|right now\s+i(?:'m| am)\s+pursuing)\s+([^.!?\n]{3,180})/giu;
   for (const m of source.matchAll(priorities)) {
     const topics = splitPriorityTopics(m[1] || '');
     if (topics.length === 0) continue;

@@ -102,7 +102,7 @@ STYLE_CONFLICT_RESOLUTION_RULE = 'confidence_gated_last_write_wins'
 
 _PLACEHOLDER_RE = re.compile(r"\{([^{}]+)\}")
 _INDECISION_RE = re.compile(
-    r"\b(?:idk|i\s+don'?t\s+know|not\s+sure|what\s+should\s+i(?:\s+do)?|any\s+advice|help\s+me\s+choose)\b",
+    r"\b(?:idk|i\s+don'?t\s+know|not\s+sure\s+what\s+to\s+do|what\s+should\s+i(?:\s+do)?|any\s+advice|help\s+me\s+choose)\b",
     re.IGNORECASE,
 )
 _THIRD_PARTY_QUERY_RE = re.compile(
@@ -124,7 +124,12 @@ _IDENTITY_OVERRIDE_RE = re.compile(
     re.IGNORECASE,
 )
 _CAPABILITIES_QUERY_RE = re.compile(
-    r"\b(?:what\s+skills\s+do\s+you\s+have|what\s+can\s+you\s+do|your\s+capabilities)\b",
+    r"\b(?:what\s+skills\s+do\s+you\s+have|what\s+can\s+you\s+do|your\s+capabilities|"
+    r"what\s+is\s+this\s+chat\s+for|what\s+is\s+this\s+for|what\s+do\s+you\s+do|"
+    r"what\s+can\s+i\s+use\s+this\s+for|how\s+does\s+this\s+work|how\s+do\s+i\s+use\s+this|"
+    r"what\s+is\s+the\s+process|interview\s+process|"
+    r"what\s+is\s+the\s+purpose|purpose\s+of\s+this|"
+    r"i'?m\s+confused|this\s+is\s+confusing|why\s+am\s+i\s+doing\s+this|what\s+does\s+this\s+do)\b",
     re.IGNORECASE,
 )
 _UNSUPPORTED_ACTION_RE = re.compile(
@@ -161,7 +166,9 @@ _NON_TEXT_MARKER_RE = re.compile(
     re.IGNORECASE,
 )
 _ONBOARDING_START_RE = re.compile(
-    r"\b(?:onboard|onboarding|set\s+up\s+my\s+profile|setup\s+my\s+profile|initialize\s+my\s+profile|update\s+my\s+profile)\b",
+    r"\b(?:onboard|onboarding|set\s+up\s+my\s+profile|setup\s+my\s+profile|initialize\s+my\s+profile|update\s+my\s+profile|"
+    r"pretend\s+it'?s\s+my\s+first\s+message|pretend\s+this\s+is\s+my\s+first\s+message|"
+    r"first\s+message|new\s+here|start\s+from\s+scratch|reset\s+onboarding)\b",
     re.IGNORECASE,
 )
 _ONBOARDING_ACK_RE = re.compile(
@@ -177,12 +184,16 @@ _STYLE_CONFIRM_NO_RE = re.compile(
     re.IGNORECASE,
 )
 _GREETING_RE = re.compile(
-    r"^\s*(?:hi|hello|hey|yo|gm|good\s+(?:morning|afternoon|evening)|what'?s\s+up|sup)\b[!. ]*$",
+    r"^\s*(?:hi|hello|hey|yo|gm|gn|good\s+(?:morning|afternoon|evening)|what'?s\s+up|sup)"
+    r"(?:\s+\w{1,16}){0,2}\b[!. ]*$",
     re.IGNORECASE,
 )
 _PROFILE_UPDATE_MODE_RE = re.compile(
     r"\b(?:i\s+was\s+giving\s+you\s+info\s+to\s+update\s+my\s+profile|focus\s+(?:only|solely)\s+on\s+profile\s+updates?|"
-    r"not\s+for\s+(?:advice|recommendations?)|no\s+advice\s+unless\s+i\s+ask|just\s+update\s+my\s+profile)\b",
+    r"not\s+for\s+(?:advice|recommendations?)|no\s+advice\s+unless\s+i\s+ask|just\s+update\s+my\s+profile|"
+    r"not\s+my\s+personal\s+assistant|don'?t\s+be\s+my\s+personal\s+assistant|"
+    r"just\s+be\s+the\s+data\s+layer|data\s+layer\s+only|just\s+the\s+data|"
+    r"only\s+capture\s+updates|only\s+store\s+updates|profile\s+only|no\s+action\s+support)\b",
     re.IGNORECASE,
 )
 _PROFILE_DATA_PROVENANCE_RE = re.compile(
@@ -220,6 +231,7 @@ _INLINE_PROFILE_UPDATE_RE = re.compile(
 )
 _FREEFORM_PRIORITY_RE = re.compile(
     r"\b(?:i(?:'m| am|’m)\s+looking\s+for|currently\s+looking\s+for|right\s+now\s+i(?:'m| am|’m)\s+looking\s+for|"
+    r"i(?:'m| am|’m)\s+pursuing|currently\s+pursuing|right\s+now\s+i(?:'m| am|’m)\s+pursuing|"
     r"i(?:'m| am|’m)\s+focused\s+on|currently\s+focused\s+on|my\s+current\s+focus\s+is|current\s+focus\s+is|"
     r"my\s+priorities?\s+(?:are|is))\s+([^.!?\n]{3,180})",
     re.IGNORECASE,
@@ -1110,6 +1122,7 @@ def infer_slots_from_text(text: Optional[str]) -> Set[str]:
         "current focus is",
         "my current focus is",
         "right now i'm focused",
+        "pursuing",
         "looking for",
         "currently looking for",
         "i'm looking for",
@@ -1870,7 +1883,9 @@ def _preferred_style_mode(profile: Dict[str, Any]) -> str:
         return 'default'
     if 'bullet' in lower or 'list' in lower:
         return 'bullets'
-    if any(token in lower for token in ('concise', 'short', 'brief', 'direct')):
+    if 'direct' in lower:
+        return 'direct'
+    if any(token in lower for token in ('concise', 'short', 'brief')):
         return 'concise'
     if any(token in lower for token in ('detailed', 'long', 'deep', 'comprehensive')):
         return 'detailed'
@@ -2294,6 +2309,7 @@ def render_onboarding_flow_reply(
     core_slots_known = _count_core_profile_slots(profile)
     is_new_user_profile = core_slots_known == 0
     full_profile_start = is_full_profile_request(latest_text) and is_new_user_profile
+    explicit_onboarding_requested = is_onboarding_start_request(latest_text) or full_profile_start
     start_requested = (
         is_onboarding_start_request(latest_text)
         or full_profile_start
@@ -2333,7 +2349,7 @@ def render_onboarding_flow_reply(
     if not missing_fields:
         state['missing_fields'] = []
         state['last_prompted_field'] = None
-        should_announce_completion = status == 'collecting' or is_new_user_profile or bool(captured_updates)
+        should_announce_completion = explicit_onboarding_requested or status == 'collecting' or is_new_user_profile
         if status != 'completed':
             state['status'] = 'completed'
             state['completed_at'] = now
@@ -2355,6 +2371,24 @@ def render_onboarding_flow_reply(
                     "Ask \"What do you know about me?\" anytime for a snapshot.",
                     state,
                 )
+        if should_announce_completion:
+            lines = format_profile_snapshot_lines(profile)
+            if lines:
+                bullets = "\n".join(f"- {line}" for line in lines[:6])
+                return (
+                    "You’re already set up. Here’s your saved profile context:\n"
+                    f"{bullets}\n"
+                    "You can:\n"
+                    "- Ask \"What do you know about me?\" for a snapshot\n"
+                    "- Send updates (plain English or `field: value`)\n"
+                    "- Say \"interview mode\" for one question at a time",
+                    state,
+                )
+            return (
+                "You’re already set up. Ask \"What do you know about me?\" for a snapshot, "
+                "or send updates in `field: value` format.",
+                state,
+            )
         return None, state
 
     if status != 'collecting':
@@ -2473,18 +2507,18 @@ def render_control_plane_reply(persona_name: str) -> str:
     )
 
 
-def render_capabilities_reply() -> str:
+def render_capabilities_reply(profile: Dict[str, Any], persona_name: str) -> str:
+    prompts = _build_profile_gap_prompts(profile, count=1)
+    next_q = prompts[0] if prompts else "What role/title should I store for you right now?"
     return (
-        "I’m an AI assistant (not a human teammate).\n"
-        "Capabilities in this chat:\n"
-        "- Profile snapshot and update capture (role/company/priorities/communication style)\n"
-        "- First-contact onboarding flow for users with sparse profile data\n"
-        "- Activity analytics from stored psychometric fields (message totals, peak hours, active days, groups)\n"
-        "- Third-party profile lookups from existing stored records\n"
-        "- Concrete next-step planning when you’re stuck\n"
-        "Limits:\n"
-        "- I can’t execute shell commands, curl websites, or browse a filesystem from chat\n"
-        "- I can’t change Telegram account settings (profile picture/name/reboot) from chat"
+        f"Hey — I’m {persona_name}, an AI profile assistant (not a human).\n"
+        "This chat is for keeping your profile dataset current and letting you query it.\n"
+        "How to use it:\n"
+        "- Ask: \"What do you know about me?\" (snapshot)\n"
+        "- Send updates in plain English or `field: value` (role/company/priorities/communication)\n"
+        "- Say: \"interview mode\" (I ask one question at a time)\n"
+        "I won’t do work-planning unless you explicitly ask with `advice:`.\n"
+        f"{next_q}"
     )
 
 
@@ -2607,8 +2641,6 @@ def should_use_llm_for_reply(latest_text: Optional[str]) -> bool:
     text = _clean_text(latest_text)
     if not text:
         return False
-    if '?' in text:
-        return True
     if '\n' in text and len(text) >= 60:
         return True
     return len(text) >= DM_RESPONSE_LLM_AUTO_MIN_CHARS
@@ -3144,7 +3176,7 @@ def render_response(args: argparse.Namespace, conn, row: Dict[str, Any]) -> str:
     if is_non_text_marker(latest_text):
         return finalize_reply(render_non_text_marker_reply())
     if is_capabilities_request(latest_text):
-        return finalize_reply(render_capabilities_reply())
+        return finalize_reply(render_capabilities_reply(profile, args.persona_name))
     if is_unsupported_action_request(latest_text):
         return finalize_reply(render_unsupported_action_reply())
     if is_profile_update_mode_request(latest_text):
