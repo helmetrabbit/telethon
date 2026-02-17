@@ -55,9 +55,28 @@ interface IngestState {
 
 const HANDLE_RE = /@([A-Za-z0-9_]+)/g;
 const ONBOARDING_REQUIRED_FIELDS = ['primary_role', 'primary_company', 'notable_topics', 'preferred_contact_style'] as const;
-const DM_PROFILE_LLM_MODEL = process.env.DM_PROFILE_LLM_MODEL || 'deepseek/deepseek-chat';
+const DM_PROFILE_LLM_MODEL = (process.env.DM_PROFILE_LLM_MODEL || 'deepseek/deepseek-chat').trim() || 'deepseek/deepseek-chat';
+const DM_PROFILE_LLM_MODEL_ALLOWLIST = (process.env.DM_PROFILE_LLM_MODEL_ALLOWLIST || 'deepseek/deepseek-chat')
+  .split(',')
+  .map((value) => value.trim())
+  .filter(Boolean);
+const EFFECTIVE_DM_PROFILE_LLM_MODEL = DM_PROFILE_LLM_MODEL_ALLOWLIST.includes(DM_PROFILE_LLM_MODEL)
+  ? DM_PROFILE_LLM_MODEL
+  : (DM_PROFILE_LLM_MODEL_ALLOWLIST[0] || 'deepseek/deepseek-chat');
+if (EFFECTIVE_DM_PROFILE_LLM_MODEL !== DM_PROFILE_LLM_MODEL) {
+  console.warn(
+    `⚠️ DM_PROFILE_LLM_MODEL=${JSON.stringify(DM_PROFILE_LLM_MODEL)} not allowed; forcing ${JSON.stringify(EFFECTIVE_DM_PROFILE_LLM_MODEL)}`,
+  );
+}
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '';
 const DM_PROFILE_LLM_FLAG = (process.env.DM_PROFILE_LLM_EXTRACTION || 'auto').trim().toLowerCase();
+const DM_PROFILE_LLM_STRATEGY = (process.env.DM_PROFILE_LLM_STRATEGY || 'auto').trim().toLowerCase(); // auto|always|never
+const DM_PROFILE_LLM_MAX_TOKENS = (() => {
+  const raw = (process.env.DM_PROFILE_LLM_MAX_TOKENS || '').trim();
+  const parsed = raw ? Number.parseInt(raw, 10) : NaN;
+  if (!Number.isFinite(parsed)) return 260;
+  return Math.min(800, Math.max(80, parsed));
+})();
 const DM_PROFILE_LLM_ENABLED = (() => {
   if (['1', 'true', 'yes', 'on'].includes(DM_PROFILE_LLM_FLAG)) return true;
   if (['0', 'false', 'no', 'off'].includes(DM_PROFILE_LLM_FLAG)) return false;
@@ -69,7 +88,9 @@ const dmLlmClient = (() => {
   if (!DM_PROFILE_LLM_ENABLED || !OPENROUTER_API_KEY) return null;
   return createLLMClient({
     apiKeys: [OPENROUTER_API_KEY],
-    model: DM_PROFILE_LLM_MODEL,
+    model: EFFECTIVE_DM_PROFILE_LLM_MODEL,
+    maxTokens: DM_PROFILE_LLM_MAX_TOKENS,
+    temperature: 0.0,
     maxRetries: 3,
     retryDelayMs: 500,
     requestDelayMs: 100,
@@ -305,6 +326,15 @@ Message: ${source}
 
   try {
     const completion = await dmLlmClient.complete(prompt);
+    if (completion.totalTokens != null) {
+      console.log(
+        `🧾 dm-profile-llm model=${completion.model || EFFECTIVE_DM_PROFILE_LLM_MODEL}` +
+        ` prompt_tokens=${completion.promptTokens ?? 'n/a'}` +
+        ` completion_tokens=${completion.completionTokens ?? 'n/a'}` +
+        ` total_tokens=${completion.totalTokens}` +
+        ` latency_ms=${completion.latencyMs}`,
+      );
+    }
     const parsed = JSON.parse(completion.content);
     const list = Array.isArray((parsed as any).events) ? (parsed as any).events : [];
     const out: ProfileEvent[] = [];
@@ -772,8 +802,19 @@ async function extractProfileEventsFromText(text: string | null): Promise<Profil
     });
   }
 
-  const llmEvents = await extractProfileEventsByLLM(source);
-  events.push(...llmEvents);
+  const extractedFields = new Set<string>();
+  for (const evt of events) {
+    for (const fact of evt.extracted_facts || []) extractedFields.add(fact.field);
+  }
+
+  const shouldCallLlm = (
+    DM_PROFILE_LLM_STRATEGY === 'always'
+    || (DM_PROFILE_LLM_STRATEGY !== 'never' && extractedFields.size === 0)
+  );
+  if (shouldCallLlm) {
+    const llmEvents = await extractProfileEventsByLLM(source);
+    events.push(...llmEvents);
+  }
 
 
   // dedupe by event type + fact values

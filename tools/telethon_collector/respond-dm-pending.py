@@ -15,6 +15,7 @@ import asyncio
 import json
 import os
 import re
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -37,8 +38,20 @@ API_ID = os.getenv('TG_API_ID')
 API_HASH = os.getenv('TG_API_HASH')
 _default_session = os.getenv('TG_SESSION_PATH', str(_SCRIPT_DIR / 'telethon.session'))
 OPENROUTER_API_KEY = (os.getenv('OPENROUTER_API_KEY') or '').strip()
-DM_RESPONSE_MODEL = os.getenv('DM_RESPONSE_MODEL', 'deepseek/deepseek-chat').strip() or 'deepseek/deepseek-chat'
+_raw_dm_response_model = os.getenv('DM_RESPONSE_MODEL', 'deepseek/deepseek-chat').strip() or 'deepseek/deepseek-chat'
+_dm_response_model_allowlist = [
+    item.strip()
+    for item in (os.getenv('DM_RESPONSE_MODEL_ALLOWLIST') or 'deepseek/deepseek-chat').split(',')
+    if item.strip()
+]
+if _raw_dm_response_model not in _dm_response_model_allowlist:
+    forced = _dm_response_model_allowlist[0] if _dm_response_model_allowlist else 'deepseek/deepseek-chat'
+    print(f"⚠️  DM_RESPONSE_MODEL={_raw_dm_response_model!r} not allowed; forcing {forced!r}")
+    DM_RESPONSE_MODEL = forced
+else:
+    DM_RESPONSE_MODEL = _raw_dm_response_model
 DM_RESPONSE_LLM_ENABLED = (os.getenv('DM_RESPONSE_LLM_ENABLED', '1').strip().lower() not in ('0', 'false', 'no', 'off'))
+DM_RESPONSE_LLM_STRATEGY = (os.getenv('DM_RESPONSE_LLM_STRATEGY') or 'auto').strip().lower()  # auto|always|never
 
 
 def _env_int(name: str, default: int) -> int:
@@ -63,6 +76,7 @@ def _env_float(name: str, default: float) -> float:
 
 DM_RESPONSE_MAX_TOKENS = _env_int('DM_RESPONSE_MAX_TOKENS', 300)
 DM_RESPONSE_TEMPERATURE = _env_float('DM_RESPONSE_TEMPERATURE', 0.2)
+DM_RESPONSE_LLM_AUTO_MIN_CHARS = max(20, _env_int('DM_RESPONSE_LLM_AUTO_MIN_CHARS', 120))
 DM_CONTACT_STYLE_TTL_DAYS = max(1, _env_int('DM_CONTACT_STYLE_TTL_DAYS', 45))
 DM_CONTACT_STYLE_RECONFIRM_COOLDOWN_DAYS = max(1, _env_int('DM_CONTACT_STYLE_RECONFIRM_COOLDOWN_DAYS', 14))
 DM_CONTACT_STYLE_AUTO_APPLY_THRESHOLD = min(1.0, max(0.0, _env_float('DM_CONTACT_STYLE_AUTO_APPLY_THRESHOLD', 0.8)))
@@ -1418,35 +1432,50 @@ def fetch_recent_conversation_messages(conn, conversation_id: Optional[int], lim
 
 
 def summarize_profile_for_prompt(profile: Dict[str, Any]) -> Dict[str, Any]:
+    def trim_list(values: Any, *, take: int, item_limit: int = 120) -> List[str]:
+        if not isinstance(values, list):
+            return []
+        out: List[str] = []
+        for raw in values:
+            if raw is None:
+                continue
+            s = _truncate(str(raw), item_limit)
+            if not s:
+                continue
+            out.append(s)
+            if len(out) >= take:
+                break
+        return out
+
     return {
-        'primary_role': profile.get('primary_role'),
-        'primary_company': profile.get('primary_company'),
-        'preferred_contact_style': profile.get('preferred_contact_style'),
-        'notable_topics': (profile.get('notable_topics') or [])[:6],
-        'generated_bio_professional': profile.get('generated_bio_professional'),
-        'generated_bio_personal': profile.get('generated_bio_personal'),
-        'tone': profile.get('tone'),
-        'professionalism': profile.get('professionalism'),
-        'verbosity': profile.get('verbosity'),
-        'decision_style': profile.get('decision_style'),
-        'seniority_signal': profile.get('seniority_signal'),
-        'based_in': profile.get('based_in'),
-        'attended_events': (profile.get('attended_events') or [])[:4],
-        'driving_values': (profile.get('driving_values') or [])[:4],
-        'pain_points': (profile.get('pain_points') or [])[:4],
-        'deep_skills': (profile.get('deep_skills') or [])[:6],
-        'technical_specifics': (profile.get('technical_specifics') or [])[:6],
-        'affiliations': (profile.get('affiliations') or [])[:5],
-        'connection_requests': (profile.get('connection_requests') or [])[:4],
-        'commercial_archetype': profile.get('commercial_archetype'),
-        'group_tags': (profile.get('group_tags') or [])[:8],
-        'peak_hours': (profile.get('peak_hours') or [])[:6],
-        'active_days': (profile.get('active_days') or [])[:6],
-        'most_active_days': (profile.get('most_active_days') or [])[:6],
+        'primary_role': _truncate(profile.get('primary_role'), 120),
+        'primary_company': _truncate(profile.get('primary_company'), 120),
+        'preferred_contact_style': _truncate(profile.get('preferred_contact_style'), 140),
+        'notable_topics': trim_list(profile.get('notable_topics'), take=6, item_limit=80),
+        'generated_bio_professional': _truncate(profile.get('generated_bio_professional'), 220),
+        'generated_bio_personal': _truncate(profile.get('generated_bio_personal'), 220),
+        'tone': _truncate(profile.get('tone'), 80),
+        'professionalism': _truncate(profile.get('professionalism'), 80),
+        'verbosity': _truncate(profile.get('verbosity'), 80),
+        'decision_style': _truncate(profile.get('decision_style'), 80),
+        'seniority_signal': _truncate(profile.get('seniority_signal'), 120),
+        'based_in': _truncate(profile.get('based_in'), 120),
+        'attended_events': trim_list(profile.get('attended_events'), take=4, item_limit=80),
+        'driving_values': trim_list(profile.get('driving_values'), take=4, item_limit=80),
+        'pain_points': trim_list(profile.get('pain_points'), take=4, item_limit=100),
+        'deep_skills': trim_list(profile.get('deep_skills'), take=6, item_limit=90),
+        'technical_specifics': trim_list(profile.get('technical_specifics'), take=6, item_limit=90),
+        'affiliations': trim_list(profile.get('affiliations'), take=5, item_limit=90),
+        'connection_requests': trim_list(profile.get('connection_requests'), take=4, item_limit=90),
+        'commercial_archetype': _truncate(profile.get('commercial_archetype'), 120),
+        'group_tags': trim_list(profile.get('group_tags'), take=8, item_limit=50),
+        'peak_hours': trim_list(profile.get('peak_hours'), take=6, item_limit=16),
+        'active_days': trim_list(profile.get('active_days'), take=6, item_limit=16),
+        'most_active_days': trim_list(profile.get('most_active_days'), take=6, item_limit=16),
         'total_messages': profile.get('total_messages'),
         'avg_msg_length': profile.get('avg_msg_length'),
         'last_active_days': profile.get('last_active_days'),
-        'top_conversation_partners': (profile.get('top_conversation_partners') or [])[:5],
+        'top_conversation_partners': trim_list(profile.get('top_conversation_partners'), take=5, item_limit=80),
         'fifo': profile.get('fifo'),
         'contact_style_updated_at': (
             profile.get('contact_style_updated_at').isoformat()
@@ -1462,9 +1491,6 @@ def summarize_profile_for_prompt(profile: Dict[str, Any]) -> Dict[str, Any]:
 def summarize_pending_events_for_prompt(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     for evt in events[-8:]:
-        payload = evt.get('event_payload')
-        if not isinstance(payload, dict):
-            payload = {}
         facts = evt.get('extracted_facts')
         summarized_facts: List[Dict[str, Any]] = []
         if isinstance(facts, list):
@@ -1480,7 +1506,6 @@ def summarize_pending_events_for_prompt(events: List[Dict[str, Any]]) -> List[Di
                 'event_type': evt.get('event_type'),
                 'confidence': evt.get('confidence'),
                 'facts': summarized_facts[:6],
-                'payload': payload,
             }
         )
     return out
@@ -2555,6 +2580,25 @@ def llm_reply_looks_untrusted(reply: Optional[str]) -> bool:
     return bool(_LLM_FORBIDDEN_CLAIM_RE.search(source))
 
 
+def should_use_llm_for_reply(latest_text: Optional[str]) -> bool:
+    if not DM_RESPONSE_LLM_ENABLED or not OPENROUTER_API_KEY:
+        return False
+    strategy = (DM_RESPONSE_LLM_STRATEGY or 'auto').strip().lower()
+    if strategy in ('0', 'false', 'no', 'off', 'never'):
+        return False
+    if strategy in ('1', 'true', 'yes', 'on', 'always'):
+        return True
+
+    text = _clean_text(latest_text)
+    if not text:
+        return False
+    if '?' in text:
+        return True
+    if '\n' in text and len(text) >= 60:
+        return True
+    return len(text) >= DM_RESPONSE_LLM_AUTO_MIN_CHARS
+
+
 def call_openrouter_chat(system_prompt: str, user_prompt: str) -> Optional[str]:
     if not DM_RESPONSE_LLM_ENABLED or not OPENROUTER_API_KEY:
         return None
@@ -2577,14 +2621,17 @@ def call_openrouter_chat(system_prompt: str, user_prompt: str) -> Optional[str]:
             'Authorization': f'Bearer {OPENROUTER_API_KEY}',
             'Content-Type': 'application/json',
             'HTTP-Referer': 'https://github.com/helmetrabbit/telethon',
-            'X-Title': 'Telethon DM Responder',
+            'X-Title': f'Telethon DM Responder ({DM_RESPONSE_MODEL})',
         },
     )
 
     try:
+        start = time.monotonic()
         with urlopen(req, timeout=35) as resp:
+            request_id = resp.headers.get('x-request-id') or resp.headers.get('x-openrouter-request-id') or ''
             raw = resp.read().decode('utf-8', errors='replace')
             body = json.loads(raw)
+        latency_ms = int((time.monotonic() - start) * 1000)
     except HTTPError as exc:
         detail = exc.read().decode('utf-8', errors='replace')[:400]
         print(f"⚠️  OpenRouter HTTPError {exc.code}; falling back to deterministic reply. detail={detail}")
@@ -2615,6 +2662,19 @@ def call_openrouter_chat(system_prompt: str, user_prompt: str) -> Optional[str]:
     if not isinstance(content, str):
         return None
     clean = _clean_text(content)
+    usage = body.get('usage') if isinstance(body, dict) else None
+    if isinstance(usage, dict):
+        prompt_tokens = usage.get('prompt_tokens')
+        completion_tokens = usage.get('completion_tokens')
+        total_tokens = usage.get('total_tokens')
+        model_used = body.get('model') if isinstance(body.get('model'), str) else DM_RESPONSE_MODEL
+        if total_tokens is not None:
+            rid = request_id if 'request_id' in locals() else ''
+            rid_part = f" request_id={rid}" if rid else ""
+            print(
+                f"🧾 openrouter model={model_used} prompt_tokens={prompt_tokens} completion_tokens={completion_tokens} "
+                f"total_tokens={total_tokens} max_tokens={DM_RESPONSE_MAX_TOKENS} latency_ms={latency_ms}{rid_part}"
+            )
     return clean or None
 
 
@@ -2627,6 +2687,8 @@ def render_llm_conversational_reply(
 ) -> Optional[str]:
     latest_text = _clean_text(row.get('text'))
     if not latest_text:
+        return None
+    if not should_use_llm_for_reply(latest_text):
         return None
 
     context = {

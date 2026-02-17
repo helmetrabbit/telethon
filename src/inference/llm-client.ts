@@ -10,11 +10,19 @@ export interface LLMConfig {
   maxRetries: number;
   retryDelayMs: number;
   requestDelayMs: number; // Delay between requests (rate limiting)
+  maxTokens?: number;
+  temperature?: number;
+  title?: string;
 }
 
 export interface LLMResponse {
   content: string;
   latencyMs: number;
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
+  model?: string;
+  requestId?: string;
 }
 
 const DEFAULT_CONFIG: Partial<LLMConfig> = {
@@ -89,12 +97,13 @@ export function createLLMClient(config: LLMConfig) {
             Authorization: `Bearer ${activeKey}`,
             'Content-Type': 'application/json',
             'HTTP-Referer': 'https://github.com/helmetrabbit/telethon',
-            'X-Title': 'Telethon Inference Engine',
+            'X-Title': cfg.title || `Telethon Inference Engine (${cfg.model})`,
           },
           body: JSON.stringify({
             model: cfg.model,
             messages: [{ role: 'user', content: prompt }],
-            temperature: 0.2,
+            temperature: cfg.temperature ?? 0.2,
+            ...(cfg.maxTokens ? { max_tokens: cfg.maxTokens } : {}),
           }),
         });
 
@@ -136,11 +145,25 @@ export function createLLMClient(config: LLMConfig) {
           throw new Error(`API ${response.status}: ${bodyText}`);
         }
 
+        const requestId = response.headers.get('x-request-id') || response.headers.get('x-openrouter-request-id') || undefined;
         const data = await response.json();
         const content = data.choices?.[0]?.message?.content;
         if (!content) throw new Error('Empty response from LLM');
 
-        return { content, latencyMs: Date.now() - startMs };
+        const usage = data.usage || {};
+        const promptTokens = Number.isFinite(Number(usage.prompt_tokens)) ? Number(usage.prompt_tokens) : undefined;
+        const completionTokens = Number.isFinite(Number(usage.completion_tokens)) ? Number(usage.completion_tokens) : undefined;
+        const totalTokens = Number.isFinite(Number(usage.total_tokens)) ? Number(usage.total_tokens) : undefined;
+
+        return {
+          content,
+          latencyMs: Date.now() - startMs,
+          promptTokens,
+          completionTokens,
+          totalTokens,
+          model: typeof data.model === 'string' ? data.model : cfg.model,
+          requestId,
+        };
 
       } catch (err) {
         const msg = (err as Error).message;

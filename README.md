@@ -74,12 +74,12 @@ make tg-ingest-dm-jsonl file=data/exports/telethon_dms_live.jsonl
 ```
 
 Optional (recommended) profile fact extraction via OpenRouter during DM ingest:
-- `OPENROUTER_API_KEY=<key>`
+- `OPENROUTER_API_KEY=<key>` (set it in `.env`, which is gitignored)
 - `DM_PROFILE_LLM_EXTRACTION=auto` (default behavior: auto-enable when key exists)
 - `DM_PROFILE_LLM_MODEL=deepseek/deepseek-chat`
 
 Repo runtime note:
-- `openclaw.env` is loaded by the live pipeline scripts (`run-dm-live.sh`, `run-dm-response.sh`, `preflight-dm-live.sh`) and by Node DB bootstrap, so OpenClaw/server runs can use it without relying on shell-exported env vars.
+- `openclaw.env` is loaded by the live pipeline scripts and Node bootstrap. Keep **non-secret** defaults there (models, thresholds). Put secrets like `OPENROUTER_API_KEY` in `.env` (gitignored).
 
 The live ingest supports resumable checkpoints so repeated runs only process new rows:
 
