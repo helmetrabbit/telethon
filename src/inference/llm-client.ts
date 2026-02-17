@@ -3,6 +3,8 @@
  */
 
 import { createHash } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 
 export interface LLMConfig {
   apiKeys: string[];
@@ -32,6 +34,159 @@ const DEFAULT_CONFIG: Partial<LLMConfig> = {
   requestDelayMs: 500,
 };
 
+function envFloat(name: string, fallback: number): number {
+  const raw = (process.env[name] || '').trim();
+  if (!raw) return fallback;
+  const parsed = Number.parseFloat(raw);
+  if (!Number.isFinite(parsed)) return fallback;
+  return parsed;
+}
+
+function envInt(name: string, fallback: number): number {
+  const raw = (process.env[name] || '').trim();
+  if (!raw) return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return parsed;
+}
+
+const OPENROUTER_DAILY_COST_CAP_USD = Math.max(0, envFloat('DM_OPENROUTER_DAILY_COST_CAP_USD', 0));
+const OPENROUTER_SPEND_STATE_FILE = (() => {
+  const raw = (process.env.DM_OPENROUTER_SPEND_STATE_FILE || 'data/.state/openrouter_spend.json').trim();
+  return path.isAbsolute(raw) ? raw : path.resolve(process.cwd(), raw);
+})();
+const OPENROUTER_SPEND_LOCK_FILE = (() => {
+  const raw = (process.env.DM_OPENROUTER_SPEND_LOCK_FILE || `${OPENROUTER_SPEND_STATE_FILE}.lock`).trim();
+  return path.isAbsolute(raw) ? raw : path.resolve(process.cwd(), raw);
+})();
+const OPENROUTER_SPEND_LOCK_TIMEOUT_MS = Math.max(250, envInt('DM_OPENROUTER_SPEND_LOCK_TIMEOUT_MS', 2000));
+const OPENROUTER_SPEND_LOCK_STALE_SECONDS = 30;
+
+type SpendState = {
+  date: string;
+  total_cost_usd: number;
+  by_component: Record<string, number>;
+  by_model: Record<string, number>;
+  updated_at?: string;
+};
+
+function utcDay(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((r) => setTimeout(r, ms));
+}
+
+async function withSpendLock<T>(fn: () => Promise<T>): Promise<T | null> {
+  if (OPENROUTER_DAILY_COST_CAP_USD <= 0) return fn();
+
+  await fs.promises.mkdir(path.dirname(OPENROUTER_SPEND_LOCK_FILE), { recursive: true });
+  const deadline = Date.now() + OPENROUTER_SPEND_LOCK_TIMEOUT_MS;
+
+  while (true) {
+    try {
+      const fd = fs.openSync(OPENROUTER_SPEND_LOCK_FILE, 'wx');
+      try {
+        fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, ts: Date.now() }), 'utf8');
+      } finally {
+        fs.closeSync(fd);
+      }
+
+      try {
+        return await fn();
+      } finally {
+        try {
+          fs.unlinkSync(OPENROUTER_SPEND_LOCK_FILE);
+        } catch {
+          // ignore
+        }
+      }
+    } catch (err: any) {
+      if (err && err.code !== 'EEXIST') throw err;
+      try {
+        const st = fs.statSync(OPENROUTER_SPEND_LOCK_FILE);
+        const ageSeconds = (Date.now() - st.mtimeMs) / 1000;
+        if (ageSeconds > OPENROUTER_SPEND_LOCK_STALE_SECONDS) {
+          fs.unlinkSync(OPENROUTER_SPEND_LOCK_FILE);
+          continue;
+        }
+      } catch {
+        // If lock vanished between attempts, retry.
+      }
+
+      if (Date.now() > deadline) {
+        // Can't coordinate spend safely. Fail closed.
+        return null;
+      }
+      await sleep(50);
+    }
+  }
+}
+
+async function readSpendStateUnlocked(): Promise<SpendState> {
+  try {
+    const raw = await fs.promises.readFile(OPENROUTER_SPEND_STATE_FILE, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object') return parsed as SpendState;
+  } catch {
+    // ignore
+  }
+  return { date: utcDay(), total_cost_usd: 0, by_component: {}, by_model: {} };
+}
+
+async function writeSpendStateUnlocked(state: SpendState): Promise<void> {
+  await fs.promises.mkdir(path.dirname(OPENROUTER_SPEND_STATE_FILE), { recursive: true });
+  state.updated_at = new Date().toISOString();
+  await fs.promises.writeFile(OPENROUTER_SPEND_STATE_FILE, JSON.stringify(state, null, 2) + '\n', 'utf8');
+}
+
+function normalizeSpendState(raw: SpendState): SpendState {
+  const today = utcDay();
+  if (!raw || raw.date !== today) {
+    return { date: today, total_cost_usd: 0, by_component: {}, by_model: {} };
+  }
+  const total = Number.isFinite(Number(raw.total_cost_usd)) ? Number(raw.total_cost_usd) : 0;
+  return {
+    date: today,
+    total_cost_usd: total,
+    by_component: raw.by_component && typeof raw.by_component === 'object' ? raw.by_component : {},
+    by_model: raw.by_model && typeof raw.by_model === 'object' ? raw.by_model : {},
+    updated_at: raw.updated_at,
+  };
+}
+
+async function openrouterSpendAllowsCall(): Promise<boolean> {
+  if (OPENROUTER_DAILY_COST_CAP_USD <= 0) return true;
+
+  const out = await withSpendLock(async () => {
+    const state = normalizeSpendState(await readSpendStateUnlocked());
+    if (state.total_cost_usd >= OPENROUTER_DAILY_COST_CAP_USD) {
+      console.warn(
+        `🚫 OpenRouter spend fuse tripped: total_cost_usd=${state.total_cost_usd.toFixed(6)} cap_usd=${OPENROUTER_DAILY_COST_CAP_USD.toFixed(6)}. ` +
+        'Skipping LLM calls until next UTC day.',
+      );
+      return false;
+    }
+    return true;
+  });
+
+  return Boolean(out);
+}
+
+async function recordOpenrouterCost(costUsd: number, component: string, model: string): Promise<void> {
+  if (OPENROUTER_DAILY_COST_CAP_USD <= 0) return;
+  if (!Number.isFinite(costUsd) || costUsd <= 0) return;
+
+  await withSpendLock(async () => {
+    const state = normalizeSpendState(await readSpendStateUnlocked());
+    state.total_cost_usd += costUsd;
+    state.by_component[component] = (state.by_component[component] || 0) + costUsd;
+    state.by_model[model] = (state.by_model[model] || 0) + costUsd;
+    await writeSpendStateUnlocked(state);
+  });
+}
+
 export function createLLMClient(config: LLMConfig) {
   const cfg = { ...DEFAULT_CONFIG, ...config };
   let lastRequestAt = 0;
@@ -56,8 +211,11 @@ export function createLLMClient(config: LLMConfig) {
     return null;
   }
 
-
   async function complete(prompt: string): Promise<LLMResponse> {
+    if (!(await openrouterSpendAllowsCall())) {
+      throw new Error('OpenRouter spend fuse tripped; skipping LLM call');
+    }
+
     for (let attempt = 1; attempt <= cfg.maxRetries!; attempt++) {
       // 1. Get an available key
       let activeKey = getAvailableKey();
@@ -157,7 +315,7 @@ export function createLLMClient(config: LLMConfig) {
         const totalTokens = Number.isFinite(Number(usage.total_tokens)) ? Number(usage.total_tokens) : undefined;
         const cost = Number.isFinite(Number(usage.cost)) ? Number(usage.cost) : undefined;
 
-        return {
+        const responseObj = {
           content,
           latencyMs: Date.now() - startMs,
           promptTokens,
@@ -166,7 +324,14 @@ export function createLLMClient(config: LLMConfig) {
           cost,
           model: typeof data.model === 'string' ? data.model : cfg.model,
           requestId,
-        };
+        } as LLMResponse;
+
+        if (cost != null) {
+          const component = cfg.title || 'node_llm_client';
+          await recordOpenrouterCost(cost, component, responseObj.model || cfg.model);
+        }
+
+        return responseObj;
 
       } catch (err) {
         const msg = (err as Error).message;

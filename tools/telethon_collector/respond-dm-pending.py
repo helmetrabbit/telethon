@@ -44,13 +44,22 @@ _dm_response_model_allowlist = [
     for item in (os.getenv('DM_RESPONSE_MODEL_ALLOWLIST') or 'deepseek/deepseek-chat').split(',')
     if item.strip()
 ]
-if _raw_dm_response_model not in _dm_response_model_allowlist:
+DM_ALLOW_MODEL_FALLBACK = (os.getenv('DM_ALLOW_MODEL_FALLBACK', '0').strip().lower() in ('1', 'true', 'yes', 'on'))
+DM_RESPONSE_MODEL_ALLOWED = _raw_dm_response_model in _dm_response_model_allowlist
+if not DM_RESPONSE_MODEL_ALLOWED:
     forced = _dm_response_model_allowlist[0] if _dm_response_model_allowlist else 'deepseek/deepseek-chat'
-    print(f"⚠️  DM_RESPONSE_MODEL={_raw_dm_response_model!r} not allowed; forcing {forced!r}")
-    DM_RESPONSE_MODEL = forced
+    if DM_ALLOW_MODEL_FALLBACK:
+        print(f"⚠️  DM_RESPONSE_MODEL={_raw_dm_response_model!r} not allowed; forcing {forced!r}")
+        DM_RESPONSE_MODEL = forced
+    else:
+        print(f"🚫 DM_RESPONSE_MODEL={_raw_dm_response_model!r} not allowed; disabling DM responder LLM. Set DM_ALLOW_MODEL_FALLBACK=1 to force fallback to {forced!r}.")
+        DM_RESPONSE_MODEL = forced
 else:
     DM_RESPONSE_MODEL = _raw_dm_response_model
-DM_RESPONSE_LLM_ENABLED = (os.getenv('DM_RESPONSE_LLM_ENABLED', '1').strip().lower() not in ('0', 'false', 'no', 'off'))
+DM_RESPONSE_LLM_ENABLED = (
+    DM_RESPONSE_MODEL_ALLOWED
+    and (os.getenv('DM_RESPONSE_LLM_ENABLED', '1').strip().lower() not in ('0', 'false', 'no', 'off'))
+)
 DM_RESPONSE_LLM_STRATEGY = (os.getenv('DM_RESPONSE_LLM_STRATEGY') or 'auto').strip().lower()  # auto|always|never
 
 
@@ -77,6 +86,10 @@ def _env_float(name: str, default: float) -> float:
 DM_RESPONSE_MAX_TOKENS = _env_int('DM_RESPONSE_MAX_TOKENS', 300)
 DM_RESPONSE_TEMPERATURE = _env_float('DM_RESPONSE_TEMPERATURE', 0.2)
 DM_RESPONSE_LLM_AUTO_MIN_CHARS = max(20, _env_int('DM_RESPONSE_LLM_AUTO_MIN_CHARS', 120))
+DM_OPENROUTER_DAILY_COST_CAP_USD = max(0.0, _env_float('DM_OPENROUTER_DAILY_COST_CAP_USD', 0.0))
+DM_OPENROUTER_SPEND_STATE_FILE = (os.getenv('DM_OPENROUTER_SPEND_STATE_FILE') or str(_ROOT_DIR / 'data' / '.state' / 'openrouter_spend.json')).strip()
+DM_OPENROUTER_SPEND_LOCK_FILE = (os.getenv('DM_OPENROUTER_SPEND_LOCK_FILE') or f"{DM_OPENROUTER_SPEND_STATE_FILE}.lock").strip()
+DM_OPENROUTER_SPEND_LOCK_TIMEOUT_MS = max(250, _env_int('DM_OPENROUTER_SPEND_LOCK_TIMEOUT_MS', 2000))
 DM_CONTACT_STYLE_TTL_DAYS = max(1, _env_int('DM_CONTACT_STYLE_TTL_DAYS', 45))
 DM_CONTACT_STYLE_RECONFIRM_COOLDOWN_DAYS = max(1, _env_int('DM_CONTACT_STYLE_RECONFIRM_COOLDOWN_DAYS', 14))
 DM_CONTACT_STYLE_AUTO_APPLY_THRESHOLD = min(1.0, max(0.0, _env_float('DM_CONTACT_STYLE_AUTO_APPLY_THRESHOLD', 0.8)))
@@ -2583,6 +2596,8 @@ def llm_reply_looks_untrusted(reply: Optional[str]) -> bool:
 def should_use_llm_for_reply(latest_text: Optional[str]) -> bool:
     if not DM_RESPONSE_LLM_ENABLED or not OPENROUTER_API_KEY:
         return False
+    if not openrouter_spend_fuse_allows_call():
+        return False
     strategy = (DM_RESPONSE_LLM_STRATEGY or 'auto').strip().lower()
     if strategy in ('0', 'false', 'no', 'off', 'never'):
         return False
@@ -2599,8 +2614,125 @@ def should_use_llm_for_reply(latest_text: Optional[str]) -> bool:
     return len(text) >= DM_RESPONSE_LLM_AUTO_MIN_CHARS
 
 
+def _utc_day() -> str:
+    return datetime.now(timezone.utc).date().isoformat()
+
+
+def _read_openrouter_spend_state_unlocked() -> Dict[str, Any]:
+    path = DM_OPENROUTER_SPEND_STATE_FILE
+    try:
+        raw = Path(path).read_text('utf-8')
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        return {}
+
+
+def _write_openrouter_spend_state_unlocked(state: Dict[str, Any]) -> None:
+    path = Path(DM_OPENROUTER_SPEND_STATE_FILE)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    state['updated_at'] = datetime.now(timezone.utc).isoformat()
+    path.write_text(json.dumps(state, ensure_ascii=True, indent=2) + "\n", 'utf-8')
+
+
+def _with_openrouter_spend_lock(fn):
+    if DM_OPENROUTER_DAILY_COST_CAP_USD <= 0:
+        return fn()
+
+    lock_path = Path(DM_OPENROUTER_SPEND_LOCK_FILE)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+
+    deadline = time.time() + (DM_OPENROUTER_SPEND_LOCK_TIMEOUT_MS / 1000.0)
+    while True:
+        try:
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            try:
+                os.write(fd, json.dumps({'pid': os.getpid(), 'ts': time.time()}, ensure_ascii=True).encode('utf-8'))
+            finally:
+                os.close(fd)
+            try:
+                return fn()
+            finally:
+                try:
+                    lock_path.unlink(missing_ok=True)  # py>=3.8
+                except Exception:
+                    try:
+                        os.unlink(str(lock_path))
+                    except Exception:
+                        pass
+        except FileExistsError:
+            try:
+                st = lock_path.stat()
+                if time.time() - st.st_mtime > 30:
+                    lock_path.unlink(missing_ok=True)
+                    continue
+            except FileNotFoundError:
+                continue
+            if time.time() > deadline:
+                # Can't safely coordinate spend. Fail closed and skip LLM calls.
+                return None
+            time.sleep(0.05)
+
+
+def _normalized_spend_state(state: Dict[str, Any]) -> Dict[str, Any]:
+    today = _utc_day()
+    if state.get('date') != today:
+        return {'date': today, 'total_cost_usd': 0.0, 'by_component': {}, 'by_model': {}}
+    if not isinstance(state.get('total_cost_usd'), (int, float)):
+        state['total_cost_usd'] = 0.0
+    if not isinstance(state.get('by_component'), dict):
+        state['by_component'] = {}
+    if not isinstance(state.get('by_model'), dict):
+        state['by_model'] = {}
+    return state
+
+
+def openrouter_spend_fuse_allows_call() -> bool:
+    if DM_OPENROUTER_DAILY_COST_CAP_USD <= 0:
+        return True
+
+    def check() -> bool:
+        state = _normalized_spend_state(_read_openrouter_spend_state_unlocked())
+        total = float(state.get('total_cost_usd') or 0.0)
+        allowed = total < DM_OPENROUTER_DAILY_COST_CAP_USD
+        if not allowed:
+            print(
+                f"🚫 OpenRouter spend fuse tripped: total_cost_usd={total:.6f} cap_usd={DM_OPENROUTER_DAILY_COST_CAP_USD:.6f}. "
+                "Skipping LLM calls until next UTC day."
+            )
+        return allowed
+
+    out = _with_openrouter_spend_lock(check)
+    return bool(out)
+
+
+def record_openrouter_cost(cost_usd: float, *, component: str, model: str) -> None:
+    if DM_OPENROUTER_DAILY_COST_CAP_USD <= 0:
+        return
+    if cost_usd <= 0:
+        return
+
+    def update() -> None:
+        state = _normalized_spend_state(_read_openrouter_spend_state_unlocked())
+        total = float(state.get('total_cost_usd') or 0.0)
+        state['total_cost_usd'] = total + float(cost_usd)
+        by_component = state.get('by_component') or {}
+        if isinstance(by_component, dict):
+            by_component[component] = float(by_component.get(component) or 0.0) + float(cost_usd)
+        state['by_component'] = by_component
+        by_model = state.get('by_model') or {}
+        if isinstance(by_model, dict):
+            by_model[model] = float(by_model.get(model) or 0.0) + float(cost_usd)
+        state['by_model'] = by_model
+        _write_openrouter_spend_state_unlocked(state)
+
+    _with_openrouter_spend_lock(update)
+
+
 def call_openrouter_chat(system_prompt: str, user_prompt: str) -> Optional[str]:
     if not DM_RESPONSE_LLM_ENABLED or not OPENROUTER_API_KEY:
+        return None
+    if not openrouter_spend_fuse_allows_call():
         return None
 
     payload = {
@@ -2676,6 +2808,12 @@ def call_openrouter_chat(system_prompt: str, user_prompt: str) -> Optional[str]:
                 f"🧾 openrouter model={model_used} prompt_tokens={prompt_tokens} completion_tokens={completion_tokens} "
                 f"total_tokens={total_tokens} cost={cost} max_tokens={DM_RESPONSE_MAX_TOKENS} latency_ms={latency_ms}{rid_part}"
             )
+        try:
+            cost_val = float(cost)
+        except Exception:
+            cost_val = 0.0
+        if cost_val > 0:
+            record_openrouter_cost(cost_val, component='dm_responder', model=str(model_used))
     return clean or None
 
 

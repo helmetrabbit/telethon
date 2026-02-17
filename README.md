@@ -77,6 +77,15 @@ Optional (recommended) profile fact extraction via OpenRouter during DM ingest:
 - `OPENROUTER_API_KEY=<key>` (set it in `.env`, which is gitignored)
 - `DM_PROFILE_LLM_EXTRACTION=auto` (default behavior: auto-enable when key exists)
 - `DM_PROFILE_LLM_MODEL=deepseek/deepseek-chat`
+- `DM_PROFILE_LLM_MODEL_ALLOWLIST=deepseek/deepseek-chat` (fail-closed model safety)
+- `DM_ALLOW_MODEL_FALLBACK=0` (default): if the configured model is not allowlisted, the extractor LLM is disabled.
+  Set `DM_ALLOW_MODEL_FALLBACK=1` to force fallback to the first allowlisted model instead.
+
+Optional cost guardrail (recommended for unattended ops):
+- `DM_OPENROUTER_DAILY_COST_CAP_USD=0` (default: off). If set (e.g. `1.00`), OpenRouter calls are blocked after the cap
+  is reached until the next UTC day. Applies to DM profile extraction + DM responder + any Node OpenRouter callers.
+- `DM_OPENROUTER_SPEND_STATE_FILE=data/.state/openrouter_spend.json` (optional override; shared spend state)
+- `DM_OPENROUTER_SPEND_LOCK_TIMEOUT_MS=2000` (optional override; lock acquisition timeout, fail-closed)
 
 Repo runtime note:
 - `openclaw.env` is loaded by the live pipeline scripts and Node bootstrap. Keep **non-secret** defaults there (models, thresholds). Put secrets like `OPENROUTER_API_KEY` in `.env` (gitignored).
@@ -302,8 +311,12 @@ Responder variables:
 - `DM_RESPONSE_DRY_RUN=1`: dry-run mode without sending.
 - `DM_RESPONSE_LLM_ENABLED=1`: enable OpenRouter conversational replies (fallbacks to deterministic replies on error).
 - `DM_RESPONSE_MODEL=deepseek/deepseek-chat`
+- `DM_RESPONSE_MODEL_ALLOWLIST=deepseek/deepseek-chat` (fail-closed model safety)
+- `DM_ALLOW_MODEL_FALLBACK=0` (default): if the configured model is not allowlisted, the responder LLM is disabled.
+  Set `DM_ALLOW_MODEL_FALLBACK=1` to force fallback to the first allowlisted model instead.
 - `DM_RESPONSE_MAX_TOKENS=420`
 - `DM_RESPONSE_TEMPERATURE=0.15`
+- `DM_OPENROUTER_DAILY_COST_CAP_USD=0` (default: off). If set, OpenRouter calls are blocked after the cap is reached until next UTC day.
 - `DM_CONTACT_STYLE_AUTO_APPLY_THRESHOLD=0.8`: auto-apply communication-style updates at/above this confidence.
 - `DM_CONTACT_STYLE_CONFIRM_THRESHOLD=0.55`: below auto-apply threshold, style updates become pending and require a `yes/no` confirmation.
 - `DM_CONTACT_STYLE_TTL_DAYS=45`: days before style preference is considered stale and re-confirmed.

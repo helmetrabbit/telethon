@@ -60,13 +60,22 @@ const DM_PROFILE_LLM_MODEL_ALLOWLIST = (process.env.DM_PROFILE_LLM_MODEL_ALLOWLI
   .split(',')
   .map((value) => value.trim())
   .filter(Boolean);
-const EFFECTIVE_DM_PROFILE_LLM_MODEL = DM_PROFILE_LLM_MODEL_ALLOWLIST.includes(DM_PROFILE_LLM_MODEL)
+const DM_ALLOW_MODEL_FALLBACK = ['1', 'true', 'yes', 'on'].includes((process.env.DM_ALLOW_MODEL_FALLBACK || '').trim().toLowerCase());
+const DM_PROFILE_LLM_MODEL_ALLOWED = DM_PROFILE_LLM_MODEL_ALLOWLIST.includes(DM_PROFILE_LLM_MODEL);
+const EFFECTIVE_DM_PROFILE_LLM_MODEL = DM_PROFILE_LLM_MODEL_ALLOWED
   ? DM_PROFILE_LLM_MODEL
   : (DM_PROFILE_LLM_MODEL_ALLOWLIST[0] || 'deepseek/deepseek-chat');
-if (EFFECTIVE_DM_PROFILE_LLM_MODEL !== DM_PROFILE_LLM_MODEL) {
-  console.warn(
-    `⚠️ DM_PROFILE_LLM_MODEL=${JSON.stringify(DM_PROFILE_LLM_MODEL)} not allowed; forcing ${JSON.stringify(EFFECTIVE_DM_PROFILE_LLM_MODEL)}`,
-  );
+if (!DM_PROFILE_LLM_MODEL_ALLOWED) {
+  if (DM_ALLOW_MODEL_FALLBACK) {
+    console.warn(
+      `⚠️ DM_PROFILE_LLM_MODEL=${JSON.stringify(DM_PROFILE_LLM_MODEL)} not allowed; forcing ${JSON.stringify(EFFECTIVE_DM_PROFILE_LLM_MODEL)}`,
+    );
+  } else {
+    console.warn(
+      `🚫 DM_PROFILE_LLM_MODEL=${JSON.stringify(DM_PROFILE_LLM_MODEL)} not allowed; disabling DM profile extractor LLM. ` +
+      `Set DM_ALLOW_MODEL_FALLBACK=1 to force fallback to ${JSON.stringify(EFFECTIVE_DM_PROFILE_LLM_MODEL)}.`,
+    );
+  }
 }
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '';
 const DM_PROFILE_LLM_FLAG = (process.env.DM_PROFILE_LLM_EXTRACTION || 'auto').trim().toLowerCase();
@@ -78,6 +87,7 @@ const DM_PROFILE_LLM_MAX_TOKENS = (() => {
   return Math.min(800, Math.max(80, parsed));
 })();
 const DM_PROFILE_LLM_ENABLED = (() => {
+  if (!DM_PROFILE_LLM_MODEL_ALLOWED && !DM_ALLOW_MODEL_FALLBACK) return false;
   if (['1', 'true', 'yes', 'on'].includes(DM_PROFILE_LLM_FLAG)) return true;
   if (['0', 'false', 'no', 'off'].includes(DM_PROFILE_LLM_FLAG)) return false;
   return Boolean(OPENROUTER_API_KEY);
@@ -88,6 +98,7 @@ const dmLlmClient = (() => {
   if (!DM_PROFILE_LLM_ENABLED || !OPENROUTER_API_KEY) return null;
   return createLLMClient({
     apiKeys: [OPENROUTER_API_KEY],
+    title: 'dm_profile_extractor',
     model: EFFECTIVE_DM_PROFILE_LLM_MODEL,
     maxTokens: DM_PROFILE_LLM_MAX_TOKENS,
     temperature: 0.0,
