@@ -125,9 +125,13 @@ _IDENTITY_OVERRIDE_RE = re.compile(
 )
 _CAPABILITIES_QUERY_RE = re.compile(
     r"\b(?:what\s+skills\s+do\s+you\s+have|what\s+can\s+you\s+do|your\s+capabilities|"
+    r"who\s+are\s+you|"
     r"what\s+is\s+this\s+chat\s+for|what\s+is\s+this\s+for|what\s+do\s+you\s+do|"
     r"what\s+is\s+(?:this|my)\s+profile\s+for|what\s+is\s+(?:this|my)\s+profile\s+used\s+for|"
     r"how\s+is\s+(?:this|my)\s+profile\s+(?:being\s+)?used|how\s+will\s+(?:this|my)\s+(?:profile|data)\s+be\s+used|"
+    r"why\s+are\s+you\s+(?:messaging|message(?:ing)?|dm(?:ing)?|contacting)\s+me|"
+    r"why\s+did\s+you\s+(?:message|dm|reach\s+out)(?:\s+to\s+me)?|"
+    r"(?:is\s+this\s+a\s+scam|you\s+sound\s+like\s+(?:a\s+)?scam|u\s+sound\s+like\s+(?:a\s+)?scam)|"
     r"what\s+can\s+i\s+use\s+this\s+for|how\s+does\s+this\s+work|how\s+do\s+i\s+use\s+this|"
     r"what\s+is\s+the\s+process|interview\s+process|"
     r"what\s+is\s+the\s+purpose|purpose\s+of\s+this|"
@@ -1872,6 +1876,100 @@ def _format_captured_updates_summary(captured_updates: Dict[str, str]) -> str:
     return "; ".join(parts) if parts else "profile updates"
 
 
+def _split_plain_topics_answer(text: str) -> List[str]:
+    """Parse a short list response like: "grants, partnerships, ecosystem growth"."""
+    source = _clean_text(text).strip()
+    if not source:
+        return []
+    if len(source) > 220:
+        return []
+    # Avoid treating questions as topic lists.
+    if "?" in source:
+        return []
+    lowered = source.lower().strip(" .,!?:;\"'`")
+    if lowered in ("yes", "yep", "yeah", "no", "nah", "nope", "ok", "okay", "sure", "k", "cool"):
+        return []
+
+    parts = re.split(r",|;|\n|\band\b|&", source, flags=re.IGNORECASE)
+    out: List[str] = []
+    seen: Set[str] = set()
+    for part in parts:
+        clean = _clean_text(part).strip(" .,!?:;\"'`")
+        if not clean:
+            continue
+        clean = re.sub(
+            r"^(?:my\s+)?(?:priorities?|focus|topics?)\s*(?:are|is)\s+",
+            "",
+            clean,
+            flags=re.IGNORECASE,
+        ).strip()
+        if len(clean) < 2:
+            continue
+        key = clean.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(clean[:80])
+        if len(out) >= 6:
+            break
+    return out
+
+
+def upsert_dm_profile_update_event(
+    conn,
+    *,
+    user_id: int,
+    conversation_id: Optional[int],
+    source_message_id: Optional[int],
+    source_external_message_id: Optional[str],
+    event_type: str,
+    event_payload: Dict[str, Any],
+    extracted_facts: List[Dict[str, Any]],
+    confidence: float,
+    event_source: str = "dm_responder",
+    actor_role: str = "user",
+) -> None:
+    if not user_id or not source_message_id or not event_type:
+        return
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO dm_profile_update_events (
+              user_id,
+              conversation_id,
+              source_message_id,
+              source_external_message_id,
+              event_type,
+              event_source,
+              actor_role,
+              event_payload,
+              extracted_facts,
+              confidence
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s)
+            ON CONFLICT (source_message_id, event_type) WHERE source_message_id IS NOT NULL DO UPDATE SET
+              actor_role = EXCLUDED.actor_role,
+              event_source = EXCLUDED.event_source,
+              event_payload = EXCLUDED.event_payload,
+              extracted_facts = EXCLUDED.extracted_facts,
+              confidence = EXCLUDED.confidence,
+              created_at = now()
+            """,
+            [
+                user_id,
+                conversation_id,
+                source_message_id,
+                source_external_message_id,
+                event_type,
+                event_source,
+                actor_role,
+                json.dumps(event_payload, ensure_ascii=True),
+                json.dumps(extracted_facts, ensure_ascii=True),
+                float(confidence),
+            ],
+        )
+
+
 def _onboarding_slot_prompt(slot: str, seed: int) -> str:
     options = ONBOARDING_SLOT_QUESTIONS.get(slot) or ONBOARDING_SLOT_QUESTIONS['primary_role']
     return _pick(options, seed)
@@ -2323,6 +2421,7 @@ def render_onboarding_flow_reply(
     pending_events: List[Dict[str, Any]],
     onboarding_state: Dict[str, Any],
     persona_name: str,
+    conn=None,
 ) -> Tuple[Optional[str], Dict[str, Any]]:
     state = dict(onboarding_state or _default_onboarding_state())
     now = datetime.now(timezone.utc)
@@ -2360,6 +2459,145 @@ def render_onboarding_flow_reply(
         state['status'] = 'collecting'
         state['started_at'] = state.get('started_at') or now
         status = 'collecting'
+
+    # If we're mid-onboarding and we asked for a specific missing slot, treat the next plain reply as the answer.
+    last_prompted = _as_text(state.get('last_prompted_field'))
+    if (
+        status == 'collecting'
+        and last_prompted
+        and last_prompted in required_fields
+        and last_prompted in missing_fields
+        and not captured_updates
+        and latest_text
+        and not is_onboarding_acknowledgement(latest_text)
+        and not is_greeting
+    ):
+        inferred: Dict[str, str] = {}
+        user_id = row.get('sender_db_id')
+        conversation_id = row.get('conversation_id')
+        source_message_id = _to_int(row.get('id'))
+        source_external_message_id = _as_text(row.get('external_message_id'))
+
+        if last_prompted == 'notable_topics':
+            topics = _split_plain_topics_answer(latest_text)
+            if topics:
+                inferred['notable_topics'] = ", ".join(topics)
+                if conn is not None and isinstance(user_id, int):
+                    upsert_dm_profile_update_event(
+                        conn,
+                        user_id=user_id,
+                        conversation_id=conversation_id,
+                        source_message_id=source_message_id,
+                        source_external_message_id=source_external_message_id,
+                        event_type='profile.priorities_update',
+                        event_payload={
+                            'raw_text': row.get('text') or '',
+                            'trigger': 'onboarding_answer_topics',
+                            'priorities': topics,
+                        },
+                        extracted_facts=[
+                            {
+                                'field': 'notable_topics',
+                                'old_value': None,
+                                'new_value': topic,
+                                'confidence': 0.88,
+                            }
+                            for topic in topics
+                        ],
+                        confidence=0.88,
+                    )
+                # Update the in-memory profile view so onboarding progresses immediately.
+                existing = [str(item) for item in (profile.get('notable_topics') or []) if isinstance(item, str)]
+                existing_set = {item.lower() for item in existing}
+                for topic in topics:
+                    if topic.lower() not in existing_set:
+                        existing.append(topic)
+                        existing_set.add(topic.lower())
+                profile['notable_topics'] = existing[:10]
+
+        elif last_prompted == 'primary_company':
+            company_value = latest_text.strip(" \"'`").strip(" .,!?:;")
+            if company_value and not re.match(
+                r"^(?:launching|building|making|doing|working|growing|scaling|helping|assisting|supporting|pursuing|seeking|discovering)\b",
+                company_value,
+                re.IGNORECASE,
+            ):
+                normalized = 'unemployed' if 'unemployed' in company_value.lower() else company_value[:120]
+                inferred['primary_company'] = normalized
+                if conn is not None and isinstance(user_id, int):
+                    upsert_dm_profile_update_event(
+                        conn,
+                        user_id=user_id,
+                        conversation_id=conversation_id,
+                        source_message_id=source_message_id,
+                        source_external_message_id=source_external_message_id,
+                        event_type='profile.company_update',
+                        event_payload={
+                            'raw_text': row.get('text') or '',
+                            'trigger': 'onboarding_answer_company',
+                            'new_company': normalized,
+                        },
+                        extracted_facts=[
+                            {
+                                'field': 'primary_company',
+                                'old_value': None,
+                                'new_value': normalized,
+                                'confidence': 0.9,
+                            }
+                        ],
+                        confidence=0.9,
+                    )
+                profile['primary_company'] = normalized
+
+        elif last_prompted == 'primary_role':
+            role_value = latest_text.strip(" \"'`").strip(" .,!?:;")
+            if role_value and not re.match(
+                r"^(?:currently\s+)?(?:discovering|exploring|pursuing|seeking|finding|researching|learning|helping|assisting|supporting|driving|building|working|growing|scaling)\b",
+                role_value,
+                re.IGNORECASE,
+            ):
+                role = role_value[:120]
+                company = None
+                role_company_match = re.match(r"^(.{2,80}?)\s+(?:at|with|for)\s+(.{2,120})$", role_value, re.IGNORECASE)
+                if role_company_match and 'primary_company' in missing_fields:
+                    role = _clean_text(role_company_match.group(1))[:120]
+                    company = _clean_text(role_company_match.group(2))[:120]
+                inferred['primary_role'] = role
+                if company and 'primary_company' not in inferred:
+                    inferred['primary_company'] = company
+                if conn is not None and isinstance(user_id, int):
+                    extracted: List[Dict[str, Any]] = [
+                        {'field': 'primary_role', 'old_value': None, 'new_value': role, 'confidence': 0.9}
+                    ]
+                    payload: Dict[str, Any] = {
+                        'raw_text': row.get('text') or '',
+                        'trigger': 'onboarding_answer_role',
+                        'role': role,
+                    }
+                    evt_type = 'profile.role_update'
+                    if company:
+                        extracted.append({'field': 'primary_company', 'old_value': None, 'new_value': company, 'confidence': 0.9})
+                        payload['company'] = company
+                        evt_type = 'profile.role_company_update'
+                    upsert_dm_profile_update_event(
+                        conn,
+                        user_id=user_id,
+                        conversation_id=conversation_id,
+                        source_message_id=source_message_id,
+                        source_external_message_id=source_external_message_id,
+                        event_type=evt_type,
+                        event_payload=payload,
+                        extracted_facts=extracted,
+                        confidence=0.9,
+                    )
+                profile['primary_role'] = role
+                if company:
+                    profile['primary_company'] = company
+
+        if inferred:
+            captured_updates.update(inferred)
+            missing_fields = _compute_missing_onboarding_fields(profile, required_fields)
+            state['missing_fields'] = missing_fields
 
     if status == 'collecting' and is_indecision_request(latest_text):
         total_fields = len(required_fields)
@@ -2552,6 +2790,7 @@ def render_capabilities_reply(profile: Dict[str, Any], persona_name: str) -> str
         "- Ask: \"What do you know about me?\" (snapshot)\n"
         "- Send updates in plain English or `field: value` (role/company/priorities/communication)\n"
         "- Say: \"interview mode\" (I ask one question at a time)\n"
+        "Safety: I won’t ask you for money, seed phrases, or API keys.\n"
         "I won’t do work-planning unless you explicitly ask with `advice:`.\n"
         f"{next_q}"
     )
@@ -3236,6 +3475,7 @@ def render_response(args: argparse.Namespace, conn, row: Dict[str, Any]) -> str:
         pending_events,
         onboarding_state,
         args.persona_name,
+        conn,
     )
     if next_onboarding_state != onboarding_state:
         persist_onboarding_state(conn, sender_db_id, next_onboarding_state)

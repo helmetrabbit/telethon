@@ -95,6 +95,24 @@ function sanitizeContactStyle(value: string | null): string {
 }
 
 function normalizeTopics(value: unknown): string[] {
+  if (typeof value === 'string') {
+    const raw = value.trim();
+    if (!raw) return [];
+    if (raw.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(raw);
+        return normalizeTopics(parsed);
+      } catch {
+        // fall through to split heuristic
+      }
+    }
+    return raw
+      .split(/,|;|\band\b|\&/gi)
+      .map((token) => token.replace(/[\t\n\r]+/g, ' ').trim().toLowerCase())
+      .filter((token) => token.length >= 2)
+      .slice(0, 10);
+  }
+
   if (!Array.isArray(value)) return [];
   const out = new Set<string>();
   for (const item of value) {
