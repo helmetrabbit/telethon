@@ -37,18 +37,50 @@ interface ContactStyleAuditEntry {
   source_event_id: string;
 }
 
+interface ContactStylePendingCandidate {
+  value: string;
+  confidence: number | null;
+  source: string;
+  source_event_id: string;
+  source_message_id: number | null;
+  proposed_at: string;
+}
+
+type ContactStyleResolutionRule = 'confidence_gated_last_write_wins';
+
 interface ContactStyleAudit {
   value: string | null;
   updated_at: string | null;
   confidence: number | null;
   source: string | null;
   source_event_id: string | null;
-  resolution_rule: 'last_write_wins';
+  resolution_rule: ContactStyleResolutionRule;
   reconfirm_prompted_at: string | null;
+  pending_candidate: ContactStylePendingCandidate | null;
   history: ContactStyleAuditEntry[];
 }
 
 const ONBOARDING_REQUIRED_FIELDS = ['primary_role', 'primary_company', 'notable_topics', 'preferred_contact_style'] as const;
+const STYLE_CONFLICT_RESOLUTION_RULE: ContactStyleResolutionRule = 'confidence_gated_last_write_wins';
+
+function parseEnvFloat(name: string, fallback: number): number {
+  const raw = (process.env[name] || '').trim();
+  if (!raw) return fallback;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function clamp01(value: number): number {
+  if (value < 0) return 0;
+  if (value > 1) return 1;
+  return value;
+}
+
+const CONTACT_STYLE_AUTO_APPLY_THRESHOLD = clamp01(parseEnvFloat('DM_CONTACT_STYLE_AUTO_APPLY_THRESHOLD', 0.8));
+const CONTACT_STYLE_CONFIRM_THRESHOLD = Math.min(
+  CONTACT_STYLE_AUTO_APPLY_THRESHOLD,
+  clamp01(parseEnvFloat('DM_CONTACT_STYLE_CONFIRM_THRESHOLD', 0.55)),
+);
 
 function sanitizeCompany(value: string | null): string {
   return (value || '').replace(/[\t\n\r]+/g, ' ').replace(/[.]$/, '').trim();
@@ -104,6 +136,7 @@ function applyProfilePatch(base: PsychRow, events: DbEvent[]): {
   reasoning: string;
   generated_bio_professional: string | null;
   generated_bio_personal: string | null;
+  style_events_seen: boolean;
   contact_style_audit: ContactStyleAudit;
 }
 {
@@ -117,6 +150,8 @@ function applyProfilePatch(base: PsychRow, events: DbEvent[]): {
   let styleLastUpdatedAt: string | null = null;
   let styleSourceEventId: string | null = null;
   let styleConfidence: number | null = null;
+  let styleEventsSeen = false;
+  let pendingCandidate: ContactStylePendingCandidate | null = null;
   const styleHistory: ContactStyleAuditEntry[] = [];
 
   for (const evt of events) {
@@ -144,6 +179,7 @@ function applyProfilePatch(base: PsychRow, events: DbEvent[]): {
       } else if (fact.field === 'preferred_contact_style') {
         const newContactStyle = sanitizeContactStyle(fact.new_value);
         if (!newContactStyle) continue;
+        styleEventsSeen = true;
         const eventConfidence = Number.isFinite(Number(fact.confidence))
           ? Number(fact.confidence)
           : Number(evt.confidence);
@@ -154,12 +190,31 @@ function applyProfilePatch(base: PsychRow, events: DbEvent[]): {
           source: 'dm_profile_update_events',
           source_event_id: evt.id,
         });
-        styleLastUpdatedAt = evt.created_at || new Date().toISOString();
-        styleSourceEventId = evt.id;
-        styleConfidence = Number.isFinite(eventConfidence) ? eventConfidence : styleConfidence;
-        if (nextContactStyle !== newContactStyle) {
-          reasoning += `\n[DM profile-correction ${new Date().toISOString()}] Updated preferred_contact_style -> '${newContactStyle}' via last_write_wins.`;
-          nextContactStyle = newContactStyle;
+        if (Number.isFinite(eventConfidence) && eventConfidence >= CONTACT_STYLE_AUTO_APPLY_THRESHOLD) {
+          styleLastUpdatedAt = evt.created_at || new Date().toISOString();
+          styleSourceEventId = evt.id;
+          styleConfidence = eventConfidence;
+          pendingCandidate = null;
+          if (nextContactStyle !== newContactStyle) {
+            reasoning += `\n[DM profile-correction ${new Date().toISOString()}] Updated preferred_contact_style -> '${newContactStyle}' via ${STYLE_CONFLICT_RESOLUTION_RULE} (confidence=${eventConfidence.toFixed(2)}).`;
+            nextContactStyle = newContactStyle;
+          }
+        } else {
+          const confidenceBand = Number.isFinite(eventConfidence) && eventConfidence >= CONTACT_STYLE_CONFIRM_THRESHOLD
+            ? 'medium'
+            : 'low';
+          pendingCandidate = {
+            value: newContactStyle,
+            confidence: Number.isFinite(eventConfidence) ? eventConfidence : null,
+            source: 'dm_profile_update_events',
+            source_event_id: evt.id,
+            source_message_id: null,
+            proposed_at: evt.created_at || new Date().toISOString(),
+          };
+          const confidenceLabel = Number.isFinite(eventConfidence)
+            ? eventConfidence.toFixed(2)
+            : 'unknown';
+          reasoning += `\n[DM profile-correction ${new Date().toISOString()}] Queued preferred_contact_style candidate '${newContactStyle}' for confirmation (${STYLE_CONFLICT_RESOLUTION_RULE}, band=${confidenceBand}, confidence=${confidenceLabel}, auto_apply_threshold=${CONTACT_STYLE_AUTO_APPLY_THRESHOLD.toFixed(2)}).`;
         }
       } else if (fact.field === 'notable_topics') {
         const topic = (fact.new_value || '').trim().toLowerCase();
@@ -182,14 +237,16 @@ function applyProfilePatch(base: PsychRow, events: DbEvent[]): {
     reasoning,
     generated_bio_professional: prof || base.generated_bio_professional,
     generated_bio_personal: personal || base.generated_bio_personal,
+    style_events_seen: styleEventsSeen,
     contact_style_audit: {
       value: nextContactStyle || base.preferred_contact_style || null,
       updated_at: styleLastUpdatedAt,
       confidence: styleConfidence,
       source: styleSourceEventId ? 'dm_profile_update_events' : null,
       source_event_id: styleSourceEventId,
-      resolution_rule: 'last_write_wins',
+      resolution_rule: STYLE_CONFLICT_RESOLUTION_RULE,
       reconfirm_prompted_at: null,
+      pending_candidate: pendingCandidate,
       history: styleHistory.slice(-12),
     },
   };
@@ -297,6 +354,39 @@ async function reconcileUsers(targetUserIds: string[] = [], limit = 0): Promise<
     const existingReconfirmPromptedAt = typeof existingStylePreference.reconfirm_prompted_at === 'string'
       ? existingStylePreference.reconfirm_prompted_at
       : null;
+    const rawExistingPendingCandidate = (
+      existingStylePreference.pending_candidate
+      && typeof existingStylePreference.pending_candidate === 'object'
+      && !Array.isArray(existingStylePreference.pending_candidate)
+    )
+      ? existingStylePreference.pending_candidate as Record<string, unknown>
+      : null;
+    let existingPendingCandidate: ContactStylePendingCandidate | null = null;
+    if (rawExistingPendingCandidate) {
+      const value = typeof rawExistingPendingCandidate.value === 'string'
+        ? rawExistingPendingCandidate.value.trim()
+        : '';
+      if (value) {
+        existingPendingCandidate = {
+          value,
+          confidence: Number.isFinite(Number(rawExistingPendingCandidate.confidence))
+            ? Number(rawExistingPendingCandidate.confidence)
+            : null,
+          source: typeof rawExistingPendingCandidate.source === 'string'
+            ? rawExistingPendingCandidate.source
+            : 'dm_profile_update_events',
+          source_event_id: typeof rawExistingPendingCandidate.source_event_id === 'string'
+            ? rawExistingPendingCandidate.source_event_id
+            : '',
+          source_message_id: Number.isFinite(Number(rawExistingPendingCandidate.source_message_id))
+            ? Number(rawExistingPendingCandidate.source_message_id)
+            : null,
+          proposed_at: typeof rawExistingPendingCandidate.proposed_at === 'string'
+            ? rawExistingPendingCandidate.proposed_at
+            : new Date().toISOString(),
+        };
+      }
+    }
     const existingStyleHistory = Array.isArray(existingStylePreference.history)
       ? existingStylePreference.history
           .filter((item) => item && typeof item === 'object')
@@ -316,21 +406,31 @@ async function reconcileUsers(targetUserIds: string[] = [], limit = 0): Promise<
     const styleConfidence = patch.contact_style_audit.confidence ?? existingStyleConfidence;
     const styleSource = patch.contact_style_audit.source || existingStyleSource;
     const styleSourceEventId = patch.contact_style_audit.source_event_id || existingStyleSourceEventId;
-    const styleReconfirmPromptedAt = (
+    const styleChanged = Boolean(
       styleValue
       && existingStyleValue
-      && styleValue.toLowerCase() === existingStyleValue.toLowerCase()
-    )
-      ? existingReconfirmPromptedAt
-      : null;
+      && styleValue.toLowerCase() !== existingStyleValue.toLowerCase(),
+    );
+    const styleReconfirmPromptedAt = (
+      !styleChanged
+    ) ? existingReconfirmPromptedAt : null;
+    let pendingStyleCandidate: ContactStylePendingCandidate | null = existingPendingCandidate;
+    if (patch.style_events_seen) {
+      pendingStyleCandidate = patch.contact_style_audit.pending_candidate;
+    }
+    if (patch.style_events_seen && patch.contact_style_audit.source_event_id) {
+      // Applied style updates clear any previous pending candidate.
+      pendingStyleCandidate = null;
+    }
     const stylePreference: ContactStyleAudit = {
       value: styleValue,
       updated_at: styleUpdatedAt,
       confidence: styleConfidence,
       source: styleSource,
       source_event_id: styleSourceEventId,
-      resolution_rule: 'last_write_wins',
+      resolution_rule: STYLE_CONFLICT_RESOLUTION_RULE,
       reconfirm_prompted_at: styleReconfirmPromptedAt,
+      pending_candidate: pendingStyleCandidate,
       history: mergedStyleHistory,
     };
 

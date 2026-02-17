@@ -304,6 +304,10 @@ Responder variables:
 - `DM_RESPONSE_MODEL=deepseek/deepseek-chat`
 - `DM_RESPONSE_MAX_TOKENS=420`
 - `DM_RESPONSE_TEMPERATURE=0.15`
+- `DM_CONTACT_STYLE_AUTO_APPLY_THRESHOLD=0.8`: auto-apply communication-style updates at/above this confidence.
+- `DM_CONTACT_STYLE_CONFIRM_THRESHOLD=0.55`: below auto-apply threshold, style updates become pending and require a `yes/no` confirmation.
+- `DM_CONTACT_STYLE_TTL_DAYS=45`: days before style preference is considered stale and re-confirmed.
+- `DM_CONTACT_STYLE_RECONFIRM_COOLDOWN_DAYS=14`: minimum spacing between stale-style reconfirm prompts.
 - Onboarding is deterministic and LLM-independent for new/collecting users until core profile fields are captured.
 
 To run under systemd, call `make tg-live-start` from a service that stays running; logs are written to `data/logs/` and state is persisted in `data/.state/`.
