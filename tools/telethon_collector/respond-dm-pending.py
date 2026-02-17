@@ -152,13 +152,28 @@ _PROFILE_CONFIRMATION_RE = re.compile(
     r"\b(?:did\s+you\s+update|did\s+you\s+capture|did\s+you\s+save|was\s+that\s+updated)\b",
     re.IGNORECASE,
 )
+_INTERVIEW_STYLE_RE = re.compile(
+    r"\b(?:interview\s+style|one\s+question\s+at\s+a\s+time|question\s+by\s+question|split\s+this\s+up|"
+    r"wall\s+of\s+text|too\s+long;\s*didn'?t\s+read|tl;dr)\b",
+    re.IGNORECASE,
+)
+_TOP3_PROFILE_PROMPT_RE = re.compile(
+    r"\b(?:top\s*3|three)\b.{0,80}\b(?:things\s+to\s+tell\s+you|what\s+to\s+tell\s+you|what\s+you\s+need\s+from\s+me|"
+    r"improve\s+my\s+profile|update\s+my\s+profile)\b",
+    re.IGNORECASE,
+)
+_MISSED_INTENT_RE = re.compile(
+    r"\b(?:that'?s?\s+not\s+what\s+i\s+asked|you\s+missed\s+my\s+question|not\s+what\s+i\s+asked)\b",
+    re.IGNORECASE,
+)
 _INLINE_PROFILE_UPDATE_RE = re.compile(
     r"^\s*(?:role|title|position|company|project|priorit(?:y|ies)|topics?|communication|style)\s*:",
     re.IGNORECASE,
 )
 _FREEFORM_PRIORITY_RE = re.compile(
     r"\b(?:i(?:'m| am|’m)\s+looking\s+for|currently\s+looking\s+for|right\s+now\s+i(?:'m| am|’m)\s+looking\s+for|"
-    r"i(?:'m| am|’m)\s+focused\s+on|currently\s+focused\s+on|my\s+priorities?\s+(?:are|is))\s+([^.!?\n]{3,180})",
+    r"i(?:'m| am|’m)\s+focused\s+on|currently\s+focused\s+on|my\s+current\s+focus\s+is|current\s+focus\s+is|"
+    r"my\s+priorities?\s+(?:are|is))\s+([^.!?\n]{3,180})",
     re.IGNORECASE,
 )
 _PROFILE_UPDATE_STATEMENT_RE = re.compile(
@@ -690,6 +705,8 @@ def infer_slots_from_text(text: Optional[str]) -> Set[str]:
         "priorities",
         "focused on",
         "focus is",
+        "current focus is",
+        "my current focus is",
         "right now i'm focused",
         "looking for",
         "currently looking for",
@@ -793,6 +810,27 @@ def is_profile_confirmation_request(text: Optional[str]) -> bool:
     if not source:
         return False
     return bool(_PROFILE_CONFIRMATION_RE.search(source))
+
+
+def is_interview_style_request(text: Optional[str]) -> bool:
+    source = _clean_text(text)
+    if not source:
+        return False
+    return bool(_INTERVIEW_STYLE_RE.search(source))
+
+
+def is_top3_profile_prompt_request(text: Optional[str]) -> bool:
+    source = _clean_text(text)
+    if not source:
+        return False
+    return bool(_TOP3_PROFILE_PROMPT_RE.search(source))
+
+
+def is_missed_intent_feedback(text: Optional[str]) -> bool:
+    source = _clean_text(text)
+    if not source:
+        return False
+    return bool(_MISSED_INTENT_RE.search(source))
 
 
 def is_likely_profile_update_message(text: Optional[str]) -> bool:
@@ -1590,6 +1628,75 @@ def render_profile_confirmation_reply(
     )
 
 
+def _build_profile_gap_prompts(profile: Dict[str, Any], count: int = 3) -> List[str]:
+    prompts: List[str] = []
+    role = _as_text(profile.get('primary_role'))
+    company = _as_text(profile.get('primary_company'))
+    priorities = [str(item) for item in (profile.get('notable_topics') or []) if isinstance(item, str)]
+    contact_style = _as_text(profile.get('preferred_contact_style'))
+    based_in = _as_text(profile.get('based_in'))
+
+    if not role:
+        prompts.append("What role/title should I store for you right now?")
+    if not company:
+        prompts.append("What company/project should I map you to currently?")
+    if not priorities:
+        prompts.append("What are your top 2 priorities right now?")
+    else:
+        top_priority = priorities[0]
+        prompts.append(
+            f"For your priority \"{top_priority}\", what exact targets should I tag (specific chains, programs, or ecosystems)?"
+        )
+    if not contact_style:
+        prompts.append("How do you want me to communicate: concise bullets, deep detail, or conversational?")
+    if not based_in:
+        prompts.append("What timezone/location should I assume for outreach and active-hours context?")
+
+    if not prompts:
+        prompts = [
+            "What changed most recently: role, company, priorities, or communication style?",
+            "What is your main objective for the next 30 days?",
+            "Is there one correction in your profile snapshot I should apply now?",
+        ]
+
+    deduped: List[str] = []
+    for prompt in prompts:
+        clean = _clean_text(prompt)
+        if clean and clean not in deduped:
+            deduped.append(clean)
+        if len(deduped) >= count:
+            break
+    return deduped
+
+
+def render_interview_style_reply(profile: Dict[str, Any]) -> str:
+    prompts = _build_profile_gap_prompts(profile, count=1)
+    first = prompts[0] if prompts else "What role/title should I store for you right now?"
+    return (
+        "Absolutely. Let’s do interview mode: one question at a time.\n"
+        f"Q1: {first}"
+    )
+
+
+def render_top3_profile_prompt_reply(profile: Dict[str, Any]) -> str:
+    prompts = _build_profile_gap_prompts(profile, count=3)
+    lines = "\n".join(f"{idx}. {prompt}" for idx, prompt in enumerate(prompts, start=1))
+    return (
+        "Based on what I already have, these are the top 3 updates that would improve your profile most:\n"
+        f"{lines}"
+    )
+
+
+def render_missed_intent_reply(profile: Dict[str, Any]) -> str:
+    prompts = _build_profile_gap_prompts(profile, count=3)
+    lines = "\n".join(f"{idx}. {prompt}" for idx, prompt in enumerate(prompts, start=1))
+    return (
+        "You’re right, I missed your intent.\n"
+        "Here’s the direct answer:\n"
+        f"{lines}"
+    )
+
+
 def render_onboarding_flow_reply(
     row: Dict[str, Any],
     profile: Dict[str, Any],
@@ -1992,6 +2099,9 @@ def render_llm_conversational_reply(
         'is_profile_data_provenance_request': is_profile_data_provenance_request(latest_text),
         'is_profile_update_mode_request': is_profile_update_mode_request(latest_text),
         'is_profile_confirmation_request': is_profile_confirmation_request(latest_text),
+        'is_interview_style_request': is_interview_style_request(latest_text),
+        'is_top3_profile_prompt_request': is_top3_profile_prompt_request(latest_text),
+        'is_missed_intent_feedback': is_missed_intent_feedback(latest_text),
         'likely_profile_update_message': is_likely_profile_update_message(latest_text),
         'inline_profile_updates': _collect_current_message_updates(row, pending_events),
         'profile_context': summarize_profile_for_prompt(profile),
@@ -2008,11 +2118,14 @@ def render_llm_conversational_reply(
         "3) If user gives profile updates (job/company/unemployed/role/priorities/style), confirm exactly what was captured.\n"
         "4) If user asks about message analytics (counts/groups/active times), answer strictly from available activity_snapshot/profile_context data.\n"
         "5) If user says they want profile updates only (not advice), prioritize capture/confirmation over recommendations.\n"
-        "6) If user says they are unsure what to do, provide 3 concrete next-step options tailored to their context.\n"
-        "7) If the message is about another person, answer as a third-party lookup and do NOT treat it as a profile update for the sender.\n"
-        "8) Never claim to execute tools, shell commands, HTTP requests, profile-picture changes, reboots, or system-prompt edits.\n"
-        "9) If asked for unavailable actions, state limits and give a practical alternative.\n"
-        "10) Do not use sexual or explicit roleplay.\n"
+        "6) If user asks for interview style, ask one focused question at a time.\n"
+        "7) If user asks for top 3 things to share, give exactly three profile-focused prompts.\n"
+        "8) If user says you missed their ask, apologize once and answer directly.\n"
+        "9) If user says they are unsure what to do, provide 3 concrete next-step options tailored to their context.\n"
+        "10) If the message is about another person, answer as a third-party lookup and do NOT treat it as a profile update for the sender.\n"
+        "11) Never claim to execute tools, shell commands, HTTP requests, profile-picture changes, reboots, or system-prompt edits.\n"
+        "12) If asked for unavailable actions, state limits and give a practical alternative.\n"
+        "13) Do not use sexual or explicit roleplay.\n"
         "Output constraints:\n"
         "- Plain text only.\n"
         "- Keep it concise but substantial and natural.\n"
@@ -2057,6 +2170,15 @@ def render_conversational_reply(
 
     if is_profile_data_provenance_request(latest_text):
         return render_profile_data_provenance_reply(profile)
+
+    if is_interview_style_request(latest_text):
+        return render_interview_style_reply(profile)
+
+    if is_top3_profile_prompt_request(latest_text):
+        return render_top3_profile_prompt_reply(profile)
+
+    if is_missed_intent_feedback(latest_text):
+        return render_missed_intent_reply(profile)
 
     if is_profile_update_mode_request(latest_text):
         return render_profile_update_mode_reply()
@@ -2138,11 +2260,20 @@ def render_conversational_reply(
         }
         next_question = _pick(question_map[slot], msg_id + 1)
         return f"{next_question}"
+
+    source = _clean_text(latest_text)
+    if "?" in source:
+        return (
+            "I can handle this either as a profile update or as advice.\n"
+            "Reply `update:` with what to store, or `advice:` with what you want help on."
+        )
+
     else:
         next_question = _pick(
             [
                 "If anything changed in your role, company, priorities, or communication style, send it and I’ll sync it.",
                 "Want a full snapshot or a targeted update? I can do either in one message.",
+                "If you prefer interview mode, say `interview mode` and I’ll ask one question at a time.",
             ],
             msg_id + 2,
         )
@@ -2180,6 +2311,12 @@ def render_response(args: argparse.Namespace, conn, row: Dict[str, Any]) -> str:
         return render_unsupported_action_reply()
     if is_profile_update_mode_request(latest_text):
         return render_profile_update_mode_reply()
+    if is_interview_style_request(latest_text):
+        return render_interview_style_reply(profile)
+    if is_top3_profile_prompt_request(latest_text):
+        return render_top3_profile_prompt_reply(profile)
+    if is_missed_intent_feedback(latest_text):
+        return render_missed_intent_reply(profile)
     if is_activity_analytics_request(latest_text):
         return render_activity_analytics_reply(profile)
     if is_profile_data_provenance_request(latest_text):
@@ -2205,6 +2342,9 @@ def render_response(args: argparse.Namespace, conn, row: Dict[str, Any]) -> str:
     if (
         is_full_profile_request(latest_text)
         or is_indecision_request(latest_text)
+        or is_interview_style_request(latest_text)
+        or is_top3_profile_prompt_request(latest_text)
+        or is_missed_intent_feedback(latest_text)
         or is_likely_profile_update_message(latest_text)
     ):
         return render_conversational_reply(row, profile, args.persona_name, pending_events)
