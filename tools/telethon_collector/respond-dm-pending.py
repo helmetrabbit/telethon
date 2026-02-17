@@ -180,6 +180,17 @@ _FREEFORM_PRIORITY_RE = re.compile(
     r"my\s+priorities?\s+(?:are|is))\s+([^.!?\n]{3,180})",
     re.IGNORECASE,
 )
+_CONTACT_STYLE_KEYWORD_RE = re.compile(
+    r"\b(?:concise|short|brief|detailed|long|deep|bullet(?:s)?|list|quick\s+back-and-forth|back-and-forth|"
+    r"conversational|casual|direct|formal|professional|playful|technical)\b",
+    re.IGNORECASE,
+)
+_FREEFORM_CONTACT_STYLE_RE = re.compile(
+    r"\b(?:talk|speak|communicate|respond|reply)\s+(?:to\s+me\s+)?(?:in|with|using)?\s*([^.!?\n]{3,120})|"
+    r"\b(?:keep|make)\s+(?:your\s+)?(?:responses|replies|messages)\s+([^.!?\n]{3,120})|"
+    r"\b(?:i\s+(?:prefer|like))\s+([^.!?\n]{3,120})(?:\s+(?:responses|replies|communication))?",
+    re.IGNORECASE,
+)
 _PROFILE_UPDATE_STATEMENT_RE = re.compile(
     r"\b(?:no\s+longer\s+at|left\s+[A-Za-z0-9]|joined\s+[A-Za-z0-9]|my\s+role\s+is|my\s+title\s+is|"
     r"i\s+work\s+as|i(?:'m| am|’m)\s+(?:an?\s+)?[A-Za-z][A-Za-z0-9/&+().,' -]{1,60}\s+(?:at|with|for)\s+[A-Za-z0-9]|"
@@ -764,6 +775,10 @@ def _extract_inline_profile_updates(text: Optional[str]) -> Dict[str, str]:
     if freeform_priority and 'notable_topics' not in updates:
         updates['notable_topics'] = freeform_priority
 
+    freeform_contact_style = _extract_freeform_contact_style(clean_source)
+    if freeform_contact_style and 'preferred_contact_style' not in updates:
+        updates['preferred_contact_style'] = freeform_contact_style
+
     return updates
 
 
@@ -786,6 +801,51 @@ def _extract_freeform_priority(text: str) -> Optional[str]:
     if not topic or len(topic) < 3:
         return None
     return topic[:160]
+
+
+def _normalize_contact_style_text(raw: str) -> Optional[str]:
+    source = _clean_text(raw).lower()
+    if not source:
+        return None
+    if 'bullet' in source or 'list' in source:
+        return 'concise bullets'
+    if any(token in source for token in ('concise', 'short', 'brief')):
+        return 'concise'
+    if any(token in source for token in ('detailed', 'long', 'deep')):
+        return 'detailed'
+    if any(token in source for token in ('quick back-and-forth', 'back-and-forth', 'conversational', 'casual')):
+        return 'quick back-and-forth'
+    if 'direct' in source:
+        return 'direct'
+    if any(token in source for token in ('formal', 'professional')):
+        return 'formal and professional'
+    if any(token in source for token in ('playful', 'technical')):
+        return source[:80]
+    return None
+
+
+def _extract_freeform_contact_style(text: str) -> Optional[str]:
+    source = _clean_text(text)
+    if not source:
+        return None
+    if is_third_party_profile_request(source):
+        return None
+
+    for match in _FREEFORM_CONTACT_STYLE_RE.finditer(source):
+        candidate = next((group for group in match.groups() if group), None)
+        if not candidate:
+            continue
+        if not _CONTACT_STYLE_KEYWORD_RE.search(candidate):
+            continue
+        normalized = _normalize_contact_style_text(candidate)
+        if normalized:
+            return normalized
+
+    if _CONTACT_STYLE_KEYWORD_RE.search(source):
+        normalized = _normalize_contact_style_text(source)
+        if normalized:
+            return normalized
+    return None
 
 
 def is_profile_update_mode_request(text: Optional[str]) -> bool:
@@ -848,6 +908,8 @@ def is_likely_profile_update_message(text: Optional[str]) -> bool:
     if _INLINE_PROFILE_UPDATE_RE.search(source):
         return True
     if _PROFILE_UPDATE_STATEMENT_RE.search(source):
+        return True
+    if _extract_freeform_contact_style(source):
         return True
     return bool(_extract_freeform_priority(source))
 
@@ -1359,6 +1421,49 @@ def _truncate(value: Optional[str], limit: int = 180) -> Optional[str]:
     if len(clean) <= limit:
         return clean
     return clean[: max(0, limit - 3)].rstrip() + "..."
+
+
+def _preferred_style_mode(profile: Dict[str, Any]) -> str:
+    style = _as_text(profile.get('preferred_contact_style')) or ''
+    lower = style.lower()
+    if not lower:
+        return 'default'
+    if 'bullet' in lower or 'list' in lower:
+        return 'bullets'
+    if any(token in lower for token in ('concise', 'short', 'brief', 'direct')):
+        return 'concise'
+    if any(token in lower for token in ('detailed', 'long', 'deep', 'comprehensive')):
+        return 'detailed'
+    if any(token in lower for token in ('quick back-and-forth', 'back-and-forth', 'conversational', 'casual')):
+        return 'conversational'
+    return 'default'
+
+
+def apply_preferred_contact_style(reply: str, profile: Dict[str, Any]) -> str:
+    text = _clean_text(reply)
+    if not text:
+        return reply
+    mode = _preferred_style_mode(profile)
+
+    if mode == 'concise':
+        lines = [line.strip() for line in reply.splitlines() if line.strip()]
+        if not lines:
+            return text[:280]
+        compact = "\n".join(lines[:3])
+        if len(compact) > 320:
+            compact = compact[:317].rstrip() + "..."
+        return compact
+
+    if mode == 'bullets':
+        if re.search(r"(?m)^\s*[-*]\s+|^\s*\d+\.", reply):
+            return reply
+        sentences = [part.strip() for part in re.split(r"(?<=[.!?])\s+", text) if part.strip()]
+        if len(sentences) <= 1:
+            return reply
+        return "\n".join(f"- {sentence.rstrip('.')}" for sentence in sentences[:4])
+
+    # detailed/conversational/default keep the authored response.
+    return reply
 
 
 def _format_hour_labels(hours: List[int]) -> Optional[str]:
@@ -2123,6 +2228,7 @@ def render_llm_conversational_reply(
         'inline_profile_updates': _collect_current_message_updates(row, pending_events),
         'profile_context': summarize_profile_for_prompt(profile),
         'activity_snapshot': format_activity_snapshot_lines(profile),
+        'preferred_response_style_mode': _preferred_style_mode(profile),
         'recent_conversation': recent_messages[-8:],
         'pending_profile_updates': summarize_pending_events_for_prompt(pending_events),
     }
@@ -2138,6 +2244,7 @@ def render_llm_conversational_reply(
         "6) If user asks for interview style, ask one focused question at a time.\n"
         "7) If user asks for top 3 things to share, give exactly three profile-focused prompts.\n"
         "8) If user says you missed their ask, apologize once and answer directly.\n"
+        "8.5) Honor preferred_response_style_mode when possible (concise, bullets, detailed, conversational).\n"
         "9) If user says they are unsure what to do, provide 3 concrete next-step options tailored to their context.\n"
         "10) If the message is about another person, answer as a third-party lookup and do NOT treat it as a profile update for the sender.\n"
         "11) Never claim to execute tools, shell commands, HTTP requests, profile-picture changes, reboots, or system-prompt edits.\n"
@@ -2229,9 +2336,15 @@ def render_conversational_reply(
                 'preferred_contact_style': "preferred communication style",
             }
             next_field = field_map[missing_after_capture[0]]
-            return f"{ack_line} Saved: {summary}. Quick follow-up: what should I store for your {next_field}?"
+            response = f"{ack_line} Saved: {summary}. Quick follow-up: what should I store for your {next_field}?"
+            if 'preferred_contact_style' in captured_updates:
+                response += " I’ll use that style in future replies."
+            return apply_preferred_contact_style(response, profile)
 
-        return f"{ack_line} Saved: {summary}. Ask \"What do you know about me?\" for a full snapshot."
+        response = f"{ack_line} Saved: {summary}. Ask \"What do you know about me?\" for a full snapshot."
+        if 'preferred_contact_style' in captured_updates:
+            response += " I’ll use that style in future replies."
+        return apply_preferred_contact_style(response, profile)
 
     if is_likely_profile_update_message(latest_text):
         return (
@@ -2362,11 +2475,14 @@ def render_response(args: argparse.Namespace, conn, row: Dict[str, Any]) -> str:
     if next_onboarding_state != onboarding_state:
         persist_onboarding_state(conn, row.get('sender_db_id'), next_onboarding_state)
     if onboarding_reply:
-        return onboarding_reply
+        return apply_preferred_contact_style(onboarding_reply, profile)
 
     selected_option = extract_option_selection(latest_text)
     if selected_option:
-        return render_option_selection_reply(selected_option, profile, recent_messages)
+        return apply_preferred_contact_style(
+            render_option_selection_reply(selected_option, profile, recent_messages),
+            profile,
+        )
 
     if (
         is_full_profile_request(latest_text)
@@ -2382,8 +2498,11 @@ def render_response(args: argparse.Namespace, conn, row: Dict[str, Any]) -> str:
 
     llm_reply = render_llm_conversational_reply(row, profile, args.persona_name, recent_messages, pending_events)
     if llm_reply and not llm_reply_looks_untrusted(llm_reply):
-        return llm_reply
-    return render_conversational_reply(row, profile, args.persona_name, pending_events)
+        return apply_preferred_contact_style(llm_reply, profile)
+    return apply_preferred_contact_style(
+        render_conversational_reply(row, profile, args.persona_name, pending_events),
+        profile,
+    )
 
 
 def mark_auto_responded(conn) -> int:
