@@ -1,4 +1,6 @@
-const CONTACT_STYLE_KEYWORD_RE = /(?:concise|short|brief|detailed|long|deep|bullet|list|direct|formal|professional|conversational|casual|chatty|back-and-forth)/iu;
+// NOTE: Avoid overly generic keywords like "list" to prevent false positives
+// from product/UX messages ("a list of commands") being misread as a style directive.
+const CONTACT_STYLE_KEYWORD_RE = /(?:concise|short|brief|detailed|long|deep|bullet|direct|formal|professional|conversational|casual|chatty|back-and-forth)/iu;
 const CONTACT_STYLE_DIRECTIVE_RE =
   /(?:talk|speak|communicate|respond|reply)\s+(?:to\s+me\s+)?(?:in|with|using)?\s*([^.!?\n]{3,100})|(?:keep|make)\s+(?:your\s+)?(?:responses|replies|messages)\s+([^.!?\n]{3,100})/giu;
 
@@ -15,7 +17,7 @@ export function normalizeContactStyle(raw: string): string {
   if (!clean) return '';
   const lower = clean.toLowerCase();
 
-  if (lower.includes('bullet') || lower.includes('list')) return 'concise bullets';
+  if (lower.includes('bullet')) return 'concise bullets';
   if (lower.includes('email')) return 'email';
   if (lower.includes('telegram') || lower.includes('dm')) return 'telegram dm';
   if (lower.includes('text') || lower.includes('sms')) return 'text';

@@ -7,6 +7,7 @@ interface StyleCase {
   id: string;
   text: string;
   expected_any: string[];
+  expected_none?: boolean;
 }
 
 interface FixtureFile {
@@ -32,8 +33,23 @@ async function main(): Promise<void> {
 
   for (const c of cases) {
     const text = String(c.text || '');
-    const expected = Array.isArray(c.expected_any) ? c.expected_any : [];
     const directives = extractContactStyleDirectives(text);
+    const expectNone = Boolean((c as any).expected_none);
+    if (expectNone) {
+      const ok = directives.length === 0;
+      if (ok) {
+        passed += 1;
+        console.log(`PASS ${c.id} -> directives=[]`);
+      } else {
+        failed += 1;
+        console.error(
+          `FAIL ${c.id}\n  text=${JSON.stringify(text)}\n  expected_none=true\n  directives=${JSON.stringify(directives)}`,
+        );
+      }
+      continue;
+    }
+
+    const expected = Array.isArray(c.expected_any) ? c.expected_any : [];
     const fallback = normalizeContactStyle(text);
     const actual = directives.length > 0 ? directives : (fallback ? [fallback] : []);
     const ok = hasExpectedMatch(actual, expected);

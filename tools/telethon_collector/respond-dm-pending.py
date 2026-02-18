@@ -139,7 +139,9 @@ _CAPABILITIES_QUERY_RE = re.compile(
     r"what\s+can\s+i\s+use\s+this\s+for|how\s+does\s+this\s+work|how\s+do\s+i\s+use\s+this|"
     r"what\s+is\s+the\s+process|interview\s+process|"
     r"what\s+is\s+the\s+purpose|purpose\s+of\s+this|"
-    r"i'?m\s+confused|this\s+is\s+confusing|why\s+am\s+i\s+doing\s+this|what\s+does\s+this\s+do)\b",
+    r"i'?m\s+confused|this\s+is\s+confusing|"
+    r"no\s+idea\s+what\s+that\s+means|what\s+do\s+you\s+mean|what\s+does\s+(?:this|that)\s+mean|"
+    r"why\s+am\s+i\s+doing\s+this|what\s+does\s+this\s+do)\b",
     re.IGNORECASE,
 )
 _UNSUPPORTED_ACTION_RE = re.compile(
@@ -184,6 +186,37 @@ _QUESTION_LIKE_RE = re.compile(
     r")",
     re.IGNORECASE,
 )
+_HELP_RE = re.compile(
+    r"\b(?:help|menu|commands?|"
+    r"start\s+here|get\s+started|getting\s+started|"
+    r"how\s+do\s+i\s+(?:use|start)|how\s+to\s+(?:use|start)|"
+    r"what\s+can\s+i\s+(?:say|ask)|"
+    r"list\s+of\s+(?:commands?|starting\s+commands?))\b",
+    re.IGNORECASE,
+)
+_FEEDBACK_RE = re.compile(
+    r"^\s*(feedback|idea|feature|bug|request)\s*:\s*(.{3,2000})\s*$",
+    re.IGNORECASE,
+)
+_THIRD_PARTY_EDIT_POLICY_RE = re.compile(
+    r"\b(?:am\s+i\s+allowed\s+to|can\s+i|allowed\s+to)\s+(?:modify|edit|change|update)\s+"
+    r"(?:another|other|someone\s+else(?:'s)?|a)\s+(?:user|person)\b.{0,20}\bprofile\b|"
+    r"\b(?:modify|edit|change|update)\s+(?:another|other|someone\s+else(?:'s)?|a)\s+(?:user|person)\b.{0,20}\bprofile\b",
+    re.IGNORECASE,
+)
+_THIRD_PARTY_LOOKUP_STORAGE_RE = re.compile(
+    r"\b(?:do\s+you\s+(?:store|save|keep)|are\s+you\s+storing|does\s+this\s+store)\b.{0,80}\b(?:ask\s+about|look\s+up|query)\b.{0,40}\b(?:another|other)\b.{0,20}\b(?:user|person)\b|"
+    r"\b(?:do\s+you\s+store|does\s+it\s+store)\b.{0,40}\b(?:info|information|data)\b.{0,40}\b(?:about|on)\b.{0,12}\b(?:them|another\s+user|other\s+users?)\b",
+    re.IGNORECASE,
+)
+_MORE_PROFILE_INFO_RE = re.compile(
+    r"^\s*(?:what\s+else|anything\s+else|more)\s*[?.!]*\s*$",
+    re.IGNORECASE,
+)
+_GROUP_POPULAR_TIME_RE = re.compile(
+    r"\b(?:most\s+popular\s+time|peak\s+time|peak\s+hours?)\b.{0,120}\b(?:in|inside)\b.{0,60}\b(?:group|chat)\b",
+    re.IGNORECASE,
+)
 _ONBOARDING_START_RE = re.compile(
     r"\b(?:onboard|onboarding|set\s+up\s+my\s+profile|setup\s+my\s+profile|initialize\s+my\s+profile|update\s+my\s+profile|"
     r"pretend\s+it'?s\s+my\s+first\s+message|pretend\s+this\s+is\s+my\s+first\s+message|"
@@ -223,7 +256,10 @@ _PROFILE_DATA_PROVENANCE_RE = re.compile(
     r"how\s+did\s+you\s+get\s+this\s+(?:information|info|data)|"
     r"how\s+do\s+you\s+know\s+(?:this|that)|"
     r"data\s+source(?:s)?|source\s+of\s+this|"
-    r"what\s+(?:other\s+)?data\s+do\s+you\s+have(?:\s+on\s+me)?)\b",
+    r"what\s+(?:other\s+)?data\s+do\s+you\s+have(?:\s+on\s+me)?|"
+    r"is\s+there\s+(?:any\s+)?other\s+data\s+(?:on|about)\s+me|"
+    r"do\s+you\s+have\s+(?:any\s+)?other\s+data\s+(?:on|about)\s+me|"
+    r"what\s+else\s+do\s+you\s+have\s+(?:on|about)\s+me)\b",
     re.IGNORECASE,
 )
 _ACTIVITY_ANALYTICS_RE = re.compile(
@@ -262,8 +298,18 @@ _FREEFORM_PRIORITY_RE = re.compile(
     r"my\s+priorities?\s+(?:are|is))\s+([^.!?\n]{3,180})",
     re.IGNORECASE,
 )
+_FEEDBACKY_TOPIC_RE = re.compile(
+    r"\b(?:"
+    r"onboarding|"
+    r"you\s+asked|asked\s+me|same\s+question|same\s+questions|again|repeat|repeating|stop\s+asking|"
+    r"no\s+idea\s+what\s+that\s+means|i\s+want\s+to\s+know\s+what|what\s+do\s+you\s+mean|what\s+does\s+(?:this|that)\s+mean|"
+    r"i'?m\s+confused|this\s+is\s+confusing|fragmented|clunky|"
+    r"what\s+is\s+the\s+process|why\s+am\s+i\s+doing\s+this|what\s+does\s+this\s+do"
+    r")\b",
+    re.IGNORECASE,
+)
 _CONTACT_STYLE_KEYWORD_RE = re.compile(
-    r"\b(?:concise|short|brief|detailed|long|deep|bullet(?:s)?|list|quick\s+back-and-forth|back-and-forth|"
+    r"\b(?:concise|short|brief|detailed|long|deep|bullet(?:s)?|quick\s+back-and-forth|back-and-forth|"
     r"conversational|casual|chatty|normal|direct|formal|professional|playful|technical)\b",
     re.IGNORECASE,
 )
@@ -377,6 +423,41 @@ def _to_string_list(value: Any, max_items: int = 8) -> List[str]:
                     out.append(cleaned)
                 if len(out) >= max_items:
                     return out
+    return out
+
+
+def looks_like_feedback_topic(value: str) -> bool:
+    clean = _clean_text(value).strip(" .,!?:;\"'`")
+    if not clean:
+        return False
+    if "?" in clean:
+        return True
+    if _FEEDBACKY_TOPIC_RE.search(clean):
+        return True
+    # Long sentence-like blobs without separators are usually UX/intent feedback, not a topic list.
+    has_sep = bool(re.search(r",|;|\n|\band\b|&", clean, flags=re.IGNORECASE))
+    if not has_sep and len(clean.split()) > 14:
+        return True
+    return False
+
+
+def sanitize_notable_topics(value: Any, max_items: int = 10) -> List[str]:
+    raw = _to_string_list(value, max_items=max_items * 3)
+    out: List[str] = []
+    seen: Set[str] = set()
+    for item in raw:
+        clean = _clean_text(item).strip(" .,!?:;\"'`")
+        if not clean:
+            continue
+        if looks_like_feedback_topic(clean):
+            continue
+        key = clean.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(clean)
+        if len(out) >= max_items:
+            break
     return out
 
 
@@ -541,6 +622,7 @@ PROFILE_QUERY_CANDIDATE_COLUMNS = [
     'role_company_timeline',
 ]
 _PROFILE_QUERY_COLUMNS_CACHE: Optional[List[str]] = None
+_DM_FEEDBACK_TABLE_AVAILABLE: Optional[bool] = None
 ONBOARDING_REQUIRED_FIELDS = ['primary_role', 'primary_company', 'notable_topics', 'preferred_contact_style']
 ONBOARDING_SLOT_QUESTIONS: Dict[str, List[str]] = {
     'primary_role': [
@@ -872,6 +954,83 @@ def _persist_profile_snapshot(conn, sender_db_id: Optional[int], snapshot: Dict[
         )
 
 
+def dm_feedback_table_available(conn) -> bool:
+    global _DM_FEEDBACK_TABLE_AVAILABLE
+    if _DM_FEEDBACK_TABLE_AVAILABLE is not None:
+        return bool(_DM_FEEDBACK_TABLE_AVAILABLE)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT 1
+                FROM information_schema.tables
+                WHERE table_schema = 'public'
+                  AND table_name = 'dm_feedback'
+                LIMIT 1
+                """,
+            )
+            _DM_FEEDBACK_TABLE_AVAILABLE = cur.fetchone() is not None
+    except Exception:
+        _DM_FEEDBACK_TABLE_AVAILABLE = False
+    return bool(_DM_FEEDBACK_TABLE_AVAILABLE)
+
+
+def persist_feedback(
+    conn,
+    *,
+    row: Dict[str, Any],
+    sender_db_id: Optional[int],
+    kind: str,
+    body: str,
+) -> None:
+    if not sender_db_id:
+        return
+
+    conversation_id = row.get('conversation_id')
+    source_message_id = _to_int(row.get('id'))
+    source_external_message_id = _as_text(row.get('external_message_id'))
+
+    if dm_feedback_table_available(conn):
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO dm_feedback (
+                  user_id,
+                  conversation_id,
+                  source_message_id,
+                  source_external_message_id,
+                  kind,
+                  text
+                )
+                VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                [
+                    sender_db_id,
+                    conversation_id,
+                    source_message_id,
+                    source_external_message_id,
+                    kind[:32],
+                    body[:4000],
+                ],
+            )
+        return
+
+    # Fallback: append to a local log file (works even before DB migration is applied).
+    log_path = _ROOT_DIR / 'data' / 'logs' / 'dm-feedback.log'
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    event = {
+        'ts': datetime.now(timezone.utc).isoformat(),
+        'user_id': sender_db_id,
+        'conversation_id': conversation_id,
+        'source_message_id': source_message_id,
+        'source_external_message_id': source_external_message_id,
+        'kind': kind,
+        'text': body,
+    }
+    with open(log_path, 'a', encoding='utf-8') as f:
+        f.write(json.dumps(event, ensure_ascii=True) + "\n")
+
+
 def fetch_contact_style_state(conn, sender_db_id: Optional[int]) -> Dict[str, Any]:
     snapshot = _fetch_profile_snapshot(conn, sender_db_id)
     return _parse_contact_style_state_from_snapshot(snapshot)
@@ -1007,7 +1166,7 @@ def _parse_profile_overrides_from_snapshot(snapshot: Dict[str, Any]) -> Dict[str
     overrides: Dict[str, Any] = {}
     role = _as_text(raw.get('primary_role'))
     company = _as_text(raw.get('primary_company'))
-    topics = _to_string_list(raw.get('notable_topics'), max_items=10)
+    topics = sanitize_notable_topics(raw.get('notable_topics'), max_items=10)
     if role:
         overrides['primary_role'] = role
     if company:
@@ -1028,15 +1187,11 @@ def merge_profile_overrides_into_profile(profile: Dict[str, Any], overrides: Dic
         merged['primary_role'] = role
     if company:
         merged['primary_company'] = company
-    if isinstance(topics, list) and topics:
-        base = [str(item) for item in (merged.get('notable_topics') or []) if isinstance(item, str)]
+    override_topics = sanitize_notable_topics(topics, max_items=10)
+    if override_topics:
+        base = sanitize_notable_topics(merged.get('notable_topics'), max_items=10)
         base_set = {item.lower() for item in base}
-        for topic in topics:
-            if not isinstance(topic, str):
-                continue
-            t = _clean_text(topic)
-            if not t:
-                continue
+        for t in override_topics:
             key = t.lower()
             if key in base_set:
                 continue
@@ -1068,9 +1223,9 @@ def is_style_confirmation_no(text: Optional[str]) -> bool:
 def render_style_confirmation_prompt(style_value: str, confidence: Optional[float]) -> str:
     band = style_confidence_band(confidence)
     if band == 'medium':
-        prefix = f"Got it — I detected you want \"{style_value}\"."
+        prefix = f"Quick note: I can remember how you want me to write. I detected \"{style_value}\"."
     else:
-        prefix = f"I might have read this as \"{style_value}\"."
+        prefix = f"Quick note: I might have misread this as a style request (\"{style_value}\")."
     return f"{prefix} Want me to switch to that style? Reply yes or no."
 
 
@@ -1309,7 +1464,7 @@ def _normalize_contact_style_text(raw: str) -> Optional[str]:
     source = _clean_text(raw).lower()
     if not source:
         return None
-    if 'bullet' in source or 'list' in source:
+    if 'bullet' in source:
         return 'concise bullets'
     if any(token in source for token in ('concise', 'short', 'brief')):
         return 'concise'
@@ -1468,7 +1623,7 @@ def fetch_latest_profile(conn, sender_db_id: Optional[int]) -> Dict[str, Any]:
     profile['seniority_signal'] = _as_text(row.get('seniority_signal'))
     profile['based_in'] = _as_text(row.get('based_in'))
     profile['commercial_archetype'] = _as_text(row.get('commercial_archetype'))
-    profile['notable_topics'] = _to_string_list(row.get('notable_topics'), max_items=10)
+    profile['notable_topics'] = sanitize_notable_topics(row.get('notable_topics'), max_items=10)
     profile['attended_events'] = _to_string_list(row.get('attended_events'), max_items=6)
     profile['driving_values'] = _to_string_list(row.get('driving_values'), max_items=6)
     profile['pain_points'] = _to_string_list(row.get('pain_points'), max_items=6)
@@ -1518,7 +1673,7 @@ def fetch_latest_dm_reconciler_overrides(conn, sender_db_id: Optional[int]) -> D
         overrides['primary_role'] = role
     if company:
         overrides['primary_company'] = company
-    topics = _to_string_list(row.get('notable_topics'), max_items=10)
+    topics = sanitize_notable_topics(row.get('notable_topics'), max_items=10)
     if topics:
         overrides['notable_topics'] = topics
     # preferred_contact_style is handled via dm_profile_state.snapshot.style_preference (confirmation-gated).
@@ -1549,8 +1704,8 @@ def apply_pending_profile_events(profile: Dict[str, Any], events: List[Dict[str,
         return profile
 
     merged = dict(profile)
-    topics = list(merged.get('notable_topics') or [])
-    topic_set = {item.lower() for item in topics if isinstance(item, str)}
+    topics = sanitize_notable_topics(merged.get('notable_topics'), max_items=10)
+    topic_set = {item.lower() for item in topics}
 
     for evt in events:
         facts = evt.get('extracted_facts')
@@ -1572,6 +1727,8 @@ def apply_pending_profile_events(profile: Dict[str, Any], events: List[Dict[str,
                 # Do not apply raw extracted facts here, or we can accidentally flip style before user confirms.
                 continue
             elif field == 'notable_topics':
+                if looks_like_feedback_topic(new_value):
+                    continue
                 key = new_value.lower()
                 if key not in topic_set:
                     topics.append(new_value)
@@ -1740,6 +1897,76 @@ def is_capabilities_request(text: Optional[str]) -> bool:
     if not source:
         return False
     return bool(_CAPABILITIES_QUERY_RE.search(source))
+
+
+def is_help_request(text: Optional[str]) -> bool:
+    source = _clean_text(text)
+    if not source:
+        return False
+    return bool(_HELP_RE.search(source))
+
+
+def parse_feedback_message(text: Optional[str]) -> Optional[Dict[str, str]]:
+    source = _clean_text(text)
+    if not source:
+        return None
+    match = _FEEDBACK_RE.match(source)
+    if not match:
+        return None
+    kind = _clean_text(match.group(1)).lower()
+    body = _clean_text(match.group(2))
+    if not body:
+        return None
+    return {'kind': kind, 'body': body}
+
+
+def is_third_party_edit_policy_request(text: Optional[str]) -> bool:
+    source = _clean_text(text)
+    if not source:
+        return False
+    return bool(_THIRD_PARTY_EDIT_POLICY_RE.search(source))
+
+
+def is_third_party_lookup_storage_request(text: Optional[str]) -> bool:
+    source = _clean_text(text)
+    if not source:
+        return False
+    return bool(_THIRD_PARTY_LOOKUP_STORAGE_RE.search(source))
+
+
+def is_more_profile_info_request(text: Optional[str], recent_messages: List[Dict[str, str]]) -> bool:
+    source = _clean_text(text)
+    if not source:
+        return False
+    if not _MORE_PROFILE_INFO_RE.search(source):
+        return False
+    # Only treat this as "show more" if they recently requested their profile snapshot.
+    for msg in reversed(recent_messages[-6:]):
+        if msg.get('direction') == 'inbound' and is_full_profile_request(msg.get('text')):
+            return True
+    return False
+
+
+def extract_group_query(text: Optional[str]) -> Optional[str]:
+    source = _clean_text(text)
+    if not source:
+        return None
+    # Prefer quoted group names.
+    m = re.search(r"[\"“”']([^\"“”']{2,120})[\"“”']", source)
+    if m:
+        return _clean_text(m.group(1)).strip(" .,!?:;\"'`")[:120]
+    # Fallback: take whatever comes after "group" if present.
+    m = re.search(r"\bgroup\b\s*(?:named\s+)?(.{2,140})$", source, re.IGNORECASE)
+    if m:
+        return _clean_text(m.group(1)).strip(" .,!?:;\"'`")[:120]
+    return None
+
+
+def is_group_popular_time_request(text: Optional[str]) -> bool:
+    source = _clean_text(text)
+    if not source:
+        return False
+    return bool(_GROUP_POPULAR_TIME_RE.search(source))
 
 
 def is_unsupported_action_request(text: Optional[str]) -> bool:
@@ -1994,14 +2221,14 @@ def _split_plain_topics_answer(text: str) -> List[str]:
         return []
     if len(source) > 220:
         return []
-    # Avoid treating questions as topic lists.
-    if "?" in source:
+    # Avoid treating questions/confusion/UX feedback as topic lists.
+    if looks_like_feedback_topic(source):
+        return []
+    has_sep = bool(re.search(r",|;|\n|\band\b|&", source, flags=re.IGNORECASE))
+    if not has_sep and len(source.split()) > 8:
         return []
     lowered = source.lower().strip(" .,!?:;\"'`")
     if lowered in ("yes", "yep", "yeah", "no", "nah", "nope", "ok", "okay", "sure", "k", "cool"):
-        return []
-    # Avoid treating complaints/UX feedback as topics.
-    if re.search(r"\b(?:you\s+asked|asked\s+me|same\s+question|same\s+questions|again|repeat|repeating|stop\s+asking)\b", lowered):
         return []
 
     parts = re.split(r",|;|\n|\band\b|&", source, flags=re.IGNORECASE)
@@ -2018,6 +2245,8 @@ def _split_plain_topics_answer(text: str) -> List[str]:
             flags=re.IGNORECASE,
         ).strip()
         if len(clean) < 2:
+            continue
+        if looks_like_feedback_topic(clean):
             continue
         key = clean.lower()
         if key in seen:
@@ -2128,7 +2357,7 @@ def _preferred_style_mode(profile: Dict[str, Any]) -> str:
     lower = style.lower()
     if not lower:
         return 'default'
-    if 'bullet' in lower or 'list' in lower:
+    if 'bullet' in lower:
         return 'bullets'
     if 'direct' in lower:
         return 'direct'
@@ -2289,8 +2518,8 @@ def format_profile_snapshot_lines(profile: Dict[str, Any], include_activity: boo
         else:
             lines.append(f"Preferred communication: {contact}")
 
-    topics = profile.get('notable_topics') or []
-    if isinstance(topics, list) and topics:
+    topics = sanitize_notable_topics(profile.get('notable_topics'), max_items=10)
+    if topics:
         lines.append(f"Priorities/topics: {', '.join(topics[:5])}")
 
     skills = profile.get('deep_skills') or []
@@ -2464,7 +2693,7 @@ def _build_profile_gap_prompts(profile: Dict[str, Any], count: int = 3) -> List[
     prompts: List[str] = []
     role = _as_text(profile.get('primary_role'))
     company = _as_text(profile.get('primary_company'))
-    priorities = [str(item) for item in (profile.get('notable_topics') or []) if isinstance(item, str)]
+    priorities = sanitize_notable_topics(profile.get('notable_topics'), max_items=10)
     contact_style = _as_text(profile.get('preferred_contact_style'))
     based_in = _as_text(profile.get('based_in'))
 
@@ -2886,20 +3115,30 @@ def render_control_plane_reply(persona_name: str) -> str:
 
 
 def render_capabilities_reply(profile: Dict[str, Any], persona_name: str) -> str:
-    prompts = _build_profile_gap_prompts(profile, count=1)
-    next_q = prompts[0] if prompts else "What role/title should I store for you right now?"
-    return (
-        f"Hey — I’m {persona_name}, an AI profile assistant (not a human).\n"
-        "This chat is for keeping your profile dataset current and letting you query it.\n"
-        "How to use it:\n"
-        "- Ask: \"What do you know about me?\" (snapshot)\n"
-        "- Ask about someone else: \"What do you know about @handle?\" (lookup only, won’t change your profile)\n"
-        "- Send updates in plain English or `field: value` (role/company/priorities/communication)\n"
-        "- Say: \"interview mode\" (I ask one question at a time)\n"
-        "Safety: I won’t ask you for money, seed phrases, or API keys.\n"
-        "I won’t do work-planning unless you explicitly ask with `advice:`.\n"
-        f"{next_q}"
-    )
+    missing = [slot for slot in ONBOARDING_REQUIRED_FIELDS if not _slot_has_value(profile, slot)]
+    next_q = None
+    if missing:
+        prompts = _build_profile_gap_prompts(profile, count=1)
+        next_q = prompts[0] if prompts else "What role/title should I store for you right now?"
+
+    lines = [
+        f"Hey — I’m {persona_name}, an AI profile assistant (not a human).",
+        "This chat is for keeping your profile dataset current and letting you query it.",
+        "Quick start (things you can say):",
+        "- Snapshot: \"What do you know about me?\"",
+        "- Update: `role: ...` / `company: ...` / `priorities: ...` / `communication: ...`",
+        "- Interview mode: \"interview mode\" (one question at a time)",
+        "- Lookup: \"What do you know about @handle?\" (read-only, won’t change anyone’s profile)",
+        "- Analytics: \"What groups am I in?\" / \"When am I most active?\"",
+        "- Feedback: `feedback: ...` (logs a product idea/bug report)",
+        "Safety: I won’t ask you for money, seed phrases, or API keys.",
+        "I won’t do work-planning unless you explicitly ask with `advice:`.",
+    ]
+    if next_q:
+        lines.append(next_q)
+    else:
+        lines.append("If you want to update something now: what changed most recently (role, company, priorities, or communication style)?")
+    return "\n".join(lines)
 
 
 def render_unsupported_action_reply() -> str:
@@ -2932,6 +3171,140 @@ def render_non_text_marker_reply() -> str:
         "I can only process text in this chat.\n"
         "Send a short text summary and I’ll handle it."
     )
+
+
+def render_help_reply(profile: Dict[str, Any], persona_name: str) -> str:
+    # Currently identical to capabilities; keep a dedicated entry-point so it can diverge later without touching routing.
+    return render_capabilities_reply(profile, persona_name)
+
+
+def render_third_party_edit_policy_reply() -> str:
+    return (
+        "No — you can’t directly edit another person’s profile through this chat.\n"
+        "When you ask about @handle, I treat it as a read-only lookup (it won’t change your profile or theirs).\n"
+        "If you have a correction, the clean path is: ask them to DM me the update (or have them send `role: ...` / `company: ...`)."
+    )
+
+
+def render_third_party_lookup_storage_reply() -> str:
+    return (
+        "Third-party lookups are read-only.\n"
+        "I don’t store new facts about them just because you asked.\n"
+        "I may log that a lookup happened for debugging, but it won’t modify profiles."
+    )
+
+
+def render_feedback_ack_reply(kind: str) -> str:
+    kind_label = kind.strip().lower() or 'feedback'
+    if kind_label == 'bug':
+        header = "Thanks — logged as a bug report."
+    elif kind_label in ('feature', 'request'):
+        header = "Thanks — logged as a feature request."
+    elif kind_label == 'idea':
+        header = "Thanks — logged as a product idea."
+    else:
+        header = "Thanks — logged as feedback."
+    return (
+        f"{header}\n"
+        "If you want to make it actionable, add:\n"
+        "- expected behavior\n"
+        "- what happened instead"
+    )
+
+
+def render_more_profile_context_reply(profile: Dict[str, Any], persona_name: str) -> str:
+    lines = format_profile_snapshot_lines(profile, include_activity=True)
+    if not lines:
+        return (
+            f"I don’t have a usable profile for {persona_name}'s view of you yet.\n"
+            "Send this quick format and I’ll save it immediately:\n"
+            "role: ...\ncompany: ...\npriorities: ...\ncommunication: ..."
+        )
+    if len(lines) <= 10:
+        bullets = "\n".join(f"- {line}" for line in lines[:10])
+        return f"That’s everything I have right now:\n{bullets}"
+    extra = lines[10:18]
+    bullets = "\n".join(f"- {line}" for line in extra)
+    return (
+        "More profile context I have:\n"
+        f"{bullets}\n"
+        "If you want a specific slice, ask: activity, groups, skills, or communication style."
+    )
+
+
+def render_group_popular_time_reply(conn, group_query: str) -> str:
+    q = _clean_text(group_query).strip(" .,!?:;\"'`")
+    if not q:
+        return "Which group? Send the exact group name in quotes (example: \"BTC Connect ⚡️🚀\")."
+
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """
+            SELECT id, title
+            FROM groups
+            WHERE title ILIKE %s
+            ORDER BY (CASE WHEN lower(title) = lower(%s) THEN 0 ELSE 1 END), updated_at DESC, id DESC
+            LIMIT 5
+            """,
+            [f"%{q}%", q],
+        )
+        matches = list(cur.fetchall())
+
+    if not matches:
+        return (
+            f"I couldn’t find a group matching: {q!r}.\n"
+            "Try the exact group title (copy/paste) or put it in quotes."
+        )
+
+    if len(matches) > 1 and all(_clean_text(m.get('title') or '').lower() != q.lower() for m in matches):
+        options = "\n".join(f"- {m.get('title')}" for m in matches if m.get('title'))
+        return (
+            "I found multiple matching groups. Reply with the exact one:\n"
+            f"{options}"
+        )
+
+    group_id = matches[0]['id']
+    group_title = matches[0].get('title') or q
+
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """
+            SELECT
+              EXTRACT(HOUR FROM (sent_at AT TIME ZONE 'UTC'))::int AS hour_utc,
+              COUNT(*)::bigint AS msg_count
+            FROM messages
+            WHERE group_id = %s
+            GROUP BY 1
+            ORDER BY msg_count DESC
+            LIMIT 5
+            """,
+            [group_id],
+        )
+        rows = list(cur.fetchall())
+        cur.execute(
+            "SELECT MIN(sent_at) AS first_seen, MAX(sent_at) AS last_seen, COUNT(*)::bigint AS total FROM messages WHERE group_id = %s",
+            [group_id],
+        )
+        window = cur.fetchone() or {}
+
+    if not rows:
+        return f"I found {group_title!r}, but I don’t have any message history indexed for it yet."
+
+    labels = [f"{int(r['hour_utc']):02d}:00 ({int(r['msg_count'])})" for r in rows if r.get('hour_utc') is not None]
+    first_seen = window.get('first_seen')
+    last_seen = window.get('last_seen')
+    total = window.get('total')
+    window_line = None
+    if first_seen and last_seen and total:
+        window_line = f"Window: {str(first_seen)[:10]} -> {str(last_seen)[:10]} (total msgs: {int(total)})"
+
+    lines = [
+        f"Most active hours in {group_title} (UTC):",
+        "- " + ", ".join(labels),
+    ]
+    if window_line:
+        lines.append(window_line)
+    return "\n".join(lines)
 
 
 def _latest_outbound_text(recent_messages: List[Dict[str, str]]) -> str:
@@ -3568,6 +3941,25 @@ def render_response(args: argparse.Namespace, conn, row: Dict[str, Any]) -> str:
         return finalize_reply(render_disengage_reply())
     if is_non_text_marker(latest_text):
         return finalize_reply(render_non_text_marker_reply())
+    feedback = parse_feedback_message(latest_text)
+    if feedback:
+        persist_feedback(
+            conn,
+            row=row,
+            sender_db_id=sender_db_id,
+            kind=feedback['kind'],
+            body=feedback['body'],
+        )
+        return finalize_reply(render_feedback_ack_reply(feedback['kind']))
+    if is_help_request(latest_text):
+        return finalize_reply(render_help_reply(profile, args.persona_name))
+    if is_third_party_edit_policy_request(latest_text):
+        return finalize_reply(render_third_party_edit_policy_reply())
+    if is_third_party_lookup_storage_request(latest_text):
+        return finalize_reply(render_third_party_lookup_storage_reply())
+    if is_group_popular_time_request(latest_text):
+        group_q = extract_group_query(latest_text) or ''
+        return finalize_reply(render_group_popular_time_reply(conn, group_q))
     if is_capabilities_request(latest_text):
         return finalize_reply(render_capabilities_reply(profile, args.persona_name))
     if is_unsupported_action_request(latest_text):
@@ -3586,6 +3978,8 @@ def render_response(args: argparse.Namespace, conn, row: Dict[str, Any]) -> str:
         return finalize_reply(render_profile_data_provenance_reply(profile))
     if is_profile_confirmation_request(latest_text):
         return finalize_reply(render_profile_confirmation_reply(row, profile, pending_events))
+    if is_more_profile_info_request(latest_text, recent_messages):
+        return finalize_reply(render_more_profile_context_reply(profile, args.persona_name))
 
     onboarding_reply, next_onboarding_state = render_onboarding_flow_reply(
         row,

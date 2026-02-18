@@ -25,6 +25,12 @@
       "id": "normal-chatty",
       "text": "normal chatty is fine",
       "expected_any": ["quick back-and-forth"]
+    },
+    {
+      "id": "commands-list-is-not-style",
+      "text": "It would be helpful if next time when I say hello, I'm told who you are, how to get started. perhaps a complete list of starting commands and what they do.",
+      "expected_any": [],
+      "expected_none": true
     }
   ]
 }
