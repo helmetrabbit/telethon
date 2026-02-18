@@ -247,7 +247,14 @@ _MORE_PROFILE_INFO_RE = re.compile(
     re.IGNORECASE,
 )
 _GROUP_POPULAR_TIME_RE = re.compile(
-    r"\b(?:most\s+popular\s+time|peak\s+time|peak\s+hours?)\b.{0,120}\b(?:in|inside)\b.{0,60}\b(?:group|chat)\b",
+    r"\b(?:"
+    r"most\s+popular\s+time(?:s)?|"
+    r"most\s+active\s+(?:time|times|hours?)|"
+    r"busiest\s+(?:time|times|hours?)|"
+    r"peak\s+time(?:s)?|"
+    r"peak\s+hours?"
+    r")\b"
+    r".{0,160}\b(?:in|inside|within|for)\b.{0,120}\b(?:group|chat|channel)\b",
     re.IGNORECASE,
 )
 _ONBOARDING_START_RE = re.compile(
@@ -2183,8 +2190,12 @@ def extract_group_query(text: Optional[str]) -> Optional[str]:
     m = re.search(r"[\"“”']([^\"“”']{2,120})[\"“”']", source)
     if m:
         return _clean_text(m.group(1)).strip(" .,!?:;\"'`")[:120]
+    # Common phrasing: "in the <group> group" (group name before the word "group")
+    m = re.search(r"\b(?:in|inside|within)\s+(?:the\s+)?(.{2,120}?)\s+(?:group|chat|channel)\b", source, re.IGNORECASE)
+    if m:
+        return _clean_text(m.group(1)).strip(" .,!?:;\"'`")[:120]
     # Fallback: take whatever comes after "group" if present.
-    m = re.search(r"\bgroup\b\s*(?:named\s+)?(.{2,140})$", source, re.IGNORECASE)
+    m = re.search(r"\b(?:group|chat|channel)\b\s*(?:named\s+)?(.{2,140})$", source, re.IGNORECASE)
     if m:
         return _clean_text(m.group(1)).strip(" .,!?:;\"'`")[:120]
     return None
@@ -3822,10 +3833,14 @@ def render_group_popular_time_reply(conn, group_query: str) -> str:
             SELECT id, title
             FROM groups
             WHERE title ILIKE %s
-            ORDER BY (CASE WHEN lower(title) = lower(%s) THEN 0 ELSE 1 END), updated_at DESC, id DESC
+               OR group_description ILIKE %s
+            ORDER BY
+              (CASE WHEN lower(title) = lower(%s) THEN 0 ELSE 1 END),
+              updated_at DESC,
+              id DESC
             LIMIT 5
             """,
-            [f"%{q}%", q],
+            [f"%{q}%", f"%{q}%", q],
         )
         matches = list(cur.fetchall())
 
