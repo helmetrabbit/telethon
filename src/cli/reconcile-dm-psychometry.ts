@@ -94,6 +94,26 @@ function sanitizeContactStyle(value: string | null): string {
   return (value || '').replace(/[\t\n\r]+/g, ' ').replace(/[.]$/, '').trim();
 }
 
+function sanitizeTopicToken(value: string | null): string {
+  return (value || '').replace(/[\t\n\r]+/g, ' ').replace(/\s{2,}/g, ' ').trim().toLowerCase();
+}
+
+function isGarbageTopicToken(value: string): boolean {
+  const clean = sanitizeTopicToken(value);
+  if (!clean) return true;
+  if (clean.length < 2) return true;
+  if (clean.length > 120) return true;
+  // These are almost always "meta" sentences or confusion, not real tags.
+  if (/[?]/.test(clean)) return true;
+  if (/[.]/.test(clean) && clean.length > 40) return true;
+  if (/\b(onboarding|confus|confusing|no idea what|what do you mean|why are you messaging me|scam|system prompt|api key|seed phrase)\b/i.test(clean)) {
+    return true;
+  }
+  // Prevent accidental dumping of whole sentences into tag fields.
+  if (clean.split(/\s+/).length > 10) return true;
+  return false;
+}
+
 function normalizeTopics(value: unknown): string[] {
   if (typeof value === 'string') {
     const raw = value.trim();
@@ -108,8 +128,8 @@ function normalizeTopics(value: unknown): string[] {
     }
     return raw
       .split(/,|;|\band\b|\&/gi)
-      .map((token) => token.replace(/[\t\n\r]+/g, ' ').trim().toLowerCase())
-      .filter((token) => token.length >= 2)
+      .map((token) => sanitizeTopicToken(token))
+      .filter((token) => !isGarbageTopicToken(token))
       .slice(0, 10);
   }
 
@@ -117,8 +137,9 @@ function normalizeTopics(value: unknown): string[] {
   const out = new Set<string>();
   for (const item of value) {
     if (typeof item !== 'string') continue;
-    const clean = item.replace(/[\t\n\r]+/g, ' ').trim().toLowerCase();
+    const clean = sanitizeTopicToken(item);
     if (!clean) continue;
+    if (isGarbageTopicToken(clean)) continue;
     out.add(clean);
   }
   return [...out];
@@ -235,8 +256,9 @@ function applyProfilePatch(base: PsychRow, events: DbEvent[]): {
           reasoning += `\n[DM profile-correction ${new Date().toISOString()}] Queued preferred_contact_style candidate '${newContactStyle}' for confirmation (${STYLE_CONFLICT_RESOLUTION_RULE}, band=${confidenceBand}, confidence=${confidenceLabel}, auto_apply_threshold=${CONTACT_STYLE_AUTO_APPLY_THRESHOLD.toFixed(2)}).`;
         }
       } else if (fact.field === 'notable_topics') {
-        const topic = (fact.new_value || '').trim().toLowerCase();
+        const topic = sanitizeTopicToken(fact.new_value);
         if (!topic) continue;
+        if (isGarbageTopicToken(topic)) continue;
         if (!nextTopics.has(topic)) {
           nextTopics.add(topic);
           reasoning += `\n[DM profile-correction ${new Date().toISOString()}] Added notable topic '${topic}'.`;
@@ -321,6 +343,37 @@ async function reconcileUsers(targetUserIds: string[] = [], limit = 0): Promise<
 
     if (!eventsRes.rows.length) continue;
 
+    // Sticky overrides: when other pipelines create a newer psychographics row,
+    // we must re-apply *historical* DM corrections so role/company/topics don't regress.
+    const allEventsRes = await db.query<DbEvent>(
+      `SELECT id::text, user_id::text, event_type, event_payload::jsonb as event_payload,
+              extracted_facts::jsonb as extracted_facts, confidence, created_at::text
+       FROM dm_profile_update_events
+       WHERE user_id = $1
+       ORDER BY id ASC`,
+      [userId],
+    );
+    const allEvents = allEventsRes.rows;
+    let stickyRole: string | null = null;
+    let stickyCompany: string | null = null;
+    const stickyTopics = new Set<string>();
+    for (const evt of allEvents) {
+      for (const fact of evt.extracted_facts || []) {
+        if (fact.field === 'primary_role') {
+          const role = sanitizeRole(fact.new_value);
+          if (role) stickyRole = role;
+        } else if (fact.field === 'primary_company') {
+          const company = sanitizeCompany(fact.new_value);
+          if (company) stickyCompany = company;
+        } else if (fact.field === 'notable_topics') {
+          const topic = sanitizeTopicToken(fact.new_value);
+          if (!topic) continue;
+          if (isGarbageTopicToken(topic)) continue;
+          stickyTopics.add(topic);
+        }
+      }
+    }
+
     const existingStateRes = await db.query<{ snapshot: Record<string, unknown> | null }>(
       `SELECT snapshot::jsonb AS snapshot
        FROM dm_profile_state
@@ -373,7 +426,20 @@ async function reconcileUsers(targetUserIds: string[] = [], limit = 0): Promise<
       };
     }
 
-    const patch = applyProfilePatch(latest, eventsRes.rows);
+    const seededTopics = new Set<string>(normalizeTopics(latest.notable_topics));
+    for (const topic of stickyTopics) seededTopics.add(topic);
+    const seededLatest: PsychRow = {
+      ...latest,
+      primary_role: stickyRole || latest.primary_role,
+      primary_company: stickyCompany || latest.primary_company,
+      notable_topics: [...seededTopics],
+      // Prefer the confirmation-gated style value, if present in state.
+      preferred_contact_style: typeof existingStylePreference.value === 'string'
+        ? existingStylePreference.value
+        : latest.preferred_contact_style,
+    };
+
+    const patch = applyProfilePatch(seededLatest, eventsRes.rows);
 
     const existingStyleValue = typeof existingStylePreference.value === 'string' ? existingStylePreference.value : null;
     const existingStyleUpdatedAt = typeof existingStylePreference.updated_at === 'string' ? existingStylePreference.updated_at : null;
