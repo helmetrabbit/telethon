@@ -757,6 +757,9 @@ def _slot_has_value(profile: Dict[str, Any], slot: str) -> bool:
     value = profile.get(slot)
     if slot == 'notable_topics':
         return isinstance(value, list) and len(value) > 0
+    if slot == 'primary_role':
+        role = _as_text(value)
+        return bool(role) and not looks_like_meta_role(role)
     return bool(_as_text(value))
 
 
