@@ -180,7 +180,8 @@ _DISENGAGE_RE = re.compile(
     re.IGNORECASE,
 )
 _OPTION_ONLY_RE = re.compile(
-    r"^\s*(?:option\s*)?([123])\s*$",
+    # Accept "1", "1)", "1.", "option 1", etc.
+    r"^\s*(?:option\s*)?([1-4])\s*[).:]?\s*$",
     re.IGNORECASE,
 )
 _NON_TEXT_MARKER_RE = re.compile(
@@ -205,7 +206,11 @@ _HELP_RE = re.compile(
     re.IGNORECASE,
 )
 _HOME_RE = re.compile(
-    r"^\s*(?:home|quick\s*start|quickstart)\s*[!.?]*\s*$",
+    r"^\s*(?:home|quick\s*start|quickstart)(?:\s+(?:please|pls|plz|menu))?\s*[!.?]*\s*$",
+    re.IGNORECASE,
+)
+_VERSION_RE = re.compile(
+    r"^\s*(?:version|build|commit|sha)\s*[!.?]*\s*$",
     re.IGNORECASE,
 )
 _FEEDBACK_RE = re.compile(
@@ -2239,6 +2244,38 @@ def extract_option_selection(text: Optional[str]) -> Optional[int]:
     return selected
 
 
+def extract_home_menu_selection(text: Optional[str]) -> Optional[int]:
+    """Allow word-based menu selections for better UX (in addition to 1/2/3/4)."""
+    source = _clean_text(text).lower()
+    if not source:
+        return None
+
+    selected = extract_option_selection(source)
+    if selected:
+        return selected
+
+    # Common "human" replies instead of numbers.
+    # Guard: if they include ":" this is likely an inline update like "role: ..." or "feedback: ...".
+    if ":" in source:
+        return None
+    if len(source) > 48 or len(source.split()) > 4:
+        return None
+
+    if re.match(r"^\s*(?:snapshot|profile|my\s+profile)(?:\s+(?:please|pls|plz))?\s*$", source):
+        return 1
+    if re.match(r"^\s*(?:update|change|edit|store)(?:\s+(?:please|pls|plz))?\s*$", source):
+        return 2
+    if re.match(r"^\s*(?:analytics|activity|stats|groups?|times?)(?:\s+(?:please|pls|plz))?\s*$", source):
+        return 3
+    if re.match(r"^\s*(?:setup|onboarding|interview(?:\s+mode)?)(?:\s+(?:please|pls|plz))?\s*$", source):
+        return 4
+    return None
+
+
+def is_version_request(text: Optional[str]) -> bool:
+    return bool(_VERSION_RE.search(text or ''))
+
+
 def _extract_third_party_target(text: Optional[str]) -> Dict[str, Optional[str]]:
     source = _clean_text(text)
     out: Dict[str, Optional[str]] = {'handle': None, 'name': None, 'company': None}
@@ -3616,6 +3653,7 @@ def render_capabilities_reply(profile: Dict[str, Any], persona_name: str) -> str
             "- Lookup: \"What do you know about @handle?\" (read-only)",
             "- Analytics: \"What groups am I in?\" / \"When am I most active?\"",
             "- Feedback: `feedback: ...` (logs a bug/feature idea)",
+            "- Debug: \"version\" (shows deployed build)",
             "Style note: if you ask for \"bullets\" or \"be brief\", I may ask for a quick yes/no to save that preference.",
             "Safety: I won’t ask you for money, seed phrases, or API keys.",
         ]
@@ -3648,7 +3686,8 @@ def render_home_menu(row: Dict[str, Any], profile: Dict[str, Any], persona_name:
             "2) Update (store a change)",
             "3) Analytics (groups + peak hours)",
             "4) Setup (interview mode: 1 question at a time)",
-            "Reply 1, 2, 3, or 4. Or type \"help\" for everything I can do.",
+            "Reply 1, 2, 3, or 4 (or type: snapshot / update / analytics / setup).",
+            "Type \"help\" for the full command list.",
         ]
     )
     return "\n".join(lines)
@@ -3689,6 +3728,33 @@ def render_non_text_marker_reply() -> str:
 def render_help_reply(profile: Dict[str, Any], persona_name: str) -> str:
     # Currently identical to capabilities; keep a dedicated entry-point so it can diverge later without touching routing.
     return render_capabilities_reply(profile, persona_name)
+
+
+def _git_short_sha() -> Optional[str]:
+    env = (
+        os.getenv('OPENCLAW_BUILD_SHA')
+        or os.getenv('GIT_SHA')
+        or os.getenv('SOURCE_VERSION')
+        or ''
+    ).strip()
+    if env:
+        return env[:12]
+    try:
+        import subprocess
+
+        sha = subprocess.check_output(
+            ['git', 'rev-parse', '--short', 'HEAD'],
+            cwd=str(_ROOT_DIR),
+            stderr=subprocess.DEVNULL,
+        ).decode('utf-8', errors='replace').strip()
+        return sha or None
+    except Exception:
+        return None
+
+
+def render_version_reply(persona_name: str) -> str:
+    sha = _git_short_sha() or "unknown"
+    return f"{persona_name} build: {sha}"
 
 
 def render_third_party_edit_policy_reply() -> str:
@@ -4432,33 +4498,31 @@ def render_response(args: argparse.Namespace, conn, row: Dict[str, Any]) -> str:
     onboarding_complete = len(core_missing_fields) == 0
 
     # Handle home-menu selections ("1/2/3/4") before onboarding/other routing.
-    selected_option = extract_option_selection(latest_text)
-    if (
-        selected_option
-        and ui_menu_is_active(ui_state, expected_type='home')
-    ):
-        ui_state = clear_ui_menu(conn, sender_db_id, ui_state)
-        if selected_option == 1:
-            return finalize_reply(render_profile_request_reply(row, profile, args.persona_name))
-        if selected_option == 2:
-            return finalize_reply(render_profile_update_mode_reply())
-        if selected_option == 3:
-            return finalize_reply(render_activity_analytics_reply(profile))
-        if selected_option == 4:
-            # Start/continue onboarding in interview mode (one question at a time).
-            onboarding_reply, next_onboarding_state = render_onboarding_flow_reply(
-                {**row, 'text': 'interview mode'},
-                profile,
-                pending_events,
-                {**onboarding_state, 'status': 'collecting', 'last_prompted_field': None, 'completed_at': None},
-                args.persona_name,
-                conn,
-            )
-            if next_onboarding_state != onboarding_state:
-                persist_onboarding_state(conn, sender_db_id, next_onboarding_state)
-            if onboarding_reply:
-                return finalize_reply(onboarding_reply)
-            return finalize_reply(render_interview_style_reply(profile))
+    if ui_menu_is_active(ui_state, expected_type='home'):
+        selected_option = extract_home_menu_selection(latest_text)
+        if selected_option:
+            ui_state = clear_ui_menu(conn, sender_db_id, ui_state)
+            if selected_option == 1:
+                return finalize_reply(render_profile_request_reply(row, profile, args.persona_name))
+            if selected_option == 2:
+                return finalize_reply(render_profile_update_mode_reply())
+            if selected_option == 3:
+                return finalize_reply(render_activity_analytics_reply(profile))
+            if selected_option == 4:
+                # Start/continue onboarding in interview mode (one question at a time).
+                onboarding_reply, next_onboarding_state = render_onboarding_flow_reply(
+                    {**row, 'text': 'interview mode'},
+                    profile,
+                    pending_events,
+                    {**onboarding_state, 'status': 'collecting', 'last_prompted_field': None, 'completed_at': None},
+                    args.persona_name,
+                    conn,
+                )
+                if next_onboarding_state != onboarding_state:
+                    persist_onboarding_state(conn, sender_db_id, next_onboarding_state)
+                if onboarding_reply:
+                    return finalize_reply(onboarding_reply)
+                return finalize_reply(render_interview_style_reply(profile))
 
     if is_home_request(latest_text):
         now = datetime.now(timezone.utc)
@@ -4472,6 +4536,9 @@ def render_response(args: argparse.Namespace, conn, row: Dict[str, Any]) -> str:
             },
         )
         return finalize_reply(render_home_menu(row, profile, args.persona_name))
+
+    if is_version_request(latest_text):
+        return finalize_reply(render_version_reply(args.persona_name))
 
     # Greeting UX: show a periodic quickstart menu so users don't get stuck.
     if is_greeting_message(latest_text):
@@ -4555,6 +4622,15 @@ def render_response(args: argparse.Namespace, conn, row: Dict[str, Any]) -> str:
                 f"{render_help_reply(profile, args.persona_name)}"
             )
     if is_help_request(latest_text):
+        # Make "help" actionable by also opening the home menu context so "1/2/3/4" replies work.
+        now = datetime.now(timezone.utc)
+        ui_state = persist_ui_state(
+            conn,
+            sender_db_id,
+            {
+                'menu': _ui_menu_payload('home', now=now),
+            },
+        )
         return finalize_reply(render_help_reply(profile, args.persona_name))
     if is_third_party_edit_policy_request(latest_text):
         return finalize_reply(render_third_party_edit_policy_reply())
@@ -4564,6 +4640,14 @@ def render_response(args: argparse.Namespace, conn, row: Dict[str, Any]) -> str:
         group_q = extract_group_query(latest_text) or ''
         return finalize_reply(render_group_popular_time_reply(conn, group_q))
     if is_capabilities_request(latest_text):
+        now = datetime.now(timezone.utc)
+        ui_state = persist_ui_state(
+            conn,
+            sender_db_id,
+            {
+                'menu': _ui_menu_payload('home', now=now),
+            },
+        )
         return finalize_reply(render_capabilities_reply(profile, args.persona_name))
     if is_unsupported_action_request(latest_text):
         return finalize_reply(render_unsupported_action_reply())
