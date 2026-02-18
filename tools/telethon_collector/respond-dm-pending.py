@@ -197,6 +197,10 @@ _HELP_RE = re.compile(
     r"list\s+of\s+(?:commands?|starting\s+commands?))\b",
     re.IGNORECASE,
 )
+_HOME_RE = re.compile(
+    r"^\s*(?:home|quick\s*start|quickstart)\s*$",
+    re.IGNORECASE,
+)
 _FEEDBACK_RE = re.compile(
     r"^\s*(feedback|idea|feature|bug|request)\s*:\s*(.{3,2000})\s*$",
     re.IGNORECASE,
@@ -217,12 +221,12 @@ _IMPLICIT_FEEDBACK_RE = re.compile(
 )
 _THIRD_PARTY_EDIT_POLICY_RE = re.compile(
     r"\b(?:am\s+i\s+allowed\s+to|can\s+i|allowed\s+to)\s+(?:modify|edit|change|update)\s+"
-    r"(?:another|other|someone\s+else(?:'s)?|a)\s+(?:user|person)\b.{0,20}\bprofile\b|"
-    r"\b(?:modify|edit|change|update)\s+(?:another|other|someone\s+else(?:'s)?|a)\s+(?:user|person)\b.{0,20}\bprofile\b",
+    r"(?:another|other|someone\s+else(?:'s)?|a)\s+(?:users?|people|persons?)\b.{0,20}\bprofiles?\b|"
+    r"\b(?:modify|edit|change|update)\s+(?:another|other|someone\s+else(?:'s)?|a)\s+(?:users?|people|persons?)\b.{0,20}\bprofiles?\b",
     re.IGNORECASE,
 )
 _THIRD_PARTY_LOOKUP_STORAGE_RE = re.compile(
-    r"\b(?:do\s+you\s+(?:store|save|keep)|are\s+you\s+storing|does\s+this\s+store)\b.{0,80}\b(?:ask\s+about|look\s+up|query)\b.{0,40}\b(?:another|other)\b.{0,20}\b(?:user|person)\b|"
+    r"\b(?:do\s+you\s+(?:store|save|keep)|are\s+you\s+storing|does\s+this\s+store)\b.{0,80}\b(?:ask\s+about|look\s+up|query)\b.{0,40}\b(?:another|other)\b.{0,20}\b(?:users?|people|persons?)\b|"
     r"\b(?:do\s+you\s+store|does\s+it\s+store)\b.{0,40}\b(?:info|information|data)\b.{0,40}\b(?:about|on)\b.{0,12}\b(?:them|another\s+user|other\s+users?)\b",
     re.IGNORECASE,
 )
@@ -272,8 +276,11 @@ _PROFILE_DATA_PROVENANCE_RE = re.compile(
     r"where\s+did\s+you\s+get\s+this\s+from|"
     r"how\s+did\s+you\s+get\s+this\s+(?:information|info|data)|"
     r"how\s+do\s+you\s+know\s+(?:this|that)|"
-    r"data\s+source(?:s)?|source\s+of\s+this|"
-    r"what\s+(?:other\s+)?data\s+do\s+you\s+have(?:\s+on\s+me)?|"
+    r"data\s+source(?:s)?|source\s+of\s+this)\b",
+    re.IGNORECASE,
+)
+_PROFILE_DATA_INVENTORY_RE = re.compile(
+    r"\b(?:what\s+(?:other\s+)?data\s+do\s+you\s+have(?:\s+on\s+me)?|"
     r"is\s+there\s+(?:any\s+)?other\s+data\s+(?:on|about)\s+me|"
     r"do\s+you\s+have\s+(?:any\s+)?other\s+data\s+(?:on|about)\s+me|"
     r"what\s+else\s+do\s+you\s+have\s+(?:on|about)\s+me)\b",
@@ -1658,6 +1665,13 @@ def is_profile_data_provenance_request(text: Optional[str]) -> bool:
     return bool(_PROFILE_DATA_PROVENANCE_RE.search(source))
 
 
+def is_profile_data_inventory_request(text: Optional[str]) -> bool:
+    source = _clean_text(text)
+    if not source:
+        return False
+    return bool(_PROFILE_DATA_INVENTORY_RE.search(source))
+
+
 def is_activity_analytics_request(text: Optional[str]) -> bool:
     source = _clean_text(text)
     if not source:
@@ -2045,6 +2059,13 @@ def is_help_request(text: Optional[str]) -> bool:
     return bool(_HELP_RE.search(source))
 
 
+def is_home_request(text: Optional[str]) -> bool:
+    source = _clean_text(text)
+    if not source:
+        return False
+    return bool(_HOME_RE.search(source))
+
+
 def parse_feedback_message(text: Optional[str]) -> Optional[Dict[str, str]]:
     source = _clean_text(text)
     if not source:
@@ -2325,6 +2346,100 @@ def _collect_current_message_updates(
     return updates
 
 
+def persist_inline_profile_updates_as_events(
+    conn,
+    *,
+    row: Dict[str, Any],
+    sender_db_id: Optional[int],
+    pending_events: List[Dict[str, Any]],
+    inline_updates: Dict[str, str],
+) -> None:
+    """Backup ingestion path: if we can confidently extract updates inline, persist them as DM events.
+
+    This prevents UX lies like "Saved" when the ingest worker is lagging or misconfigured.
+    """
+    if not sender_db_id or not isinstance(sender_db_id, int):
+        return
+    source_message_id = _to_int(row.get('id'))
+    if not source_message_id:
+        return
+
+    # If ingestion already created any event rows for this message, don't duplicate.
+    for evt in pending_events or []:
+        if _to_int(evt.get('source_message_id')) == source_message_id:
+            return
+
+    role = _as_text(inline_updates.get('primary_role'))
+    company = _as_text(inline_updates.get('primary_company'))
+    raw_topics = _as_text(inline_updates.get('notable_topics'))
+
+    conversation_id = row.get('conversation_id')
+    source_external_message_id = _as_text(row.get('external_message_id'))
+    raw_text = row.get('text') or ''
+
+    if role or company:
+        extracted_facts: List[Dict[str, Any]] = []
+        if role:
+            extracted_facts.append(
+                {'field': 'primary_role', 'old_value': None, 'new_value': role, 'confidence': 0.9}
+            )
+        if company:
+            extracted_facts.append(
+                {'field': 'primary_company', 'old_value': None, 'new_value': company, 'confidence': 0.9}
+            )
+        evt_type = (
+            'profile.role_company_update' if role and company
+            else 'profile.role_update' if role
+            else 'profile.company_update'
+        )
+        upsert_dm_profile_update_event(
+            conn,
+            user_id=sender_db_id,
+            conversation_id=conversation_id,
+            source_message_id=source_message_id,
+            source_external_message_id=source_external_message_id,
+            event_type=evt_type,
+            event_payload={
+                'raw_text': raw_text,
+                'trigger': 'dm_responder_inline_parse',
+                'role': role,
+                'company': company,
+            },
+            extracted_facts=extracted_facts,
+            confidence=0.9,
+            event_source="dm_responder_inline",
+            actor_role="user",
+        )
+
+    if raw_topics:
+        topics = _split_plain_topics_answer(raw_topics)
+        if not topics:
+            cleaned = _clean_text(raw_topics).strip(" \"'`").strip(" .,!?:;")
+            if cleaned and not looks_like_feedback_topic(cleaned):
+                topics = [cleaned[:80]]
+        if topics:
+            upsert_dm_profile_update_event(
+                conn,
+                user_id=sender_db_id,
+                conversation_id=conversation_id,
+                source_message_id=source_message_id,
+                source_external_message_id=source_external_message_id,
+                event_type='profile.priorities_update',
+                event_payload={
+                    'raw_text': raw_text,
+                    'trigger': 'dm_responder_inline_parse',
+                    'priorities': topics,
+                },
+                extracted_facts=[
+                    {'field': 'notable_topics', 'old_value': None, 'new_value': topic, 'confidence': 0.85}
+                    for topic in topics
+                ],
+                confidence=0.85,
+                event_source="dm_responder_inline",
+                actor_role="user",
+            )
+
+
 def _collect_current_message_field_confidence(
     row: Dict[str, Any],
     pending_events: List[Dict[str, Any]],
@@ -2514,7 +2629,13 @@ def _truncate(value: Optional[str], limit: int = 180) -> Optional[str]:
         return None
     if len(clean) <= limit:
         return clean
-    return clean[: max(0, limit - 3)].rstrip() + "..."
+    cut = clean[: max(0, limit - 3)].rstrip()
+    # Avoid hard mid-word truncation when we can.
+    if cut and cut[-1].isalnum():
+        last_space = cut.rfind(' ')
+        if last_space >= 0 and last_space >= max(0, len(cut) - 24):
+            cut = cut[:last_space].rstrip()
+    return cut + "..."
 
 
 def _preferred_style_mode(profile: Dict[str, Any]) -> str:
@@ -2544,10 +2665,15 @@ def apply_preferred_contact_style(reply: str, profile: Dict[str, Any]) -> str:
     if mode == 'concise':
         lines = [line.strip() for line in reply.splitlines() if line.strip()]
         if not lines:
-            return text[:280]
+            return _truncate(text, limit=280) or text[:280]
         compact = "\n".join(lines[:3])
         if len(compact) > 320:
-            compact = compact[:317].rstrip() + "..."
+            cut = compact[:317].rstrip()
+            if cut and cut[-1].isalnum():
+                last_space = cut.rfind(' ')
+                if last_space >= 0 and last_space >= max(0, len(cut) - 24):
+                    cut = cut[:last_space].rstrip()
+            compact = cut + "..."
         return compact
 
     if mode == 'bullets':
@@ -2803,6 +2929,78 @@ def render_profile_data_provenance_reply(profile: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def render_profile_data_inventory_reply(profile: Dict[str, Any]) -> str:
+    """Explain what buckets of data exist for the user, and what is currently populated."""
+    role = _as_text(profile.get('primary_role'))
+    company = _as_text(profile.get('primary_company'))
+    priorities = sanitize_notable_topics(profile.get('notable_topics'), max_items=10)
+    contact_style = _as_text(profile.get('preferred_contact_style'))
+
+    derived_bits: List[str] = []
+    if _as_text(profile.get('generated_bio_professional')):
+        derived_bits.append("bio signal")
+    if isinstance(profile.get('deep_skills'), list) and profile.get('deep_skills'):
+        derived_bits.append("skills")
+    if isinstance(profile.get('driving_values'), list) and profile.get('driving_values'):
+        derived_bits.append("values")
+    if isinstance(profile.get('pain_points'), list) and profile.get('pain_points'):
+        derived_bits.append("pain points")
+    if isinstance(profile.get('affiliations'), list) and profile.get('affiliations'):
+        derived_bits.append("affiliations")
+    if isinstance(profile.get('attended_events'), list) and profile.get('attended_events'):
+        derived_bits.append("events")
+
+    analytics_bits: List[str] = []
+    if isinstance(_to_int(profile.get('total_messages')), int):
+        analytics_bits.append("message count")
+    if isinstance(profile.get('peak_hours'), list) and profile.get('peak_hours'):
+        analytics_bits.append("peak hours")
+    if isinstance(profile.get('most_active_days'), list) and profile.get('most_active_days'):
+        analytics_bits.append("active days")
+    if isinstance(profile.get('group_tags'), list) and profile.get('group_tags'):
+        analytics_bits.append("groups")
+    if isinstance(profile.get('top_conversation_partners'), list) and profile.get('top_conversation_partners'):
+        analytics_bits.append("top conversation partners")
+
+    core_have: List[str] = []
+    core_missing: List[str] = []
+    if role:
+        core_have.append("role")
+    else:
+        core_missing.append("role")
+    if company:
+        core_have.append("company/project")
+    else:
+        core_missing.append("company/project")
+    if priorities:
+        core_have.append("priorities/topics")
+    else:
+        core_missing.append("priorities/topics")
+    if contact_style:
+        core_have.append("communication style")
+    else:
+        core_missing.append("communication style")
+
+    lines = [
+        "Yes. In this deployment I can have 3 buckets about you:",
+        "- Profile facts: role, company/project, priorities/topics, communication style.",
+        "- Derived profile: bio signal, skills, values, affiliations, events (only if there’s enough signal).",
+        "- Activity analytics: message counts, peak hours, groups, top partners (only if your history is ingested).",
+        "",
+        f"Right now, your core profile has: {', '.join(core_have) if core_have else 'nothing yet'}.",
+    ]
+    if derived_bits:
+        lines.append(f"Derived fields present: {', '.join(derived_bits[:6])}.")
+    if analytics_bits:
+        lines.append(f"Analytics present: {', '.join(analytics_bits[:6])}.")
+    if core_missing:
+        lines.append(f"Missing core fields: {', '.join(core_missing)}.")
+        lines.append("Send one update like: `role: ...` / `company: ...` / `priorities: ...` / `communication: ...`.")
+    else:
+        lines.append("If you want a specific slice, ask: snapshot, analytics, skills, or groups.")
+    return "\n".join(lines)
+
+
 def render_activity_analytics_reply(profile: Dict[str, Any]) -> str:
     lines = format_activity_snapshot_lines(profile)
     if not lines:
@@ -2939,6 +3137,31 @@ def render_onboarding_flow_reply(
     is_greeting = is_greeting_message(latest_text)
     captured_updates = _collect_current_message_updates(row, pending_events)
 
+    # Apply any captured updates to the in-memory profile view so onboarding progress doesn't loop
+    # when ingestion/reconcile hasn't run yet.
+    if captured_updates:
+        role = _as_text(captured_updates.get('primary_role'))
+        company = _as_text(captured_updates.get('primary_company'))
+        topics_raw = _as_text(captured_updates.get('notable_topics'))
+        if role:
+            profile['primary_role'] = role
+        if company:
+            profile['primary_company'] = company
+        if topics_raw:
+            topics = _split_plain_topics_answer(topics_raw)
+            if not topics:
+                cleaned = _clean_text(topics_raw).strip(" \"'`").strip(" .,!?:;")
+                if cleaned and not looks_like_feedback_topic(cleaned):
+                    topics = [cleaned[:80]]
+            if topics:
+                existing = sanitize_notable_topics(profile.get('notable_topics'), max_items=10)
+                existing_set = {item.lower() for item in existing}
+                for topic in topics:
+                    if topic.lower() not in existing_set:
+                        existing.append(topic)
+                        existing_set.add(topic.lower())
+                profile['notable_topics'] = existing[:10]
+
     required_fields = _json_list_to_fields(state.get('required_fields'), ONBOARDING_REQUIRED_FIELDS)
     state['required_fields'] = required_fields
     missing_fields = _compute_missing_onboarding_fields(profile, required_fields)
@@ -3019,7 +3242,7 @@ def render_onboarding_flow_reply(
                         confidence=0.88,
                     )
                 # Update the in-memory profile view so onboarding progresses immediately.
-                existing = [str(item) for item in (profile.get('notable_topics') or []) if isinstance(item, str)]
+                existing = sanitize_notable_topics(profile.get('notable_topics'), max_items=10)
                 existing_set = {item.lower() for item in existing}
                 for topic in topics:
                     if topic.lower() not in existing_set:
@@ -3287,12 +3510,14 @@ def render_capabilities_reply(profile: Dict[str, Any], persona_name: str) -> str
             f"Hey — I’m {persona_name}. I’m an AI (not a human).",
             "This chat is for keeping your profile dataset current and letting you query it.",
             "Quick start (things you can say):",
+            "- Home: \"home\" (opens the 1/2/3 menu)",
             "- Snapshot: \"What do you know about me?\"",
             "- Update (fast): `role: ...` / `company: ...` / `priorities: ...` / `communication: ...`",
             "- Guided setup: \"interview mode\" (one question at a time)",
             "- Lookup: \"What do you know about @handle?\" (read-only)",
             "- Analytics: \"What groups am I in?\" / \"When am I most active?\"",
             "- Feedback: `feedback: ...` (logs a bug/feature idea)",
+            "Style note: if you ask for \"bullets\" or \"be brief\", I may ask for a quick yes/no to save that preference.",
             "Safety: I won’t ask you for money, seed phrases, or API keys.",
         ]
     )
@@ -3845,6 +4070,9 @@ def render_conversational_reply(
     if is_profile_data_provenance_request(latest_text):
         return render_profile_data_provenance_reply(profile)
 
+    if is_profile_data_inventory_request(latest_text):
+        return render_profile_data_inventory_reply(profile)
+
     if is_interview_style_request(latest_text):
         return render_interview_style_reply(profile)
 
@@ -4008,6 +4236,18 @@ def render_response(args: argparse.Namespace, conn, row: Dict[str, Any]) -> str:
     explicit_feedback = parse_feedback_message(latest_text)
     implicit_feedback = None if explicit_feedback else parse_implicit_feedback_message(latest_text)
 
+    # Backup ingestion path: if we can extract core profile updates inline, persist them immediately.
+    # This keeps UX aligned with storage even if the ingest worker is lagging or misconfigured.
+    inline_updates = _extract_inline_profile_updates(latest_text)
+    if inline_updates and not explicit_feedback and not implicit_feedback:
+        persist_inline_profile_updates_as_events(
+            conn,
+            row=row,
+            sender_db_id=sender_db_id,
+            pending_events=pending_events,
+            inline_updates=inline_updates,
+        )
+
     def finalize_reply(raw_reply: str) -> str:
         nonlocal style_state, profile
         styled_reply = apply_preferred_contact_style(raw_reply, profile)
@@ -4105,6 +4345,19 @@ def render_response(args: argparse.Namespace, conn, row: Dict[str, Any]) -> str:
             return finalize_reply(render_profile_update_mode_reply())
         if selected_option == 3:
             return finalize_reply(render_activity_analytics_reply(profile))
+
+    if is_home_request(latest_text) and onboarding_complete and not pending_candidate:
+        now = datetime.now(timezone.utc)
+        ui_state = persist_ui_state(
+            conn,
+            sender_db_id,
+            {
+                'menu': _ui_menu_payload('home', now=now),
+                # Also bump greeting cooldown so "home" doesn't immediately re-trigger another menu on "hi".
+                'last_greeting_menu_at': now.isoformat(),
+            },
+        )
+        return finalize_reply(render_home_menu(row, profile, args.persona_name))
 
     # Greeting UX: show a periodic quickstart menu so users don't get stuck.
     if is_greeting_message(latest_text) and onboarding_complete:
@@ -4212,6 +4465,8 @@ def render_response(args: argparse.Namespace, conn, row: Dict[str, Any]) -> str:
         return finalize_reply(render_activity_analytics_reply(profile))
     if is_profile_data_provenance_request(latest_text):
         return finalize_reply(render_profile_data_provenance_reply(profile))
+    if is_profile_data_inventory_request(latest_text):
+        return finalize_reply(render_profile_data_inventory_reply(profile))
     if is_profile_confirmation_request(latest_text):
         return finalize_reply(render_profile_confirmation_reply(row, profile, pending_events))
     if is_more_profile_info_request(latest_text, recent_messages):
