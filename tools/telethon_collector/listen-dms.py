@@ -107,6 +107,8 @@ def looks_like_message(msg) -> bool:
 def _display_name(user) -> str | None:
     if user is None:
         return None
+    if isinstance(user, int):
+        return None
     parts = [user.first_name or "", user.last_name or ""]
     display = " ".join(p for p in parts if p).strip()
     return display or user.username
@@ -240,7 +242,8 @@ async def main() -> None:
         except Exception:
             peer = None
 
-        row = serialize_message(msg, getattr(sender, "id", sender), peer, f"user{me.id}" if me else None)
+        # sender can be a full User object or an int user_id fallback; serialize_message handles both.
+        row = serialize_message(msg, sender, peer, f"user{me.id}" if me else None)
         row["captured_at"] = datetime.now(timezone.utc).isoformat()
 
         # Persist one JSON object per line
