@@ -222,6 +222,11 @@ function isLikelyRole(raw: string): boolean {
   const value = normalizeRole(raw);
   if (!value) return false;
   const lower = value.toLowerCase();
+  // Prevent obvious "bot self-description" / meta text from corrupting a user's role.
+  // This commonly appears when users paste our help/expected-behavior text.
+  if (/\bnot\s+(?:a\s+)?human\b/iu.test(lower)) {
+    return false;
+  }
   // Avoid corrupting role/company on negative affiliation statements like:
   // "I am not affiliated with X" / "I'm not associated with Y".
   if (/\bnot\s+(?:affiliated|associated|connected|involved|part\s+of)\b/iu.test(lower)) {
@@ -246,6 +251,10 @@ function isLikelyRole(raw: string): boolean {
     return false;
   }
   const wordCount = value.split(/\s+/u).length;
+  // Reject "I'm <name>" style statements being misread as a job title.
+  if (wordCount <= 3 && !roleKeywordRe.test(lower) && /^[A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2}$/u.test(value)) {
+    return false;
+  }
   if (wordCount > 4 && !roleKeywordRe.test(lower)) {
     return false;
   }

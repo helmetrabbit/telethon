@@ -31,6 +31,12 @@
       "text": "It would be helpful if next time when I say hello, I'm told who you are, how to get started. perhaps a complete list of starting commands and what they do.",
       "expected_any": [],
       "expected_none": true
+    },
+    {
+      "id": "style-note-example-is-not-style",
+      "text": "Style note: if you ask for \"bullets\" or \"be brief\", I may ask for a quick yes/no to save that preference.",
+      "expected_any": [],
+      "expected_none": true
     }
   ]
 }

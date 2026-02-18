@@ -118,7 +118,11 @@ _THIRD_PARTY_TARGET_RE = re.compile(
 )
 _HANDLE_RE = re.compile(r"@([A-Za-z0-9_]{3,32})")
 _SYSTEM_PROMPT_QUERY_RE = re.compile(
-    r"\b(?:system\s+prompt|hidden\s+prompt|developer\s+prompt|instruction(?:s)?|who\s+created\s+you|who\s+made\s+you|who\s+built\s+you)\b",
+    # "instructions" is a common user intent meaning "how do I use this?" so do NOT
+    # match it generically here. Only match it when paired with system/developer/hidden.
+    r"\b(?:system\s+prompt|hidden\s+prompt|developer\s+prompt|"
+    r"(?:system|hidden|developer)\s+instruction(?:s)?|"
+    r"who\s+created\s+you|who\s+made\s+you|who\s+built\s+you)\b",
     re.IGNORECASE,
 )
 _IDENTITY_OVERRIDE_RE = re.compile(
@@ -128,9 +132,12 @@ _IDENTITY_OVERRIDE_RE = re.compile(
 )
 _CAPABILITIES_QUERY_RE = re.compile(
     r"\b(?:what\s+skills\s+do\s+you\s+have|what\s+can\s+you\s+do|your\s+capabilities|"
+    r"what\s+are\s+you\s+capable\s+of|capable\s+of\s+in\s+full|"
+    r"what\s+functions?\s+(?:do\s+you\s+have|can\s+we\s+do)|what\s+paths?\s+can\s+we\s+do|"
     r"who\s+are\s+you|"
     r"what\s+is\s+this\s+chat\s+for|what\s+is\s+this\s+for|what\s+do\s+you\s+do|"
     r"what\s+is\s+this\s+used\s+for|for\s+what\s+purpose|"
+    r"what'?s\s+the\s+context(?:\s+here)?|context\s+here|"
     r"where\s+does\s+(?:this|my)\s+data\s+go|"
     r"what\s+is\s+(?:this\s+bot|this\s+assistant|this\s+ai|lobster\s+llama)|"
     r"what\s+is\s+(?:this|my)\s+profile\s+for|what\s+is\s+(?:this|my)\s+profile\s+used\s+for|"
@@ -190,7 +197,7 @@ _QUESTION_LIKE_RE = re.compile(
     re.IGNORECASE,
 )
 _HELP_RE = re.compile(
-    r"\b(?:help|menu|commands?|"
+    r"\b(?:help|menu|commands?|instructions?|guide|"
     r"start\s+here|get\s+started|getting\s+started|"
     r"how\s+do\s+i\s+(?:use|start)|how\s+to\s+(?:use|start)|"
     r"what\s+can\s+i\s+(?:say|ask)|"
@@ -198,7 +205,7 @@ _HELP_RE = re.compile(
     re.IGNORECASE,
 )
 _HOME_RE = re.compile(
-    r"^\s*(?:home|quick\s*start|quickstart)\s*$",
+    r"^\s*(?:home|quick\s*start|quickstart)\s*[!.?]*\s*$",
     re.IGNORECASE,
 )
 _FEEDBACK_RE = re.compile(
@@ -257,7 +264,7 @@ _STYLE_CONFIRM_NO_RE = re.compile(
     re.IGNORECASE,
 )
 _GREETING_RE = re.compile(
-    r"^\s*(?:hi|hello|hey|yo|gm|gn|good\s+(?:morning|afternoon|evening)|what'?s\s+up|sup)"
+    r"^\s*(?:hi|hello|hey|yo|gm|gn|gmgm|gm\s*gm|good\s+(?:morning|afternoon|evening)|what'?s\s+up|sup)"
     r"(?:\s+\w{1,16}){0,2}\b[!. ]*$",
     re.IGNORECASE,
 )
@@ -287,7 +294,8 @@ _PROFILE_DATA_INVENTORY_RE = re.compile(
     re.IGNORECASE,
 )
 _ACTIVITY_ANALYTICS_RE = re.compile(
-    r"\b(?:how\s+many\s+messages\s+have\s+i\s+sent|message\s+count|total\s+messages?|most\s+active\s+(?:time|times|day|days)|"
+    r"\b(?:analytics|activity\s+analytics|activity\s+stats|stats|"
+    r"how\s+many\s+messages\s+have\s+i\s+sent|message\s+count|total\s+messages?|most\s+active\s+(?:time|times|day|days)|"
     r"peak\s+hours?|active\s+hours?|popular\s+times?|when\s+am\s+i\s+most\s+active|what\s+groups?\b|which\s+groups?\b|"
     r"what\s+groups?\s+am\s+i\s+in|groups?\s+i'?m\s+in|"
     r"group\s+chats?|top\s+conversation\s+partners?)\b",
@@ -298,7 +306,7 @@ _PROFILE_CONFIRMATION_RE = re.compile(
     re.IGNORECASE,
 )
 _INTERVIEW_STYLE_RE = re.compile(
-    r"\b(?:interview\s+style|one\s+question\s+at\s+a\s+time|question\s+by\s+question|split\s+this\s+up|"
+    r"\b(?:interview\s+mode|interview\s+style|one\s+question\s+at\s+a\s+time|question\s+by\s+question|split\s+this\s+up|"
     r"wall\s+of\s+text|too\s+long;\s*didn'?t\s+read|tl;dr)\b",
     re.IGNORECASE,
 )
@@ -461,6 +469,18 @@ def looks_like_feedback_topic(value: str) -> bool:
     # Long sentence-like blobs without separators are usually UX/intent feedback, not a topic list.
     has_sep = bool(re.search(r",|;|\n|\band\b|&", clean, flags=re.IGNORECASE))
     if not has_sep and len(clean.split()) > 14:
+        return True
+    return False
+
+
+def looks_like_meta_role(value: str) -> bool:
+    """Prevent obvious bot/meta strings from being displayed as a user's 'role'."""
+    clean = _clean_text(value).strip(" .,!?:;\"'`").lower()
+    if not clean:
+        return False
+    if re.search(r"\bnot\s+(?:a\s+)?human\b", clean):
+        return True
+    if clean in ("lobster llama", "truemiller llama"):
         return True
     return False
 
@@ -1644,10 +1664,23 @@ def _extract_freeform_contact_style(text: str) -> Optional[str]:
         if normalized:
             return normalized
 
+    # Handle short standalone directives: "bullets please", "be brief", "professional tone".
+    # Guard against long UX/help text that contains keywords as examples (which should NOT flip style).
     if _CONTACT_STYLE_KEYWORD_RE.search(source):
-        normalized = _normalize_contact_style_text(source)
-        if normalized:
-            return normalized
+        word_count = len(source.split())
+        is_short = len(source) <= 80 and word_count <= 10
+        looks_standalone = bool(
+            re.match(
+                r"^\s*(?:bullets?|bullet\s+points?|be\s+(?:brief|concise|short)|go\s+deep|detailed|"
+                r"professional(?:\s+tone)?|formal(?:\s+tone)?|direct|chatty|casual|conversational)\b",
+                source,
+                re.IGNORECASE,
+            )
+        )
+        if is_short or looks_standalone:
+            normalized = _normalize_contact_style_text(source)
+            if normalized:
+                return normalized
     return None
 
 
@@ -2009,6 +2042,7 @@ FULL_PROFILE_MARKERS = (
     'give me my full',
     'share my profile',
     'profile snapshot',
+    'snapshot',
     'what do you know about me',
     'what information do you have about me',
     'what info do you have on me',
@@ -2197,7 +2231,7 @@ def extract_option_selection(text: Optional[str]) -> Optional[int]:
         selected = int(match.group(1))
     except Exception:
         return None
-    if selected not in (1, 2, 3):
+    if selected not in (1, 2, 3, 4):
         return None
     return selected
 
@@ -2833,6 +2867,8 @@ def format_profile_snapshot_lines(profile: Dict[str, Any], include_activity: boo
     role = _as_text(profile.get('primary_role'))
     company = _as_text(profile.get('primary_company'))
     company_l = (company or '').lower()
+    if role and looks_like_meta_role(role):
+        role = None
 
     if company_l == 'unemployed':
         if role:
@@ -3223,9 +3259,14 @@ def render_onboarding_flow_reply(
     core_slots_known = _count_core_profile_slots(profile)
     is_new_user_profile = core_slots_known == 0
     full_profile_start = is_full_profile_request(latest_text) and is_new_user_profile
-    explicit_onboarding_requested = is_onboarding_start_request(latest_text) or full_profile_start
+    explicit_onboarding_requested = (
+        is_onboarding_start_request(latest_text)
+        or is_interview_style_request(latest_text)
+        or full_profile_start
+    )
     start_requested = (
         is_onboarding_start_request(latest_text)
+        or is_interview_style_request(latest_text)
         or full_profile_start
         or is_onboarding_acknowledgement(latest_text)
         or bool(captured_updates)
@@ -3253,7 +3294,13 @@ def render_onboarding_flow_reply(
         and target_slot
         and not captured_updates
         and latest_text
+        and "?" not in latest_text
         and not is_onboarding_acknowledgement(latest_text)
+        and not is_onboarding_start_request(latest_text)
+        and not is_interview_style_request(latest_text)
+        and not is_help_request(latest_text)
+        and not is_capabilities_request(latest_text)
+        and not is_home_request(latest_text)
         and not is_greeting
     ):
         inferred: Dict[str, str] = {}
@@ -3559,7 +3606,7 @@ def render_capabilities_reply(profile: Dict[str, Any], persona_name: str) -> str
             f"Hey — I’m {persona_name}. I’m an AI (not a human).",
             "This chat is for keeping your profile dataset current and letting you query it.",
             "Quick start (things you can say):",
-            "- Home: \"home\" (opens the 1/2/3 menu)",
+            "- Home: \"home\" (opens the 1/2/3/4 menu)",
             "- Snapshot: \"What do you know about me?\"",
             "- Update (fast): `role: ...` / `company: ...` / `priorities: ...` / `communication: ...`",
             "- Guided setup: \"interview mode\" (one question at a time)",
@@ -3576,6 +3623,8 @@ def render_home_menu(row: Dict[str, Any], profile: Dict[str, Any], persona_name:
     sender = row.get('display_name') or row.get('sender_handle') or 'there'
     role = _as_text(profile.get('primary_role'))
     company = _as_text(profile.get('primary_company'))
+    if role and looks_like_meta_role(role):
+        role = None
     on_file = None
     if role and company:
         on_file = f"On file: {role} @ {company}."
@@ -3595,7 +3644,8 @@ def render_home_menu(row: Dict[str, Any], profile: Dict[str, Any], persona_name:
             "1) Snapshot (what I know about you)",
             "2) Update (store a change)",
             "3) Analytics (groups + peak hours)",
-            "Reply 1, 2, or 3. Or type \"help\" for everything I can do.",
+            "4) Setup (interview mode: 1 question at a time)",
+            "Reply 1, 2, 3, or 4. Or type \"help\" for everything I can do.",
         ]
     )
     return "\n".join(lines)
@@ -4201,8 +4251,8 @@ def render_conversational_reply(
         "Which company/project should I map you to at the moment?",
     ]
     priority_questions = [
-        "What are your top 2 priorities this month?",
-        "What are the main things you want to push forward right now?",
+        "What are your top 2 focus areas right now (tags I should store)?",
+        "What 2-3 things should I tag you with (for example: grants, partnerships, pre-TGE chains)?",
     ]
     contact_questions = [
         "What communication style do you prefer from me: short bullets, detailed notes, or quick back-and-forth?",
@@ -4220,7 +4270,7 @@ def render_conversational_reply(
         next_question = _pick(question_map[slot], msg_id + 1)
         if is_greeting:
             return (
-                f"Hey — I’m {persona_name}, an AI assistant for keeping your profile up to date.\n"
+                f"Hey — I’m {persona_name} (AI). Type \"home\" for the menu, or answer this quick setup question:\n"
                 f"{next_question}"
             )
         return f"{next_question}"
@@ -4378,12 +4428,10 @@ def render_response(args: argparse.Namespace, conn, row: Dict[str, Any]) -> str:
     core_missing_fields = _compute_missing_onboarding_fields(profile, ONBOARDING_REQUIRED_FIELDS)
     onboarding_complete = len(core_missing_fields) == 0
 
-    # Handle home-menu selections ("1/2/3") before onboarding/other routing.
+    # Handle home-menu selections ("1/2/3/4") before onboarding/other routing.
     selected_option = extract_option_selection(latest_text)
     if (
         selected_option
-        and onboarding_complete
-        and not pending_candidate
         and ui_menu_is_active(ui_state, expected_type='home')
     ):
         ui_state = clear_ui_menu(conn, sender_db_id, ui_state)
@@ -4393,8 +4441,23 @@ def render_response(args: argparse.Namespace, conn, row: Dict[str, Any]) -> str:
             return finalize_reply(render_profile_update_mode_reply())
         if selected_option == 3:
             return finalize_reply(render_activity_analytics_reply(profile))
+        if selected_option == 4:
+            # Start/continue onboarding in interview mode (one question at a time).
+            onboarding_reply, next_onboarding_state = render_onboarding_flow_reply(
+                {**row, 'text': 'interview mode'},
+                profile,
+                pending_events,
+                {**onboarding_state, 'status': 'collecting', 'last_prompted_field': None, 'completed_at': None},
+                args.persona_name,
+                conn,
+            )
+            if next_onboarding_state != onboarding_state:
+                persist_onboarding_state(conn, sender_db_id, next_onboarding_state)
+            if onboarding_reply:
+                return finalize_reply(onboarding_reply)
+            return finalize_reply(render_interview_style_reply(profile))
 
-    if is_home_request(latest_text) and onboarding_complete and not pending_candidate:
+    if is_home_request(latest_text):
         now = datetime.now(timezone.utc)
         ui_state = persist_ui_state(
             conn,
@@ -4408,7 +4471,7 @@ def render_response(args: argparse.Namespace, conn, row: Dict[str, Any]) -> str:
         return finalize_reply(render_home_menu(row, profile, args.persona_name))
 
     # Greeting UX: show a periodic quickstart menu so users don't get stuck.
-    if is_greeting_message(latest_text) and onboarding_complete:
+    if is_greeting_message(latest_text):
         greeting_menu = _as_text(ui_preferences.get('greeting_menu')) or 'quickstart'
         cooldown_days = _to_int(ui_preferences.get('greeting_menu_cooldown_days')) or DM_UI_GREETING_MENU_COOLDOWN_DAYS
         cooldown_days = max(0, min(30, int(cooldown_days)))
@@ -4504,6 +4567,18 @@ def render_response(args: argparse.Namespace, conn, row: Dict[str, Any]) -> str:
     if is_profile_update_mode_request(latest_text):
         return finalize_reply(render_profile_update_mode_reply())
     if is_interview_style_request(latest_text):
+        onboarding_reply, next_onboarding_state = render_onboarding_flow_reply(
+            {**row, 'text': 'interview mode'},
+            profile,
+            pending_events,
+            {**onboarding_state, 'status': 'collecting', 'last_prompted_field': None, 'completed_at': None},
+            args.persona_name,
+            conn,
+        )
+        if next_onboarding_state != onboarding_state:
+            persist_onboarding_state(conn, sender_db_id, next_onboarding_state)
+        if onboarding_reply:
+            return finalize_reply(onboarding_reply)
         return finalize_reply(render_interview_style_reply(profile))
     if is_top3_profile_prompt_request(latest_text):
         return finalize_reply(render_top3_profile_prompt_reply(profile))

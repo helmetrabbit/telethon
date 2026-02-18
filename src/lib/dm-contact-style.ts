@@ -52,7 +52,12 @@ export function extractContactStyleDirectives(source: string): string[] {
   }
 
   // Handle short standalone directives: "bullets please", "be brief", "professional tone".
-  if (out.size === 0 && CONTACT_STYLE_KEYWORD_RE.test(text)) {
+  // Guard: long UX/product feedback messages can contain keywords ("bullets", "brief") as examples,
+  // which should NOT flip a user's stored contact style.
+  const wordCount = text.split(/\s+/u).filter(Boolean).length;
+  const isShort = text.length <= 80 && wordCount <= 8;
+  const looksLikeStandaloneDirective = /^(?:bullets?|bullet points?|be\s+(?:brief|concise|short)|go\s+deep|detailed|professional(?:\s+tone)?|formal(?:\s+tone)?|direct|chatty|casual|conversational)\b/iu.test(text);
+  if (out.size === 0 && CONTACT_STYLE_KEYWORD_RE.test(text) && (isShort || looksLikeStandaloneDirective)) {
     const style = normalizeContactStyle(text);
     if (style) out.add(style);
   }

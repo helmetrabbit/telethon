@@ -24,6 +24,24 @@
         { "field": "primary_role", "contains": "ecosystem growth" },
         { "field": "primary_company", "contains": "lava foundation" }
       ]
+    },
+    {
+      "id": "bot-intro-ai-not-human-does-not-update-self-profile",
+      "text": "Hey — I’m Lobster Llama. I’m an AI (not a human).",
+      "forbid_any_facts": [
+        { "field": "primary_role" },
+        { "field": "primary_company" },
+        { "field": "preferred_contact_style" }
+      ]
+    },
+    {
+      "id": "expected-behavior-paste-does-not-update-self-profile",
+      "text": "expected behavior: Hey — I’m Lobster Llama. I’m an AI (not a human). This chat is for keeping your profile dataset current.",
+      "forbid_any_facts": [
+        { "field": "primary_role" },
+        { "field": "primary_company" },
+        { "field": "preferred_contact_style" }
+      ]
     }
   ]
 }
