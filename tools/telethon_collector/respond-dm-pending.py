@@ -2351,7 +2351,6 @@ def persist_inline_profile_updates_as_events(
     *,
     row: Dict[str, Any],
     sender_db_id: Optional[int],
-    pending_events: List[Dict[str, Any]],
     inline_updates: Dict[str, str],
 ) -> None:
     """Backup ingestion path: if we can confidently extract updates inline, persist them as DM events.
@@ -2363,11 +2362,6 @@ def persist_inline_profile_updates_as_events(
     source_message_id = _to_int(row.get('id'))
     if not source_message_id:
         return
-
-    # If ingestion already created any event rows for this message, don't duplicate.
-    for evt in pending_events or []:
-        if _to_int(evt.get('source_message_id')) == source_message_id:
-            return
 
     role = _as_text(inline_updates.get('primary_role'))
     company = _as_text(inline_updates.get('primary_company'))
@@ -2392,7 +2386,7 @@ def persist_inline_profile_updates_as_events(
             else 'profile.role_update' if role
             else 'profile.company_update'
         )
-        upsert_dm_profile_update_event(
+        insert_dm_profile_update_event_if_absent(
             conn,
             user_id=sender_db_id,
             conversation_id=conversation_id,
@@ -2418,7 +2412,7 @@ def persist_inline_profile_updates_as_events(
             if cleaned and not looks_like_feedback_topic(cleaned):
                 topics = [cleaned[:80]]
         if topics:
-            upsert_dm_profile_update_event(
+            insert_dm_profile_update_event_if_absent(
                 conn,
                 user_id=sender_db_id,
                 conversation_id=conversation_id,
@@ -2577,6 +2571,61 @@ def upsert_dm_profile_update_event(
               extracted_facts = EXCLUDED.extracted_facts,
               confidence = EXCLUDED.confidence,
               created_at = now()
+            """,
+            [
+                user_id,
+                conversation_id,
+                source_message_id,
+                source_external_message_id,
+                event_type,
+                event_source,
+                actor_role,
+                json.dumps(event_payload, ensure_ascii=True),
+                json.dumps(extracted_facts, ensure_ascii=True),
+                float(confidence),
+            ],
+        )
+
+
+def insert_dm_profile_update_event_if_absent(
+    conn,
+    *,
+    user_id: int,
+    conversation_id: Optional[int],
+    source_message_id: Optional[int],
+    source_external_message_id: Optional[str],
+    event_type: str,
+    event_payload: Dict[str, Any],
+    extracted_facts: List[Dict[str, Any]],
+    confidence: float,
+    event_source: str = "dm_responder",
+    actor_role: str = "user",
+) -> None:
+    """Insert a DM profile update event without clobbering existing ingestion rows.
+
+    This is used for responder "backup ingestion": we want to persist inline-extracted
+    updates when the ingest worker is lagging, but we must NOT overwrite a dm_listener
+    event_source if ingestion already wrote the row.
+    """
+    if not user_id or not source_message_id or not event_type:
+        return
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO dm_profile_update_events (
+              user_id,
+              conversation_id,
+              source_message_id,
+              source_external_message_id,
+              event_type,
+              event_source,
+              actor_role,
+              event_payload,
+              extracted_facts,
+              confidence
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s)
+            ON CONFLICT (source_message_id, event_type) WHERE source_message_id IS NOT NULL DO NOTHING
             """,
             [
                 user_id,
@@ -4244,7 +4293,6 @@ def render_response(args: argparse.Namespace, conn, row: Dict[str, Any]) -> str:
             conn,
             row=row,
             sender_db_id=sender_db_id,
-            pending_events=pending_events,
             inline_updates=inline_updates,
         )
 
