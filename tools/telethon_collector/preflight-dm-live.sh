@@ -64,4 +64,55 @@ if [ -z "${OPENROUTER_API_KEY:-}" ]; then
   echo "[preflight] WARN: OPENROUTER_API_KEY not set; responder will run deterministic fallback only"
 fi
 
+# Detect "ops drift": multiple checkouts/processes running DM workers will race to respond
+# with different code and break UX in unpredictable ways.
+#
+# We fail closed by default when we detect foreign workers. Override with:
+#   DM_PREFLIGHT_ALLOW_FOREIGN_WORKERS=1 make tg-live-start
+if [ -d /proc ] && command -v pgrep >/dev/null 2>&1; then
+  PIDS="$(
+    (
+      pgrep -f "respond-dm-pending.py" || true
+      pgrep -f "run-dm-response.sh" || true
+      pgrep -f "run-dm-live.sh" || true
+      pgrep -f "listen-dms.py --out" || true
+    ) | sort -u
+  )"
+
+  FOREIGN=""
+  for PID in $PIDS; do
+    if [ "$PID" = "$$" ]; then
+      continue
+    fi
+    CMD="$(ps -p "$PID" -o args= 2>/dev/null || true)"
+    CWD="$(readlink -f "/proc/$PID/cwd" 2>/dev/null || true)"
+
+    # Treat as "ours" if either cmd or cwd contains this checkout root path.
+    if echo "$CMD" | grep -Fq "$ROOT_DIR" || echo "$CWD" | grep -Fq "$ROOT_DIR"; then
+      continue
+    fi
+
+    if [ -n "$CMD" ]; then
+      FOREIGN="${FOREIGN}\n- pid=${PID} cwd=${CWD:-unknown} cmd=${CMD}"
+    else
+      FOREIGN="${FOREIGN}\n- pid=${PID} cwd=${CWD:-unknown} (cmd unavailable)"
+    fi
+  done
+
+  if [ -n "$FOREIGN" ]; then
+    echo "[preflight] ERROR: Found DM worker process(es) not running from this checkout."
+    echo "[preflight] This causes inconsistent replies (multiple versions racing). Stop them first:"
+    printf "%b\n" "$FOREIGN"
+    echo "[preflight] Suggested diagnosis:"
+    echo "  ps -eo pid,ppid,lstart,cmd | rg -i 'respond-dm-pending.py|run-dm-response.sh|run-dm-live.sh|listen-dms.py' | rg -v 'rg -i'"
+    echo "  for pid in <pid...>; do echo \"PID=$pid CWD=\$(readlink -f /proc/$pid/cwd)\"; done"
+    if [ "${DM_PREFLIGHT_ALLOW_FOREIGN_WORKERS:-0}" = "1" ]; then
+      echo "[preflight] WARN: DM_PREFLIGHT_ALLOW_FOREIGN_WORKERS=1 set; continuing anyway."
+    else
+      echo "[preflight] Set DM_PREFLIGHT_ALLOW_FOREIGN_WORKERS=1 to bypass (not recommended)."
+      exit 1
+    fi
+  fi
+fi
+
 echo "[preflight] OK"
