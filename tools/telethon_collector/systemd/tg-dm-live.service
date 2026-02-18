@@ -7,11 +7,26 @@ Wants=network.target
 Type=simple
 WorkingDirectory=/home/node/.openclaw/workspace/telethon
 Environment=NODE_ENV=production
+# Keep secrets/config out of the repo: create this file on-host as needed.
+# Example contents:
+#   SESSION_PATH=/home/node/.openclaw/secrets/lobster_llama.session
+#   FILE=data/exports/telethon_dms_live.jsonl
+#   STATE_FILE=data/.state/dm-live.state.json
+#   INTERVAL=10
+EnvironmentFile=-/home/node/.openclaw/secrets/openclaw-tg-dm.env
+
+# Drift-proofing: refuse to start from any other checkout, and use global lock files
+# so separate clones cannot run concurrently.
+Environment=OPENCLAW_CANONICAL_ROOT=/home/node/.openclaw/workspace/telethon
+Environment=TG_DM_GLOBAL_LOCK_FILE=/tmp/openclaw-tg-dm-live.lock
+Environment=DM_RESPONSE_LOCK_FILE=/tmp/openclaw-tg-dm-responder.lock
+
+# Defaults (can be overridden in openclaw-tg-dm.env)
+Environment=FILE=data/exports/telethon_dms_live.jsonl
+Environment=STATE_FILE=data/.state/dm-live.state.json
+Environment=INTERVAL=30
+Environment=RESPONSE_ENABLED=1
 ExecStart=/usr/bin/make tg-live-start
-# Optional custom vars:
-# Environment=FILE=/path/to/data/exports/telethon_dms_live.jsonl
-# Environment=INTERVAL=30
-# Environment=STATE_FILE=/home/node/.openclaw/workspace/telethon/data/.state/dm-live.state.json
 Restart=always
 RestartSec=20
 KillMode=control-group

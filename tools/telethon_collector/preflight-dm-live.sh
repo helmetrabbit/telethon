@@ -33,6 +33,22 @@ VENV_PY="$SCRIPT_DIR/.venv/bin/python"
 echo "[preflight] root=$ROOT_DIR"
 echo "[preflight] session=$SESSION_PATH"
 
+if [ -n "${OPENCLAW_CANONICAL_ROOT:-}" ] && [ "$ROOT_DIR" != "$OPENCLAW_CANONICAL_ROOT" ]; then
+  echo "[preflight] ERROR: Non-canonical checkout."
+  echo "[preflight] This host is configured to run only from:"
+  echo "  OPENCLAW_CANONICAL_ROOT=$OPENCLAW_CANONICAL_ROOT"
+  echo "[preflight] but current root is:"
+  echo "  root=$ROOT_DIR"
+  exit 1
+fi
+
+if command -v git >/dev/null 2>&1; then
+  SHA="$(cd "$ROOT_DIR" && git rev-parse --short HEAD 2>/dev/null || true)"
+  if [ -n "$SHA" ]; then
+    echo "[preflight] build=$SHA"
+  fi
+fi
+
 if [ ! -x "$VENV_PY" ]; then
   echo "[preflight] ERROR: Missing Telethon virtualenv at $SCRIPT_DIR/.venv"
   echo "[preflight] Fix:"

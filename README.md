@@ -109,6 +109,20 @@ make tg-live-start
 #   DM_PERSONA_NAME="Lobster Llama"
 ```
 
+Production note (recommended): manage the live DM pipeline with systemd (single source of truth).
+
+```bash
+make tg-live-systemd-install
+make tg-live-systemd-enable
+make tg-live-systemd-status
+```
+
+The systemd unit supports an on-host env file (not in repo):
+- `/home/node/.openclaw/secrets/openclaw-tg-dm.env`
+
+It also sets a canonical checkout + global lock file so multiple clones cannot race to reply
+(prevents “build drift” where different versions answer different messages).
+
 For ingest-only automation (no profile reconciliation):
 
 ```bash
@@ -129,6 +143,7 @@ Health and lifecycle:
 ```bash
 make tg-live-status
 make tg-live-stop
+make tg-live-health
 ```
 
 If you need a clean replay (reprocess full file), reset checkpoints:

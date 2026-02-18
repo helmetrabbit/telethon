@@ -6,7 +6,9 @@ PID_DIR="$ROOT_DIR/data/.pids"
 LISTENER_PID_FILE="$PID_DIR/tg-listen-dm.pid"
 SUPERVISOR_PID_FILE="$PID_DIR/tg-live-supervisor.pid"
 LOG_DIR="$ROOT_DIR/data/logs"
-LOCK_FILE="$PID_DIR/tg-live-supervisor.lock"
+# Global lock prevents "build drift": even if someone runs the pipeline from a second checkout,
+# they must contend on the same lock file.
+LOCK_FILE="${TG_DM_GLOBAL_LOCK_FILE:-/tmp/openclaw-tg-dm-live.lock}"
 JSONL_FILE="${1:-data/exports/telethon_dms_live.jsonl}"
 INTERVAL="${2:-30}"
 MODE="${3:-profile}"  # profile|ingest
@@ -41,6 +43,7 @@ fi
 
 mkdir -p "$PID_DIR" "$LOG_DIR" "$(dirname "$STATE_FILE")"
 mkdir -p "$(dirname "$SESSION_PATH")"
+mkdir -p "$(dirname "$LOCK_FILE")"
 
 # Runtime guardrails
 MAX_LISTENER_RESTARTS=8
@@ -362,7 +365,7 @@ run_ingest_cycle() {
 acquire_lock() {
   exec 9>"$LOCK_FILE"
   if ! flock -n 9; then
-    echo "Another tg-live supervisor is active for this workspace." >&2
+    echo "Another tg-live supervisor is already running (global lock: $LOCK_FILE)." >&2
     exit 1
   fi
 }
@@ -380,6 +383,9 @@ trap cleanup INT TERM
 if ! check_requirements; then
   exit 1
 fi
+
+BUILD_SHA="$(cd "$ROOT_DIR" && git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+log "tg-dm-live start root=$ROOT_DIR build=$BUILD_SHA pid=$$ lock=$LOCK_FILE file=$JSONL_PATH interval=$INTERVAL mode=$MODE response_enabled=$RESPONSE_ENABLED"
 
 if [ "$INTERVAL" -le 0 ]; then
   log "INTERVAL must be > 0"

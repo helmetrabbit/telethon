@@ -1,7 +1,7 @@
 # ── Makefile — convenience commands ──────────────────────
 .PHONY: db-up db-down db-migrate db-rollback db-reset db-status \
         env-remote env-remote-ip env-local db-smoke serve-viewer \
-        tg-listen-dm tg-ingest-dm-jsonl tg-listen-ingest-dm tg-listen-ingest-dm-profile tg-respond-dm tg-reconcile-dm-psych tg-live-start tg-live-start-ingest tg-live-stop tg-live-status tg-live-state-reset build pipeline
+        tg-listen-dm tg-ingest-dm-jsonl tg-listen-ingest-dm tg-listen-ingest-dm-profile tg-respond-dm tg-reconcile-dm-psych tg-live-start tg-live-start-ingest tg-live-stop tg-live-status tg-live-state-reset tg-live-health tg-live-systemd-install tg-live-systemd-enable tg-live-systemd-status build pipeline
 
 # ── Environment helpers ──────────────────────────────────
 env-remote:
@@ -160,3 +160,19 @@ tg-live-state-reset:
 	@FILE=$${FILE:-data/exports/telethon_dms_live.jsonl}; \
 	STATE_FILE=$${STATE_FILE:-$${FILE}.checkpoint.json}; \
 	rm -f "$$STATE_FILE" "data/.state/dm-live.state.json"
+
+# Drift-proofing + prod lifecycle (systemd)
+tg-live-health:
+	@bash tools/telethon_collector/tg-live-health.sh
+
+tg-live-systemd-install:
+	@echo "Installing systemd unit: tg-dm-live.service"; \
+	sudo cp tools/telethon_collector/systemd/tg-dm-live.service /etc/systemd/system/tg-dm-live.service; \
+	sudo systemctl daemon-reload
+
+tg-live-systemd-enable:
+	@echo "Enabling + starting: tg-dm-live.service"; \
+	sudo systemctl enable --now tg-dm-live.service
+
+tg-live-systemd-status:
+	@systemctl status tg-dm-live.service --no-pager || true

@@ -2,7 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-LOCK_FILE="$ROOT_DIR/data/.pids/dm-response.lock"
+# Global lock prevents "build drift": only one responder loop can run even across multiple checkouts.
+LOCK_FILE="${DM_RESPONSE_LOCK_FILE:-/tmp/openclaw-tg-dm-responder.lock}"
 mkdir -p "$ROOT_DIR/data/.pids"
 SESSION_PATH="${DM_SESSION_PATH:-${TG_SESSION_PATH:-$ROOT_DIR/tools/telethon_collector/telethon.session}}"
 if [[ "${SESSION_PATH}" != /* ]] && [ "${SESSION_PATH}" != "" ]; then
@@ -30,6 +31,11 @@ if [ -f "$ROOT_DIR/tools/telethon_collector/.env" ]; then
   . "$ROOT_DIR/tools/telethon_collector/.env"
   set +a
 fi
+
+mkdir -p "$(dirname "$LOCK_FILE")"
+
+BUILD_SHA="$(cd "$ROOT_DIR" && git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+echo "[$(date -Is)] dm-responder start root=$ROOT_DIR build=$BUILD_SHA pid=$$ lock=$LOCK_FILE session=$SESSION_PATH limit=$LIMIT mode=$MODE"
 
 exec 9>"$LOCK_FILE"
 if ! flock -n 9; then

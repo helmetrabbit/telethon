@@ -14,6 +14,10 @@ This document summarizes the issues hit during the DM live pipeline stabilizatio
    - Multiple runs and background supervisor/Makefile interactions left stale lock/PID artifacts.
    - Listener occasionally saw missing/invalid `data/logs/*` paths and exited, causing pipeline to stop processing without clear action.
 
+1.5. **Build drift / “random UX”**
+   - Multiple responders (or multiple checkouts) can race to respond, producing inconsistent UX and intent routing.
+   - Fix: run under a single supervisor (systemd) and enforce global locks so separate clones cannot run concurrently.
+
 2. **Responder contention with listener session**
    - Concurrent Telethon session usage produced `sqlite3.OperationalError: database is locked`.
    - Early fix via file lock worked but skipped responder too aggressively.
@@ -33,6 +37,11 @@ This document summarizes the issues hit during the DM live pipeline stabilizatio
    - `tg-live-stop` + restart + clean lock/state handling required.
 
 ## Ideal architecture/operations to make this robust
+- **Single source of truth process supervisor (systemd)**
+  - Manage the DM pipeline with `tg-dm-live.service` only.
+  - Avoid ad-hoc `nohup`, `tmux`, or multiple checkouts.
+  - Use global lock files (`/tmp/openclaw-tg-dm-live.lock`, `/tmp/openclaw-tg-dm-responder.lock`) so clones collide.
+
 - **Single source of truth for templates**
   - Keep defaults centralized in one place and avoid duplicated fallback strings across scripts.
 
@@ -59,6 +68,12 @@ This document summarizes the issues hit during the DM live pipeline stabilizatio
   3. `make tg-live-start FILE=... INTERVAL=10 RESPONSE_ENABLED=1`
   4. send a real test DM
   5. verify: inbound row exists + responded outbound exists within one cycle.
+
+Systemd install (recommended for prod):
+1. `make tg-live-systemd-install`
+2. Create `/home/node/.openclaw/secrets/openclaw-tg-dm.env` with at least `SESSION_PATH=...`
+3. `make tg-live-systemd-enable`
+4. `make tg-live-health`
 
 ## Commit-level changes made
 - `f46ab68` — responder locking and duplicate handling hardening.
