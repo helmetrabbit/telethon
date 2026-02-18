@@ -198,6 +198,20 @@ _FEEDBACK_RE = re.compile(
     r"^\s*(feedback|idea|feature|bug|request)\s*:\s*(.{3,2000})\s*$",
     re.IGNORECASE,
 )
+_IMPLICIT_FEEDBACK_RE = re.compile(
+    r"\b(?:"
+    r"confusing|confused|clunky|fragmented|breaking\s+the\s+flow|"
+    r"you\s+asked\s+me\s+the\s+same|same\s+question|same\s+questions|again|repeat|repeating|"
+    r"feature\s+request|feature|bug|broken|"
+    r"wasn'?t\s+explained|no\s+explan(?:ation|ations?)|"
+    r"cut\s+off|ends?\s+abruptly|"
+    r"it\s+would\s+be\s+helpful|would\s+be\s+helpful|"
+    r"it\s+would\s+be\s+neat|would\s+be\s+neat|"
+    r"we\s+should|we\s+want|should\s+probably|"
+    r"add\s+(?:a\s+)?function|collect\s+feedback"
+    r")\b",
+    re.IGNORECASE,
+)
 _THIRD_PARTY_EDIT_POLICY_RE = re.compile(
     r"\b(?:am\s+i\s+allowed\s+to|can\s+i|allowed\s+to)\s+(?:modify|edit|change|update)\s+"
     r"(?:another|other|someone\s+else(?:'s)?|a)\s+(?:user|person)\b.{0,20}\bprofile\b|"
@@ -1920,6 +1934,32 @@ def parse_feedback_message(text: Optional[str]) -> Optional[Dict[str, str]]:
     return {'kind': kind, 'body': body}
 
 
+def parse_implicit_feedback_message(text: Optional[str]) -> Optional[Dict[str, str]]:
+    source = _clean_text(text)
+    if not source:
+        return None
+    if parse_feedback_message(source):
+        return None
+    if is_third_party_profile_request(source):
+        return None
+    # Don't treat real profile updates as feedback.
+    if is_likely_profile_update_message(source):
+        return None
+    if _extract_inline_profile_updates(source):
+        return None
+
+    if not _IMPLICIT_FEEDBACK_RE.search(source):
+        return None
+
+    kind = 'feedback'
+    if re.search(r"\b(bug|broken|repeat|repeating|again|same\s+question|cut\s+off|ends?\s+abruptly)\b", source, re.IGNORECASE):
+        kind = 'bug'
+    elif re.search(r"\b(feature|request|would\s+be\s+(?:helpful|neat)|it\s+would\s+be\s+(?:helpful|neat)|add\s+(?:a\s+)?function)\b", source, re.IGNORECASE):
+        kind = 'feature'
+
+    return {'kind': kind, 'body': source[:2000]}
+
+
 def is_third_party_edit_policy_request(text: Optional[str]) -> bool:
     source = _clean_text(text)
     if not source:
@@ -3115,30 +3155,22 @@ def render_control_plane_reply(persona_name: str) -> str:
 
 
 def render_capabilities_reply(profile: Dict[str, Any], persona_name: str) -> str:
-    missing = [slot for slot in ONBOARDING_REQUIRED_FIELDS if not _slot_has_value(profile, slot)]
-    next_q = None
-    if missing:
-        prompts = _build_profile_gap_prompts(profile, count=1)
-        next_q = prompts[0] if prompts else "What role/title should I store for you right now?"
-
-    lines = [
-        f"Hey — I’m {persona_name}, an AI profile assistant (not a human).",
-        "This chat is for keeping your profile dataset current and letting you query it.",
-        "Quick start (things you can say):",
-        "- Snapshot: \"What do you know about me?\"",
-        "- Update: `role: ...` / `company: ...` / `priorities: ...` / `communication: ...`",
-        "- Interview mode: \"interview mode\" (one question at a time)",
-        "- Lookup: \"What do you know about @handle?\" (read-only, won’t change anyone’s profile)",
-        "- Analytics: \"What groups am I in?\" / \"When am I most active?\"",
-        "- Feedback: `feedback: ...` (logs a product idea/bug report)",
-        "Safety: I won’t ask you for money, seed phrases, or API keys.",
-        "I won’t do work-planning unless you explicitly ask with `advice:`.",
-    ]
-    if next_q:
-        lines.append(next_q)
-    else:
-        lines.append("If you want to update something now: what changed most recently (role, company, priorities, or communication style)?")
-    return "\n".join(lines)
+    # Keep this response "UI-like": clear menu, no surprise follow-up questions.
+    # Onboarding prompts are handled by the onboarding flow state machine.
+    return "\n".join(
+        [
+            f"Hey — I’m {persona_name}. I’m an AI (not a human).",
+            "This chat is for keeping your profile dataset current and letting you query it.",
+            "Quick start (things you can say):",
+            "- Snapshot: \"What do you know about me?\"",
+            "- Update (fast): `role: ...` / `company: ...` / `priorities: ...` / `communication: ...`",
+            "- Guided setup: \"interview mode\" (one question at a time)",
+            "- Lookup: \"What do you know about @handle?\" (read-only)",
+            "- Analytics: \"What groups am I in?\" / \"When am I most active?\"",
+            "- Feedback: `feedback: ...` (logs a bug/feature idea)",
+            "Safety: I won’t ask you for money, seed phrases, or API keys.",
+        ]
+    )
 
 
 def render_unsupported_action_reply() -> str:
@@ -3806,12 +3838,17 @@ def render_conversational_reply(
     if is_greeting:
         return (
             f"Hey — I’m {persona_name}, an AI assistant for profile upkeep.\n"
-            "You can ask \"What do you know about me?\" for a snapshot, or send any change in role/company/focus and I’ll sync it."
+            "Quick start: ask \"What do you know about me?\" (snapshot), send `role: ...` / `company: ...` (update), "
+            "or say \"help\" for the full menu."
         )
     if "?" in source or _QUESTION_LIKE_RE.search(source):
         return (
-            "I can either answer questions about your stored profile (and where it came from), or capture an update.\n"
-            "If you’re updating, just tell me the change in plain English. If you want a snapshot, ask: “What do you know about me?”"
+            "I can answer questions about your stored profile + activity analytics, and I can capture profile updates.\n"
+            "Try one of these:\n"
+            "- \"What do you know about me?\"\n"
+            "- \"Where did my data come from?\"\n"
+            "- \"What groups am I in?\"\n"
+            "- Or send: `role: ...` / `company: ...` / `priorities: ...` / `communication: ...`"
         )
 
     else:
@@ -3852,6 +3889,8 @@ def render_response(args: argparse.Namespace, conn, row: Dict[str, Any]) -> str:
 
     current_updates = _collect_current_message_updates(row, pending_events)
     latest_text = row.get('text')
+    explicit_feedback = parse_feedback_message(latest_text)
+    implicit_feedback = None if explicit_feedback else parse_implicit_feedback_message(latest_text)
 
     def finalize_reply(raw_reply: str) -> str:
         nonlocal style_state, profile
@@ -3889,6 +3928,12 @@ def render_response(args: argparse.Namespace, conn, row: Dict[str, Any]) -> str:
             return finalize_reply(decline_reply)
 
     current_style_update = _as_text(current_updates.get('preferred_contact_style'))
+    if current_style_update and implicit_feedback:
+        # UX: suppress style prompts when the user is giving product feedback.
+        current_style_update = None
+    if current_style_update and (is_help_request(latest_text) or is_capabilities_request(latest_text)):
+        # UX: avoid turning "help/menu/capability" chats into surprise preference changes.
+        current_style_update = None
     if current_style_update:
         current_style_confidence = _collect_current_message_field_confidence(
             row,
@@ -3941,16 +3986,31 @@ def render_response(args: argparse.Namespace, conn, row: Dict[str, Any]) -> str:
         return finalize_reply(render_disengage_reply())
     if is_non_text_marker(latest_text):
         return finalize_reply(render_non_text_marker_reply())
-    feedback = parse_feedback_message(latest_text)
-    if feedback:
+    if explicit_feedback:
         persist_feedback(
             conn,
             row=row,
             sender_db_id=sender_db_id,
-            kind=feedback['kind'],
-            body=feedback['body'],
+            kind=explicit_feedback['kind'],
+            body=explicit_feedback['body'],
         )
-        return finalize_reply(render_feedback_ack_reply(feedback['kind']))
+        return finalize_reply(render_feedback_ack_reply(explicit_feedback['kind']))
+    if implicit_feedback:
+        persist_feedback(
+            conn,
+            row=row,
+            sender_db_id=sender_db_id,
+            kind=implicit_feedback['kind'],
+            body=implicit_feedback['body'],
+        )
+        source = _clean_text(latest_text)
+        is_question = ("?" in source) or bool(_QUESTION_LIKE_RE.search(source))
+        if not is_question and not is_help_request(latest_text):
+            # UX: acknowledge the feedback and reset to a clear menu.
+            return finalize_reply(
+                f"{render_feedback_ack_reply(implicit_feedback['kind'])}\n\n"
+                f"{render_help_reply(profile, args.persona_name)}"
+            )
     if is_help_request(latest_text):
         return finalize_reply(render_help_reply(profile, args.persona_name))
     if is_third_party_edit_policy_request(latest_text):
