@@ -5,6 +5,8 @@ Wants=network.target
 
 [Service]
 Type=simple
+User=node
+Group=node
 WorkingDirectory=/home/node/.openclaw/workspace/telethon
 Environment=NODE_ENV=production
 # Keep secrets/config out of the repo: create this file on-host as needed.
