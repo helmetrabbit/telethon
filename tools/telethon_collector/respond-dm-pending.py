@@ -98,6 +98,9 @@ DM_CONTACT_STYLE_CONFIRM_THRESHOLD = min(
     DM_CONTACT_STYLE_AUTO_APPLY_THRESHOLD,
     max(0.0, _configured_confirm_threshold),
 )
+# UX controls
+DM_UI_GREETING_MENU_COOLDOWN_DAYS = max(0, _env_int('DM_UI_GREETING_MENU_COOLDOWN_DAYS', 7))
+DM_UI_HOME_MENU_TTL_SECONDS = max(60, _env_int('DM_UI_HOME_MENU_TTL_SECONDS', 600))
 STYLE_CONFLICT_RESOLUTION_RULE = 'confidence_gated_last_write_wins'
 
 _PLACEHOLDER_RE = re.compile(r"\{([^{}]+)\}")
@@ -925,6 +928,128 @@ def _parse_contact_style_state_from_snapshot(snapshot: Dict[str, Any]) -> Dict[s
             )
         state['history'] = cleaned_history
     return state
+
+
+def _default_ui_preferences() -> Dict[str, Any]:
+    # greeting_menu: quickstart|help|off
+    return {
+        'greeting_menu': 'quickstart',
+        'greeting_menu_cooldown_days': DM_UI_GREETING_MENU_COOLDOWN_DAYS,
+    }
+
+
+def _parse_ui_preferences_from_snapshot(snapshot: Dict[str, Any]) -> Dict[str, Any]:
+    prefs = _default_ui_preferences()
+    if not isinstance(snapshot, dict):
+        return prefs
+    raw = snapshot.get('ui_preferences')
+    if not isinstance(raw, dict):
+        return prefs
+
+    greeting_menu = _as_text(raw.get('greeting_menu'))
+    if greeting_menu in ('quickstart', 'help', 'off'):
+        prefs['greeting_menu'] = greeting_menu
+
+    cooldown_days = _to_int(raw.get('greeting_menu_cooldown_days'))
+    if cooldown_days is not None:
+        prefs['greeting_menu_cooldown_days'] = max(0, min(30, cooldown_days))
+
+    return prefs
+
+
+def persist_ui_preferences(conn, sender_db_id: Optional[int], patch: Dict[str, Any]) -> Dict[str, Any]:
+    if not sender_db_id:
+        return _default_ui_preferences()
+    snapshot = _fetch_profile_snapshot(conn, sender_db_id)
+    current = _parse_ui_preferences_from_snapshot(snapshot)
+    merged = dict(current)
+    for key in ('greeting_menu', 'greeting_menu_cooldown_days'):
+        if key not in patch:
+            continue
+        if key == 'greeting_menu':
+            value = _as_text(patch.get(key))
+            if value in ('quickstart', 'help', 'off'):
+                merged[key] = value
+        else:
+            value = _to_int(patch.get(key))
+            if value is not None:
+                merged[key] = max(0, min(30, int(value)))
+
+    snapshot['ui_preferences'] = merged
+    _persist_profile_snapshot(conn, sender_db_id, snapshot)
+    return merged
+
+
+def _default_ui_state() -> Dict[str, Any]:
+    return {
+        'menu': None,  # {'type': 'home', 'sent_at': iso, 'expires_at': iso}
+        'last_greeting_menu_at': None,
+    }
+
+
+def _parse_ui_state_from_snapshot(snapshot: Dict[str, Any]) -> Dict[str, Any]:
+    state = _default_ui_state()
+    if not isinstance(snapshot, dict):
+        return state
+    raw = snapshot.get('ui_state')
+    if not isinstance(raw, dict):
+        return state
+
+    menu = raw.get('menu')
+    if isinstance(menu, dict):
+        menu_type = _as_text(menu.get('type'))
+        sent_at = _to_datetime(menu.get('sent_at'))
+        expires_at = _to_datetime(menu.get('expires_at'))
+        if menu_type and isinstance(sent_at, datetime) and isinstance(expires_at, datetime):
+            state['menu'] = {'type': menu_type, 'sent_at': sent_at, 'expires_at': expires_at}
+
+    state['last_greeting_menu_at'] = _to_datetime(raw.get('last_greeting_menu_at'))
+    return state
+
+
+def persist_ui_state(conn, sender_db_id: Optional[int], ui_state_payload: Dict[str, Any]) -> Dict[str, Any]:
+    if not sender_db_id:
+        return _default_ui_state()
+    snapshot = _fetch_profile_snapshot(conn, sender_db_id)
+    snapshot['ui_state'] = ui_state_payload
+    _persist_profile_snapshot(conn, sender_db_id, snapshot)
+    return _parse_ui_state_from_snapshot(snapshot)
+
+
+def clear_ui_menu(conn, sender_db_id: Optional[int], ui_state: Dict[str, Any]) -> Dict[str, Any]:
+    if not sender_db_id:
+        return ui_state
+    payload = {
+        'menu': None,
+        'last_greeting_menu_at': (
+            ui_state.get('last_greeting_menu_at').isoformat()
+            if isinstance(ui_state.get('last_greeting_menu_at'), datetime)
+            else None
+        ),
+    }
+    return persist_ui_state(conn, sender_db_id, payload)
+
+
+def _ui_menu_payload(menu_type: str, *, now: datetime) -> Dict[str, Any]:
+    return {
+        'type': menu_type,
+        'sent_at': now.isoformat(),
+        'expires_at': (now + timedelta(seconds=DM_UI_HOME_MENU_TTL_SECONDS)).isoformat(),
+    }
+
+
+def ui_menu_is_active(ui_state: Dict[str, Any], *, expected_type: str) -> bool:
+    menu = ui_state.get('menu')
+    if not isinstance(menu, dict):
+        return False
+    if _as_text(menu.get('type')) != expected_type:
+        return False
+    expires_at = menu.get('expires_at')
+    if not isinstance(expires_at, datetime):
+        expires_at = _to_datetime(expires_at)
+    if not isinstance(expires_at, datetime):
+        return False
+    return datetime.now(timezone.utc) < expires_at
 
 
 def _fetch_profile_snapshot(conn, sender_db_id: Optional[int]) -> Dict[str, Any]:
@@ -3173,6 +3298,35 @@ def render_capabilities_reply(profile: Dict[str, Any], persona_name: str) -> str
     )
 
 
+def render_home_menu(row: Dict[str, Any], profile: Dict[str, Any], persona_name: str) -> str:
+    sender = row.get('display_name') or row.get('sender_handle') or 'there'
+    role = _as_text(profile.get('primary_role'))
+    company = _as_text(profile.get('primary_company'))
+    on_file = None
+    if role and company:
+        on_file = f"On file: {role} @ {company}."
+    elif role:
+        on_file = f"On file: {role}."
+    elif company:
+        on_file = f"On file: {company}."
+
+    lines = [
+        f"Hey {sender} — I’m {persona_name} (AI).",
+    ]
+    if on_file:
+        lines.append(on_file)
+    lines.extend(
+        [
+            "What do you want to do?",
+            "1) Snapshot (what I know about you)",
+            "2) Update (store a change)",
+            "3) Analytics (groups + peak hours)",
+            "Reply 1, 2, or 3. Or type \"help\" for everything I can do.",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def render_unsupported_action_reply() -> str:
     return (
         "I can’t execute that action from chat (no shell/curl/filesystem/account-setting control).\n"
@@ -3354,54 +3508,11 @@ def render_option_selection_reply(
     profile: Dict[str, Any],
     recent_messages: List[Dict[str, str]],
 ) -> str:
-    last_outbound = _latest_outbound_text(recent_messages).lower()
-    if 'pick one path' in last_outbound:
-        company = (profile.get('primary_company') or '').lower()
-        role = profile.get('primary_role') or 'your current role'
-        topic = (profile.get('notable_topics') or [None])[0]
-        if company == 'unemployed':
-            mapping = {
-                1: (
-                    "Good pick. Positioning sprint.\n"
-                    f"- Draft a 5-line pitch around your {role} work.\n"
-                    "- Send it to 5 targeted contacts today."
-                ),
-                2: (
-                    "Good pick. Pipeline sprint.\n"
-                    "- Shortlist 10 roles.\n"
-                    "- Send 3 tailored outreach messages.\n"
-                    "- Ask for 1 warm intro."
-                ),
-                3: (
-                    "Good pick. Skill sprint.\n"
-                    "- Choose one in-demand workflow.\n"
-                    "- Build a small proof-of-work this week.\n"
-                    "- Share it publicly with a short write-up."
-                ),
-            }
-            return mapping[selected_option]
-        mapping = {
-            1: (
-                "Good pick. Pipeline path.\n"
-                f"- Define one objective tied to {topic or 'your priorities'}.\n"
-                "- Set a 7-day target and one success metric."
-            ),
-            2: (
-                "Good pick. Network path.\n"
-                "- Send 3 concrete asks (intro, feedback, or collab).\n"
-                "- Prioritize people most likely to unlock momentum."
-            ),
-            3: (
-                "Good pick. Output path.\n"
-                "- Publish one useful update/case study this week.\n"
-                "- End with a specific call to action."
-            ),
-        }
-        return mapping[selected_option]
-
+    # Keep this bot as a profile/data layer. If the user sends "1/2/3" without a menu context,
+    # we should not drift into work-planning flows.
     return (
         f"I saw \"{selected_option}\", but I don’t have a menu open right now.\n"
-        "If you meant a profile update, just send it (role/company/priorities/communication)."
+        "Say \"help\" to see options, or send an update (role/company/priorities/communication)."
     )
 
 
@@ -3426,9 +3537,9 @@ def should_use_llm_for_reply(latest_text: Optional[str]) -> bool:
     text = _clean_text(latest_text)
     if not text:
         return False
-    if '\n' in text and len(text) >= 60:
-        return True
-    return len(text) >= DM_RESPONSE_LLM_AUTO_MIN_CHARS
+    # Auto-mode: only allow LLM replies when the user explicitly requests advice/help
+    # outside the profile/data layer.
+    return bool(re.match(r"^advice\\s*:\\s*", text, flags=re.IGNORECASE))
 
 
 def _utc_day() -> str:
@@ -3646,22 +3757,25 @@ def render_llm_conversational_reply(
         return None
     if not should_use_llm_for_reply(latest_text):
         return None
+    # Strip explicit "advice:" prefix so the model sees the actual request.
+    advice_text = re.sub(r"^advice\s*:\s*", "", latest_text, flags=re.IGNORECASE).strip() or latest_text
 
     context = {
         'sender_name': row.get('display_name') or row.get('sender_handle') or 'user',
-        'latest_inbound_message': latest_text,
-        'is_profile_request': is_full_profile_request(latest_text),
-        'is_third_party_profile_lookup': is_third_party_profile_request(latest_text),
-        'is_indecision': is_indecision_request(latest_text),
-        'is_activity_analytics_request': is_activity_analytics_request(latest_text),
-        'is_profile_data_provenance_request': is_profile_data_provenance_request(latest_text),
-        'is_profile_update_mode_request': is_profile_update_mode_request(latest_text),
-        'is_profile_confirmation_request': is_profile_confirmation_request(latest_text),
-        'is_interview_style_request': is_interview_style_request(latest_text),
-        'is_top3_profile_prompt_request': is_top3_profile_prompt_request(latest_text),
-        'is_missed_intent_feedback': is_missed_intent_feedback(latest_text),
-        'likely_profile_update_message': is_likely_profile_update_message(latest_text),
-        'inline_profile_updates': _collect_current_message_updates(row, pending_events),
+        'latest_inbound_message': advice_text,
+        'explicit_advice_prefix': advice_text != latest_text,
+        'is_profile_request': is_full_profile_request(advice_text),
+        'is_third_party_profile_lookup': is_third_party_profile_request(advice_text),
+        'is_indecision': is_indecision_request(advice_text),
+        'is_activity_analytics_request': is_activity_analytics_request(advice_text),
+        'is_profile_data_provenance_request': is_profile_data_provenance_request(advice_text),
+        'is_profile_update_mode_request': is_profile_update_mode_request(advice_text),
+        'is_profile_confirmation_request': is_profile_confirmation_request(advice_text),
+        'is_interview_style_request': is_interview_style_request(advice_text),
+        'is_top3_profile_prompt_request': is_top3_profile_prompt_request(advice_text),
+        'is_missed_intent_feedback': is_missed_intent_feedback(advice_text),
+        'likely_profile_update_message': is_likely_profile_update_message(advice_text),
+        'inline_profile_updates': _collect_current_message_updates({**row, 'text': advice_text}, pending_events),
         'profile_context': summarize_profile_for_prompt(profile),
         'activity_snapshot': format_activity_snapshot_lines(profile),
         'preferred_response_style_mode': _preferred_style_mode(profile),
@@ -3876,6 +3990,8 @@ def render_response(args: argparse.Namespace, conn, row: Dict[str, Any]) -> str:
     # - durable role/company/priorities overrides (profile_overrides)
     snapshot = _fetch_profile_snapshot(conn, sender_db_id)
     style_state = _parse_contact_style_state_from_snapshot(snapshot)
+    ui_state = _parse_ui_state_from_snapshot(snapshot)
+    ui_preferences = _parse_ui_preferences_from_snapshot(snapshot)
     profile = merge_contact_style_state_into_profile(profile, style_state)
 
     profile_overrides = _parse_profile_overrides_from_snapshot(snapshot)
@@ -3971,6 +4087,61 @@ def render_response(args: argparse.Namespace, conn, row: Dict[str, Any]) -> str:
 
     onboarding_state = fetch_onboarding_state(conn, sender_db_id)
     recent_messages = fetch_recent_conversation_messages(conn, row.get('conversation_id'))
+    core_missing_fields = _compute_missing_onboarding_fields(profile, ONBOARDING_REQUIRED_FIELDS)
+    onboarding_complete = len(core_missing_fields) == 0
+
+    # Handle home-menu selections ("1/2/3") before onboarding/other routing.
+    selected_option = extract_option_selection(latest_text)
+    if (
+        selected_option
+        and onboarding_complete
+        and not pending_candidate
+        and ui_menu_is_active(ui_state, expected_type='home')
+    ):
+        ui_state = clear_ui_menu(conn, sender_db_id, ui_state)
+        if selected_option == 1:
+            return finalize_reply(render_profile_request_reply(row, profile, args.persona_name))
+        if selected_option == 2:
+            return finalize_reply(render_profile_update_mode_reply())
+        if selected_option == 3:
+            return finalize_reply(render_activity_analytics_reply(profile))
+
+    # Greeting UX: show a periodic quickstart menu so users don't get stuck.
+    if is_greeting_message(latest_text) and onboarding_complete:
+        greeting_menu = _as_text(ui_preferences.get('greeting_menu')) or 'quickstart'
+        cooldown_days = _to_int(ui_preferences.get('greeting_menu_cooldown_days')) or DM_UI_GREETING_MENU_COOLDOWN_DAYS
+        cooldown_days = max(0, min(30, int(cooldown_days)))
+        last_shown = ui_state.get('last_greeting_menu_at')
+        if not isinstance(last_shown, datetime):
+            last_shown = _to_datetime(last_shown)
+        now = datetime.now(timezone.utc)
+        should_show = greeting_menu != 'off' and (not isinstance(last_shown, datetime) or (now - last_shown) >= timedelta(days=cooldown_days))
+
+        if should_show and greeting_menu == 'help':
+            ui_state = persist_ui_state(
+                conn,
+                sender_db_id,
+                {
+                    'menu': None,
+                    'last_greeting_menu_at': now.isoformat(),
+                },
+            )
+            return finalize_reply(render_help_reply(profile, args.persona_name))
+
+        if should_show:
+            ui_state = persist_ui_state(
+                conn,
+                sender_db_id,
+                {
+                    'menu': _ui_menu_payload('home', now=now),
+                    'last_greeting_menu_at': now.isoformat(),
+                },
+            )
+            return finalize_reply(render_home_menu(row, profile, args.persona_name))
+
+        return finalize_reply(
+            f"Hey — I’m {args.persona_name} (AI). Say \"help\" for options, or ask \"What do you know about me?\"."
+        )
 
     third_party_lookup = _lookup_third_party_user(conn, row.get('text'))
     if third_party_lookup:
@@ -4003,6 +4174,11 @@ def render_response(args: argparse.Namespace, conn, row: Dict[str, Any]) -> str:
             kind=implicit_feedback['kind'],
             body=implicit_feedback['body'],
         )
+        # If the feedback explicitly asks for "hello"/"first message" onboarding help,
+        # persist a per-user preference to show the full help menu on greeting.
+        body = _clean_text(implicit_feedback.get('body'))
+        if body and re.search(r"\b(?:when\s+i\s+say\s+hello|next\s+time|first\s+message|pretend\s+it'?s\s+my\s+first)\b", body, re.IGNORECASE):
+            ui_preferences = persist_ui_preferences(conn, sender_db_id, {'greeting_menu': 'help'})
         source = _clean_text(latest_text)
         is_question = ("?" in source) or bool(_QUESTION_LIKE_RE.search(source))
         if not is_question and not is_help_request(latest_text):

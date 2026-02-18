@@ -392,6 +392,20 @@ async function reconcileUsers(targetUserIds: string[] = [], limit = 0, force = f
     )
       ? existingSnapshot.style_preference as Record<string, unknown>
       : {};
+    const existingUiState = (
+      existingSnapshot.ui_state
+      && typeof existingSnapshot.ui_state === 'object'
+      && !Array.isArray(existingSnapshot.ui_state)
+    )
+      ? existingSnapshot.ui_state as Record<string, unknown>
+      : null;
+    const existingUiPreferences = (
+      existingSnapshot.ui_preferences
+      && typeof existingSnapshot.ui_preferences === 'object'
+      && !Array.isArray(existingSnapshot.ui_preferences)
+    )
+      ? existingSnapshot.ui_preferences as Record<string, unknown>
+      : null;
 
     const latestProfileRes = await db.query<PsychRow>(
       `SELECT id::text, primary_company, reasoning, generated_bio_professional, generated_bio_personal, primary_role, preferred_contact_style, notable_topics
@@ -555,6 +569,8 @@ async function reconcileUsers(targetUserIds: string[] = [], limit = 0, force = f
           : lastEventId,
       },
       style_preference: stylePreference,
+      ui_state: existingUiState,
+      ui_preferences: existingUiPreferences,
       applied_at: new Date().toISOString(),
     };
 
