@@ -310,9 +310,9 @@ function computeMissingOnboardingFields(next: {
   return missing;
 }
 
-async function reconcileUsers(targetUserIds: string[] = [], limit = 0): Promise<number> {
+async function reconcileUsers(targetUserIds: string[] = [], limit = 0, force = false): Promise<number> {
   const criteria = targetUserIds.length > 0
-    ? 'e.user_id = ANY($1) AND e.processed = false'
+    ? force ? 'e.user_id = ANY($1)' : 'e.user_id = ANY($1) AND e.processed = false'
     : 'e.processed = false';
 
   const params: unknown[] = targetUserIds.length > 0 ? [targetUserIds] : [];
@@ -341,7 +341,7 @@ async function reconcileUsers(targetUserIds: string[] = [], limit = 0): Promise<
       [userId],
     );
 
-    if (!eventsRes.rows.length) continue;
+    if (!eventsRes.rows.length && !force) continue;
 
     // Sticky overrides: when other pipelines create a newer psychographics row,
     // we must re-apply *historical* DM corrections so role/company/topics don't regress.
@@ -373,6 +373,7 @@ async function reconcileUsers(targetUserIds: string[] = [], limit = 0): Promise<
         }
       }
     }
+    const lastEventId = allEvents.length > 0 ? allEvents[allEvents.length - 1].id : null;
 
     const existingStateRes = await db.query<{ snapshot: Record<string, unknown> | null }>(
       `SELECT snapshot::jsonb AS snapshot
@@ -549,7 +550,9 @@ async function reconcileUsers(targetUserIds: string[] = [], limit = 0): Promise<
         notable_topics: patch.notable_topics,
         // preferred_contact_style is confirmation-gated (see style_preference below).
         updated_at: new Date().toISOString(),
-        source_event_id: eventsRes.rows[eventsRes.rows.length - 1].id,
+        source_event_id: eventsRes.rows.length > 0
+          ? eventsRes.rows[eventsRes.rows.length - 1].id
+          : lastEventId,
       },
       style_preference: stylePreference,
       applied_at: new Date().toISOString(),
@@ -645,10 +648,12 @@ async function reconcileUsers(targetUserIds: string[] = [], limit = 0): Promise<
              WHEN EXCLUDED.onboarding_status = 'completed' THEN 0
              ELSE dm_profile_state.onboarding_turns
            END,
-           updated_at = now()`,
+         updated_at = now()`,
         [
           userId,
-          eventsRes.rows[eventsRes.rows.length - 1].id,
+          eventsRes.rows.length > 0
+            ? eventsRes.rows[eventsRes.rows.length - 1].id
+            : lastEventId,
           newProfileId,
           JSON.stringify(snapshot),
           onboardingStatus,
@@ -672,10 +677,12 @@ async function reconcileUsers(targetUserIds: string[] = [], limit = 0): Promise<
            last_profile_event_id = EXCLUDED.last_profile_event_id,
            user_psychographics_id = EXCLUDED.user_psychographics_id,
            snapshot = EXCLUDED.snapshot,
-           updated_at = now()`,
+          updated_at = now()`,
         [
           userId,
-          eventsRes.rows[eventsRes.rows.length - 1].id,
+          eventsRes.rows.length > 0
+            ? eventsRes.rows[eventsRes.rows.length - 1].id
+            : lastEventId,
           newProfileId,
           JSON.stringify(snapshot),
         ],
@@ -702,9 +709,11 @@ async function main(): Promise<void> {
   const limit = rawLimit ? parseInt(rawLimit, 10) : 0;
   const rawUsers = args['user-ids'] || args['user_ids'] || args['userIds'];
   const userIds = rawUsers ? rawUsers.split(',').map((v) => v.trim()).filter(Boolean) : [];
+  const rawForce = (args['force'] ?? '').toString().trim().toLowerCase();
+  const force = rawForce === '1' || rawForce === 'true' || rawForce === 'yes';
 
   console.log('\n🧠 DM psychometry reconcile started');
-  const count = await reconcileUsers(userIds, Number.isFinite(limit) ? limit : 0);
+  const count = await reconcileUsers(userIds, Number.isFinite(limit) ? limit : 0, force);
   console.log(`\n✅ Reconcile complete: ${count} user(s) updated`);
   await db.close();
 }
